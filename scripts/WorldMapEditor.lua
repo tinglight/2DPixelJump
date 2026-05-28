@@ -70,6 +70,11 @@ local connectMode = nil     -- nil or { fromId }
 local selectedNode = nil    -- 当前选中的节点 id
 local mouseX, mouseY = 0, 0  -- 当前鼠标世界坐标
 
+-- 中键拖拽视窗
+local midDragging = false
+local midDragLastX = 0
+local midDragLastY = 0
+
 -- 双击检测
 local lastClickTime = 0         -- 上次左键点击时间
 local lastClickNodeId = nil     -- 上次点击的节点 id
@@ -523,6 +528,16 @@ function WorldMapEditor.Update(dt)
         camY = camY + scrollSpeed * dt
     end
 
+    -- 中键拖拽视窗
+    if midDragging then
+        local dx = mouseX - midDragLastX
+        local dy = mouseY - midDragLastY
+        camX = camX - dx
+        camY = camY - dy
+        midDragLastX = mouseX
+        midDragLastY = mouseY
+    end
+
     -- 拖拽更新
     if dragState then
         local mx = input:GetMousePosition().x
@@ -553,6 +568,14 @@ function WorldMapEditor.HandleMouseDown(button, mx, my)
     -- 只处理地图区域内的点击
     if mx < 0 or mx > mapW or my < topBarH or my > screenH - bottomBarH then
         return false
+    end
+
+    -- 中键拖拽视窗
+    if button == MOUSEB_MIDDLE then
+        midDragging = true
+        midDragLastX = mx
+        midDragLastY = my
+        return true
     end
 
     local wx, wy = ScreenToWorld(mx, my)
@@ -654,6 +677,10 @@ end
 
 --- 鼠标松开
 function WorldMapEditor.HandleMouseUp(button, mx, my)
+    if button == MOUSEB_MIDDLE then
+        midDragging = false
+        return
+    end
     if button == MOUSEB_LEFT then
         dragState = nil
     end

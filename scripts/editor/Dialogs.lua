@@ -4,6 +4,8 @@
 
 local C = require "editor.Constants"
 local S = require "editor.State"
+local UI = require("urhox-libs/UI")
+local CloudStorage = require "CloudStorage"
 
 local M = {}
 
@@ -21,19 +23,101 @@ function M.Inject(deps)
 end
 
 -- ====================================================================
+-- UI Modal 对话框（用于重命名，支持 IME 和剪贴板）
+-- ====================================================================
+local renameModal_ = nil
+local renameTextField_ = nil
+
+local function DestroyRenameUI()
+    if renameModal_ then
+        renameModal_:Close()
+        renameModal_ = nil
+        renameTextField_ = nil
+        UI.DisableAutoEventsInput()
+    end
+end
+
+local function CreateRenameUI(initialValue)
+    DestroyRenameUI()
+
+    -- 启用 UI 库的输入事件转发，Modal 内的 Button/TextField 才能接收点击
+    UI.EnableAutoEventsInput()
+
+    renameTextField_ = UI.TextField {
+        value = initialValue or "",
+        placeholder = "输入关卡名...",
+        width = "100%",
+        onSubmit = function(self, value)
+            S.renameInput = value
+            M.ConfirmDialog()
+        end,
+    }
+
+    renameModal_ = UI.Modal {
+        title = "重命名关卡",
+        size = "sm",
+        closeOnEscape = true,
+        closeOnOverlay = true,
+        onClose = function()
+            -- Modal 被用户关闭（ESC 或点击遮罩），同步取消编辑器对话框状态
+            renameModal_ = nil
+            renameTextField_ = nil
+            S.dialogMode = nil
+            S.dialogTarget = nil
+            input:SetScreenKeyboardVisible(false)
+            UI.DisableAutoEventsInput()
+        end,
+    }
+
+    renameModal_:AddContent(renameTextField_)
+
+    -- Footer: 取消 + 确认 按钮
+    local footer = UI.Panel {
+        flexDirection = "row",
+        justifyContent = "flex-end",
+        gap = 10,
+        width = "100%",
+    }
+    footer:AddChild(UI.Button {
+        text = "取消",
+        variant = "secondary",
+        onClick = function()
+            M.CancelDialog()
+        end,
+    })
+    footer:AddChild(UI.Button {
+        text = "确认",
+        variant = "primary",
+        onClick = function()
+            if renameTextField_ then
+                S.renameInput = renameTextField_:GetValue() or S.renameInput
+            end
+            M.ConfirmDialog()
+        end,
+    })
+    renameModal_:SetFooter(footer)
+
+    renameModal_:Open()
+end
+
+-- ====================================================================
 -- 对话框打开
 -- ====================================================================
 
 function M.OpenCanvasDialog()
+    input:SetScreenKeyboardVisible(true)
     S.dialogMode = "canvas"
     S.canvasWidthInput = tostring(S.MAP_COLS)
     S.canvasHeightInput = tostring(S.MAP_ROWS)
     S.canvasFocusField = 1
     S.canvasCursor = #S.canvasWidthInput
     S.renameBlink = 0
+    S.imeComposition = ""
+    S.imeCursor = 0
 end
 
 function M.OpenPlayerDialog()
+    input:SetScreenKeyboardVisible(true)
     S.dialogMode = "player"
     S.playerParamInputs = {
         tostring(S.playerParams.baseJumpGrids),
@@ -41,13 +125,17 @@ function M.OpenPlayerDialog()
         tostring(S.playerParams.maxFallGrids),
         tostring(S.playerParams.maxJumpGrids),
         tostring(S.playerParams.defaultLightDiameter),
+        tostring(S.playerParams.cameraZoom),
     }
     S.playerParamFocus = 1
     S.playerParamCursor = #S.playerParamInputs[1]
     S.renameBlink = 0
+    S.imeComposition = ""
+    S.imeCursor = 0
 end
 
 function M.OpenLightDialog(lightIdx)
+    input:SetScreenKeyboardVisible(true)
     S.selectedLightIndex = lightIdx
     local light = FogOfWar.GetLight(lightIdx)
     S.lightDiameterInput = tostring(light.diameter)
@@ -56,17 +144,25 @@ function M.OpenLightDialog(lightIdx)
     S.lightDialogFocus = 1
     S.lightDialogCursor = #S.lightDiameterInput
     S.renameBlink = 0
+    S.imeComposition = ""
+    S.imeCursor = 0
 end
 
 function M.OpenRenameDialog(lv)
+    input:SetScreenKeyboardVisible(true)
     S.dialogMode = "rename"
     S.dialogTarget = lv
     S.renameInput = lv.name
     S.renameCursor = #lv.name
     S.renameBlink = 0
+    S.imeComposition = ""
+    S.imeCursor = 0
+    -- 使用 UI Modal 对话框（用户点击 TextField 触发 IME，支持剪贴板）
+    CreateRenameUI(lv.name)
 end
 
 function M.OpenDeleteDialog(lv)
+    input:SetScreenKeyboardVisible(true)
     S.dialogMode = "delete"
     S.dialogTarget = lv
 end
@@ -82,12 +178,36 @@ function M.ApplyPlayerParams()
     p.maxFallGrids = tonumber(S.playerParamInputs[3]) or p.maxFallGrids
     p.maxJumpGrids = tonumber(S.playerParamInputs[4]) or p.maxJumpGrids
     p.defaultLightDiameter = tonumber(S.playerParamInputs[5]) or p.defaultLightDiameter
-    S.SetMessage("玩家参数已更新", 1.5)
+    p.cameraZoom = tonumber(S.playerParamInputs[6]) or p.cameraZoom
+
+    -- 保存到云端，持久化全局玩家参数
+    CloudStorage.SavePlayerParams({
+        baseJumpGrids = p.baseJumpGrids,
+        fallJumpMultiplier = p.fallJumpMultiplier,
+        maxFallGrids = p.maxFallGrids,
+        maxJumpGrids = p.maxJumpGrids,
+        defaultLightDiameter = p.defaultLightDiameter,
+        cameraZoom = p.cameraZoom,
+    }, function(ok, err)
+        if ok then
+            S.SetMessage("玩家参数已更新并保存到云端", 1.5)
+        else
+            S.SetMessage("玩家参数已更新（云端保存失败: " .. (err or "未知") .. "）", 2.5)
+        end
+    end)
+    S.SetMessage("玩家参数已更新，正在同步...", 1.5)
 end
 
 function M.ConfirmDialog()
-    if S.dialogMode == "rename" and S.dialogTarget and S.renameInput ~= "" then
-        Persistence.RenameLevel(S.dialogTarget.file, S.renameInput)
+    if S.dialogMode == "rename" and S.dialogTarget then
+        -- 从 TextField 获取最新值
+        if renameTextField_ then
+            S.renameInput = renameTextField_:GetValue() or S.renameInput
+        end
+        if S.renameInput ~= "" then
+            Persistence.RenameLevel(S.dialogTarget.file, S.renameInput)
+        end
+        DestroyRenameUI()
     elseif S.dialogMode == "delete" and S.dialogTarget then
         Persistence.DeleteLevel(S.dialogTarget.file)
     elseif S.dialogMode == "canvas" then
@@ -105,11 +225,20 @@ function M.ConfirmDialog()
     end
     S.dialogMode = nil
     S.dialogTarget = nil
+    S.imeComposition = ""
+    S.imeCursor = 0
+    input:SetScreenKeyboardVisible(false)
 end
 
 function M.CancelDialog()
+    if S.dialogMode == "rename" then
+        DestroyRenameUI()
+    end
     S.dialogMode = nil
     S.dialogTarget = nil
+    S.imeComposition = ""
+    S.imeCursor = 0
+    input:SetScreenKeyboardVisible(false)
 end
 
 -- ====================================================================
@@ -222,6 +351,7 @@ end
 local function DrawRenameDialog(vg, dlgX, dlgY, dlgW, dlgH)
     DrawTitle(vg, dlgX, dlgW, dlgY, "重命名关卡", 255, 220, 100)
 
+    -- 输入框区域由 UI TextField 覆盖层渲染，这里只绘制一个占位背景
     local inputX = dlgX + 12
     local inputY = dlgY + 26
     local inputW = dlgW - 24
@@ -231,30 +361,6 @@ local function DrawRenameDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgRoundedRect(vg, inputX, inputY, inputW, inputH, 3)
     nvgFillColor(vg, nvgRGBA(15, 15, 25, 255))
     nvgFill(vg)
-    nvgBeginPath(vg)
-    nvgRoundedRect(vg, inputX, inputY, inputW, inputH, 3)
-    nvgStrokeColor(vg, nvgRGBA(80, 120, 200, 200))
-    nvgStrokeWidth(vg, 1)
-    nvgStroke(vg)
-
-    nvgFontSize(vg, 10)
-    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
-    nvgFillColor(vg, nvgRGBA(240, 240, 240, 255))
-    nvgText(vg, inputX + 4, inputY + inputH * 0.5, S.renameInput)
-
-    -- 闪烁光标
-    if math.floor(S.renameBlink * 2) % 2 == 0 then
-        local cursorText = string.sub(S.renameInput, 1, S.renameCursor)
-        local bounds = {}
-        local tw = nvgTextBounds(vg, 0, 0, cursorText, bounds)
-        local cursorX = inputX + 4 + tw
-        nvgBeginPath(vg)
-        nvgMoveTo(vg, cursorX, inputY + 3)
-        nvgLineTo(vg, cursorX, inputY + inputH - 3)
-        nvgStrokeColor(vg, nvgRGBA(200, 220, 255, 255))
-        nvgStrokeWidth(vg, 1)
-        nvgStroke(vg)
-    end
 
     DrawButtons(vg, dlgX, dlgY, dlgW, dlgH, "确认", 40, 120, 60)
 end
@@ -421,6 +527,10 @@ end
 
 function M.Draw()
     if not S.dialogMode then return end
+
+    -- rename 模式由 UI.Modal 独立渲染，不绘制 NanoVG 对话框
+    if S.dialogMode == "rename" then return end
+
     local vg = S.vg
 
     -- 遮罩
@@ -433,9 +543,7 @@ function M.Draw()
     DrawDialogFrame(vg, dlgX, dlgY, dlgW, dlgH)
     nvgFontFace(vg, "sans")
 
-    if S.dialogMode == "rename" then
-        DrawRenameDialog(vg, dlgX, dlgY, dlgW, dlgH)
-    elseif S.dialogMode == "delete" then
+    if S.dialogMode == "delete" then
         DrawDeleteDialog(vg, dlgX, dlgY, dlgW, dlgH)
     elseif S.dialogMode == "canvas" then
         DrawCanvasDialog(vg, dlgX, dlgY, dlgW, dlgH)
@@ -451,6 +559,31 @@ end
 -- ====================================================================
 
 local function HandleRenameKey(key)
+    -- IME 正在组合时，不拦截编辑键（让 IME 自行处理）
+    if S.imeComposition and #S.imeComposition > 0 then
+        return
+    end
+
+    -- Ctrl+V 粘贴
+    if key == KEY_V and input:GetKeyDown(KEY_CTRL) then
+        local clipText = ui:GetClipboardText()
+        if clipText and #clipText > 0 then
+            -- 移除换行符
+            clipText = clipText:gsub("[\r\n]+", "")
+            if #S.renameInput + #clipText <= 60 then
+                S.renameInput = string.sub(S.renameInput, 1, S.renameCursor) .. clipText .. string.sub(S.renameInput, S.renameCursor + 1)
+                S.renameCursor = S.renameCursor + #clipText
+                S.renameBlink = 0
+            end
+        end
+        return
+    end
+    -- Ctrl+A 全选（选中所有文本，光标移到末尾）
+    if key == KEY_A and input:GetKeyDown(KEY_CTRL) then
+        S.renameCursor = #S.renameInput
+        S.renameBlink = 0
+        return
+    end
     if key == KEY_BACKSPACE then
         if S.renameCursor > 0 then
             local pos = S.renameCursor
@@ -530,8 +663,16 @@ function M.HandleKeyDown(key)
     if not S.dialogMode then return false end
 
     if key == KEY_ESCAPE then
+        S.imeComposition = ""
+        S.imeCursor = 0
         M.CancelDialog()
         return true
+    end
+
+    -- rename 模式下，键盘输入完全交给 UI TextField 处理（除了 ESC）
+    if S.dialogMode == "rename" then
+        -- 不拦截任何键，让 UI 库的 AutoEvents 处理
+        return false
     end
 
     if key == KEY_RETURN or key == KEY_KP_ENTER then
@@ -550,7 +691,7 @@ function M.HandleKeyDown(key)
             end
             S.renameBlink = 0
         elseif S.dialogMode == "player" then
-            S.playerParamFocus = (S.playerParamFocus % 5) + 1
+            S.playerParamFocus = (S.playerParamFocus % #S.playerParamInputs) + 1
             S.playerParamCursor = #S.playerParamInputs[S.playerParamFocus]
             S.renameBlink = 0
         elseif S.dialogMode == "canvas" then
@@ -566,9 +707,7 @@ function M.HandleKeyDown(key)
         return true
     end
 
-    if S.dialogMode == "rename" then
-        HandleRenameKey(key)
-    elseif S.dialogMode == "canvas" then
+    if S.dialogMode == "canvas" then
         local cur = (S.canvasFocusField == 1) and S.canvasWidthInput or S.canvasHeightInput
         cur, S.canvasCursor = HandleNumericFieldKey(key, cur, S.canvasCursor)
         if S.canvasFocusField == 1 then S.canvasWidthInput = cur else S.canvasHeightInput = cur end
@@ -586,6 +725,19 @@ function M.HandleKeyDown(key)
 end
 
 -- ====================================================================
+-- IME 组合输入处理（TextEditing 事件）
+-- ====================================================================
+
+function M.HandleTextEditing(composition, cursor, selectionLength)
+    if not S.dialogMode then return false end
+    -- 更新 IME 组合状态（拼音预览文本）
+    S.imeComposition = composition or ""
+    S.imeCursor = cursor or 0
+    S.renameBlink = 0
+    return true
+end
+
+-- ====================================================================
 -- 文本输入处理
 -- ====================================================================
 
@@ -593,13 +745,16 @@ function M.HandleTextInput(text)
     if not S.dialogMode then return false end
     if not text or #text == 0 then return true end
 
+    -- rename 模式下，文本输入完全交给 UI TextField 处理
     if S.dialogMode == "rename" then
-        if #S.renameInput < 60 then
-            S.renameInput = string.sub(S.renameInput, 1, S.renameCursor) .. text .. string.sub(S.renameInput, S.renameCursor + 1)
-            S.renameCursor = S.renameCursor + #text
-            S.renameBlink = 0
-        end
-    elseif S.dialogMode == "canvas" then
+        return false
+    end
+
+    -- 文本确认时清除 IME 组合状态
+    S.imeComposition = ""
+    S.imeCursor = 0
+
+    if S.dialogMode == "canvas" then
         local digits = text:match("%d+")
         if digits then
             local cur = (S.canvasFocusField == 1) and S.canvasWidthInput or S.canvasHeightInput
@@ -643,6 +798,9 @@ end
 
 function M.HandleMouseDown(mx, my)
     if not S.dialogMode then return false end
+
+    -- rename 模式由 UI.Modal 处理所有交互，仅阻止编辑器操作
+    if S.dialogMode == "rename" then return true end
 
     local dlgX, dlgY, dlgW, dlgH = GetDialogRect()
     local btnW2 = 50

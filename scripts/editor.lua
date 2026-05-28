@@ -24,6 +24,7 @@
 -- ====================================================================
 
 require "urhox-libs.UI.VirtualControls"
+local UI = require("urhox-libs/UI")
 local CloudStorage = require "CloudStorage"
 local WorldMapEditor = require "WorldMapEditor"
 local FogOfWar = require "FogOfWar"
@@ -45,6 +46,7 @@ local Toolbar = require "editor.Toolbar"
 local Sidebar = require "editor.Sidebar"
 local GridRenderer = require "editor.GridRenderer"
 local InputHandler = require "editor.InputHandler"
+local CrossLevel = require "editor.CrossLevel"
 
 -- ====================================================================
 -- 依赖注入
@@ -66,6 +68,11 @@ PlayMode.Inject({
     CloudStorage = CloudStorage,
     WorldMapEditor = WorldMapEditor,
     LevelGenerator = LevelGenerator,
+    cjson = cjson,
+})
+CrossLevel.Inject({
+    CloudStorage = CloudStorage,
+    WorldMapEditor = WorldMapEditor,
     cjson = cjson,
 })
 
@@ -96,6 +103,25 @@ function Start()
         print("ERROR: font load failed"); return
     end
 
+    -- 初始化 UI 库（用于 Modal 对话框，支持 IME 和剪贴板）
+    -- 禁用 autoEvents.input，编辑器自己处理所有输入事件
+    -- 避免 UI 库的 ScriptObject 事件处理器干扰编辑器的全局 HandleMouseDown
+    UI.Init({
+        fonts = {
+            { family = "sans", weights = { normal = "Fonts/MiSans-Regular.ttf" } }
+        },
+        scale = UI.Scale.DEFAULT,
+        autoEvents = { input = false, update = true, render = true },
+    })
+
+    -- 必须设置一个 root，否则 UI.Render() 会因 root_ == nil 直接跳过，
+    -- 导致 Modal（overlay）无法渲染和接收输入事件
+    UI.SetRoot(UI.Panel {
+        width = "100%",
+        height = "100%",
+        pointerEvents = "none",
+    })
+
     input.mouseMode = MM_ABSOLUTE
     input.mouseVisible = true
 
@@ -113,6 +139,28 @@ function Start()
             S.SetMessage("云存档加载失败: " .. (err or "未知错误") .. "（可正常编辑，保存时重试）", 3.0)
         end
 
+        -- 加载全局玩家参数
+        CloudStorage.InitPlayerParams(function(ppOk)
+            if ppOk then
+                local savedParams = CloudStorage.LoadPlayerParams()
+                if savedParams then
+                    S.playerParams.baseJumpGrids = savedParams.baseJumpGrids or S.playerParams.baseJumpGrids
+                    S.playerParams.fallJumpMultiplier = savedParams.fallJumpMultiplier or S.playerParams.fallJumpMultiplier
+                    S.playerParams.maxFallGrids = savedParams.maxFallGrids or S.playerParams.maxFallGrids
+                    S.playerParams.maxJumpGrids = savedParams.maxJumpGrids ~= nil and savedParams.maxJumpGrids or S.playerParams.maxJumpGrids
+                    S.playerParams.defaultLightDiameter = savedParams.defaultLightDiameter or S.playerParams.defaultLightDiameter
+                    -- 同步更新输入框显示
+                    S.playerParamInputs = {
+                        tostring(S.playerParams.baseJumpGrids),
+                        tostring(S.playerParams.fallJumpMultiplier),
+                        tostring(S.playerParams.maxFallGrids),
+                        tostring(S.playerParams.maxJumpGrids),
+                        tostring(S.playerParams.defaultLightDiameter),
+                    }
+                end
+            end
+        end)
+
         -- 初始化世界地图编辑器
         CloudStorage.InitWorldMap(function(wmOk)
             WorldMapEditor.Init(S.vg, function(text, duration)
@@ -128,12 +176,16 @@ function Start()
         end)
     end)
 
+    -- 注意：IME 文本输入仅在对话框打开时激活，避免全局显示 I-beam 光标
+    -- 见 Dialogs.lua 中 Open*Dialog / ConfirmDialog / CancelDialog
+
     -- 事件订阅
     SubscribeToEvent(S.vg, "NanoVGRender", "HandleNanoVGRender")
     SubscribeToEvent("Update", "HandleUpdate")
     SubscribeToEvent("KeyDown", "HandleKeyDown")
     SubscribeToEvent("KeyUp", "HandleKeyUp")
     SubscribeToEvent("TextInput", "HandleTextInput")
+    SubscribeToEvent("TextEditing", "HandleTextEditing")
     SubscribeToEvent("MouseButtonDown", "HandleMouseDown")
     SubscribeToEvent("MouseButtonUp", "HandleMouseUp")
     SubscribeToEvent("MouseWheel", "HandleMouseWheel")
@@ -156,6 +208,11 @@ function HandleNanoVGRender(eventType, eventData)
     nvgScale(S.vg, S.scaleF, S.scaleF)
 
     if S.editorMode == C.MODE_PLAY or S.editorMode == C.MODE_WORLDPLAY then
+        -- 试玩模式时应用 cameraZoom 额外缩放
+        local zoom = S.playerParams.cameraZoom or 1.0
+        if zoom ~= 1.0 then
+            nvgScale(S.vg, 1.0 / zoom, 1.0 / zoom)
+        end
         PlayMode.Draw()
     elseif S.editorMode == C.MODE_WORLDMAP then
         WorldMapEditor.Draw()
@@ -182,7 +239,7 @@ function HandleUpdate(eventType, eventData)
     S.editorClock = S.editorClock + dt
 
     if S.msgTimer > 0 then S.msgTimer = S.msgTimer - dt end
-    if S.dialogMode == "rename" then S.renameBlink = S.renameBlink + dt end
+    if S.dialogMode then S.renameBlink = S.renameBlink + dt end
 
     if S.editorMode == C.MODE_PLAY then
         PlayMode.Update(dt)
@@ -193,9 +250,12 @@ function HandleUpdate(eventType, eventData)
         if S.worldPlayCooldown > 0 then
             S.worldPlayCooldown = S.worldPlayCooldown - dt
         end
-        PlayMode.Update(dt)
-        if S.play.alive and not S.play.won then
-            PlayMode.WorldPlayCheckBoundary()
+        PlayMode.UpdateTransition(dt)
+        if not S.transition.active then
+            PlayMode.Update(dt)
+            if S.play.alive and not S.play.won then
+                PlayMode.WorldPlayCheckBoundary()
+            end
         end
         return
     end
@@ -229,6 +289,13 @@ function HandleTextInput(eventType, eventData)
     if text and #text > 0 then
         InputHandler.HandleTextInput(text)
     end
+end
+
+function HandleTextEditing(eventType, eventData)
+    local composition = eventData["Composition"]:GetString()
+    local cursor = eventData["Cursor"]:GetInt()
+    local selectionLength = eventData["SelectionLength"]:GetInt()
+    InputHandler.HandleTextEditing(composition, cursor, selectionLength)
 end
 
 function HandleMouseDown(eventType, eventData)

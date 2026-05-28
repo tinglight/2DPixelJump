@@ -171,6 +171,76 @@ function CloudStorage.GetNextIndex()
 end
 
 -- ====================================================================
+-- 全局玩家参数存储（独立 cloud key）
+-- ====================================================================
+local PLAYER_PARAMS_KEY = "editor_player_params"
+local playerParamsCache = nil  -- table or nil
+local playerParamsSyncing = false
+
+--- 同步玩家参数到云端
+---@param callback? fun(ok: boolean, err?: string)
+local function SyncPlayerParamsToCloud(callback)
+    if playerParamsSyncing then
+        if callback then callback(false, "正在同步中") end
+        return
+    end
+    playerParamsSyncing = true
+
+    clientCloud:Set(PLAYER_PARAMS_KEY, playerParamsCache or {}, {
+        ok = function()
+            playerParamsSyncing = false
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            playerParamsSyncing = false
+            if callback then callback(false, reason or ("错误码:" .. tostring(code))) end
+        end,
+        timeout = function()
+            playerParamsSyncing = false
+            if callback then callback(false, "超时") end
+        end
+    })
+end
+
+--- 初始化全局玩家参数（从云端加载到内存）
+---@param callback fun(ok: boolean, err?: string)
+function CloudStorage.InitPlayerParams(callback)
+    clientCloud:Get(PLAYER_PARAMS_KEY, {
+        ok = function(values)
+            local data = values[PLAYER_PARAMS_KEY]
+            if data and type(data) == "table" and data.maxJumpGrids ~= nil then
+                playerParamsCache = data
+            else
+                playerParamsCache = nil
+            end
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            playerParamsCache = nil
+            if callback then callback(false, reason or ("错误码:" .. tostring(code))) end
+        end,
+        timeout = function()
+            playerParamsCache = nil
+            if callback then callback(false, "超时") end
+        end
+    })
+end
+
+--- 读取云端玩家参数（同步，从缓存）
+---@return table|nil
+function CloudStorage.LoadPlayerParams()
+    return playerParamsCache
+end
+
+--- 保存全局玩家参数到云端
+---@param params table
+---@param callback? fun(ok: boolean, err?: string)
+function CloudStorage.SavePlayerParams(params, callback)
+    playerParamsCache = params
+    SyncPlayerParamsToCloud(callback)
+end
+
+-- ====================================================================
 -- 世界地图存储（独立 cloud key）
 -- ====================================================================
 local WORLD_MAP_KEY = "world_map"

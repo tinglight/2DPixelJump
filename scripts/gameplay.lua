@@ -82,6 +82,9 @@ local PLAYER_CONFIG = {
 
     -- 主角默认光源
     defaultLightDiameter = 6, -- 满血时光源直径（格子数），火焰减弱时同步降低，最低为0
+
+    -- 相机配置
+    cameraZoom = 1.0,  -- 相机缩放倍率：1.0=默认视野，>1.0=看到更多世界（缩小），<1.0=看到更少（放大）
 }
 
 -- 关卡级玩家参数（由 LoadLevelFromFile 从关卡文件覆盖）
@@ -161,6 +164,16 @@ local worldMapData = nil        -- { nodes = {...}, connections = {...} }
 local currentLevelFile = nil    -- 当前关卡文件名（nil = 随机生成模式）
 local worldMapLoaded = false    -- 世界地图是否已加载
 local transitionCooldown = 0    -- 切换冷却（防止瞬间来回切换）
+
+-- 关卡切换过渡动画
+local levelTransition = {
+    active = false,       -- 是否正在过渡
+    phase = "none",       -- "fadeOut" | "fadeIn" | "none"
+    alpha = 0,            -- 当前遮罩透明度 0~1
+    speed = 5.0,          -- 淡入淡出速度
+    pendingFile = nil,    -- 待加载的目标关卡文件名
+    pendingDir = nil,     -- 来源方向
+}
 
 -- ====================================================================
 -- 运行时像素状态
@@ -308,6 +321,9 @@ local vg = nil
 local physW, physH, dpr, logicalW, logicalH
 local scale, screenDesignW, screenDesignH, designOffsetX, designOffsetY
 
+-- 前向声明（定义在后面，但 LoadLevelFromFile 需要提前调用）
+local RecalcLayout
+
 -- 输入
 local inputState = { left = false, right = false, jumpPressed = false }
 local prevLeft = false
@@ -414,12 +430,15 @@ local function LoadLevelFromFile(filename)
         levelPlayerParams.fallJumpMultiplier = data.playerParams.fallJumpMultiplier or 1.0
         levelPlayerParams.maxFallGrids = data.playerParams.maxFallGrids or 10
         levelPlayerParams.maxJumpGrids = data.playerParams.maxJumpGrids or 8
+        PLAYER_CONFIG.cameraZoom = data.playerParams.cameraZoom or 1.0
     else
         levelPlayerParams.baseJumpGrids = PLAYER_CONFIG.baseJumpGrids
         levelPlayerParams.fallJumpMultiplier = 1.0
         levelPlayerParams.maxFallGrids = 10
         levelPlayerParams.maxJumpGrids = 8
+        PLAYER_CONFIG.cameraZoom = 1.0
     end
+    RecalcLayout()
 
     print("[WorldMap] Loaded level: " .. filename)
     return true
@@ -489,10 +508,58 @@ local function TransitionToLevel(targetFile, fromDirection)
     print("[WorldMap] Transition to: " .. targetFile .. " from " .. fromDirection)
 end
 
+--- 启动过渡动画（不直接切换，先 fadeOut）
+local function StartLevelTransition(targetFile, fromDirection)
+    levelTransition.active = true
+    levelTransition.phase = "fadeOut"
+    levelTransition.alpha = 0
+    levelTransition.pendingFile = targetFile
+    levelTransition.pendingDir = fromDirection
+end
+
+--- 更新关卡切换过渡动画（每帧调用）
+local function UpdateLevelTransition(dt)
+    if not levelTransition.active then return end
+
+    local t = levelTransition
+    if t.phase == "fadeOut" then
+        t.alpha = t.alpha + t.speed * dt
+        if t.alpha >= 1.0 then
+            t.alpha = 1.0
+            -- 全黑时执行实际关卡加载
+            if t.pendingFile then
+                TransitionToLevel(t.pendingFile, t.pendingDir)
+            end
+            t.phase = "fadeIn"
+            t.pendingFile = nil
+            t.pendingDir = nil
+        end
+    elseif t.phase == "fadeIn" then
+        t.alpha = t.alpha - t.speed * dt
+        if t.alpha <= 0 then
+            t.alpha = 0
+            t.phase = "none"
+            t.active = false
+        end
+    end
+end
+
+--- 绘制过渡遮罩
+local function DrawLevelTransition()
+    if not levelTransition.active then return end
+    if levelTransition.alpha <= 0 then return end
+    local a = math.floor(levelTransition.alpha * 255)
+    nvgBeginPath(vg)
+    nvgRect(vg, 0, 0, screenDesignW, screenDesignH)
+    nvgFillColor(vg, nvgRGBA(0, 0, 0, a))
+    nvgFill(vg)
+end
+
 --- 检查玩家是否触碰边界并触发切换
 local function CheckBoundaryTransition()
     if not worldMapData or not currentLevelFile then return end
     if transitionCooldown > 0 then return end
+    if levelTransition.active then return end
 
     local playerH = math.ceil(PLAYER_CONFIG.pixelGridSize * PLAYER_CONFIG.pixelSize / GRID)
 
@@ -500,7 +567,7 @@ local function CheckBoundaryTransition()
     if player.gridX <= 1 then
         local target = FindConnectedLevel("left")
         if target then
-            TransitionToLevel(target, "left")
+            StartLevelTransition(target, "left")
             return
         end
     end
@@ -509,7 +576,7 @@ local function CheckBoundaryTransition()
     if player.gridX + playerH - 1 >= MAP_COLS then
         local target = FindConnectedLevel("right")
         if target then
-            TransitionToLevel(target, "right")
+            StartLevelTransition(target, "right")
             return
         end
     end
@@ -518,7 +585,7 @@ local function CheckBoundaryTransition()
     if player.gridY <= 1 then
         local target = FindConnectedLevel("up")
         if target then
-            TransitionToLevel(target, "up")
+            StartLevelTransition(target, "up")
             return
         end
     end
@@ -527,7 +594,11 @@ local function CheckBoundaryTransition()
     if player.gridY + playerH - 1 >= MAP_ROWS then
         local target = FindConnectedLevel("down")
         if target then
-            TransitionToLevel(target, "down")
+            StartLevelTransition(target, "down")
+            return
+        else
+            -- 没有连通的下方关卡，掉落即死亡
+            gameState = STATE_GAMEOVER
             return
         end
     end
@@ -539,7 +610,7 @@ end
 local function IsSolid(col, row)
     if col < 1 or col > MAP_COLS then return true end
     if row < 1 then return false end
-    if row > MAP_ROWS then return true end
+    if row > MAP_ROWS then return false end  -- 地图底部为空，允许掉落死亡
     local val = levelData[row][col]
     local base, group = GetTileType(val)
     if base == TILE.SOLID then return true end
@@ -814,7 +885,8 @@ end
 
 local function DrawGrid()
     local startCol = math.max(1, math.floor(cameraX / GRID) + 1)
-    local endCol = math.min(MAP_COLS, startCol + math.ceil(DESIGN_W / GRID) + 2)
+    local visW = DESIGN_W * (PLAYER_CONFIG.cameraZoom or 1.0)
+    local endCol = math.min(MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
 
     -- 细线
     nvgBeginPath(vg)
@@ -859,7 +931,8 @@ end
 
 local function DrawMap()
     local startCol = math.max(1, math.floor(cameraX / GRID) + 1)
-    local endCol = math.min(MAP_COLS, startCol + math.ceil(DESIGN_W / GRID) + 2)
+    local visW = DESIGN_W * (PLAYER_CONFIG.cameraZoom or 1.0)
+    local endCol = math.min(MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
 
     for row = 1, MAP_ROWS do
         for col = startCol, endCol do
@@ -1725,15 +1798,19 @@ end
 -- ====================================================================
 -- 分辨率
 -- ====================================================================
-local function RecalcLayout()
+RecalcLayout = function()
     physW, physH = graphics:GetWidth(), graphics:GetHeight()
     dpr = graphics:GetDPR()
     logicalW, logicalH = physW / dpr, physH / dpr
-    scale = math.min(logicalW / DESIGN_W, logicalH / DESIGN_H)
+    -- cameraZoom > 1 表示看到更多世界（设计尺寸等效放大），< 1 表示放大局部
+    local zoom = PLAYER_CONFIG.cameraZoom or 1.0
+    local effectiveW = DESIGN_W * zoom
+    local effectiveH = DESIGN_H * zoom
+    scale = math.min(logicalW / effectiveW, logicalH / effectiveH)
     screenDesignW = logicalW / scale
     screenDesignH = logicalH / scale
-    designOffsetX = (screenDesignW - DESIGN_W) / 2
-    designOffsetY = (screenDesignH - DESIGN_H) / 2
+    designOffsetX = (screenDesignW - effectiveW) / 2
+    designOffsetY = (screenDesignH - effectiveH) / 2
 end
 
 -- ====================================================================
@@ -1828,6 +1905,7 @@ function HandleNanoVGRender(eventType, eventData)
     nvgRestore(vg)
 
     DrawHUD()
+    DrawLevelTransition()
 
     nvgEndFrame(vg)
 end
@@ -1844,6 +1922,10 @@ function HandleUpdate(eventType, eventData)
     if transitionCooldown > 0 then
         transitionCooldown = transitionCooldown - dt
     end
+
+    -- 过渡动画更新
+    UpdateLevelTransition(dt)
+    if levelTransition.active then return end
 
     -- 火焰动画帧驱动（固定帧率，像素风离散更新）
     flameAnimTimer = flameAnimTimer + dt
@@ -1917,10 +1999,12 @@ function HandleUpdate(eventType, eventData)
     -- 世界地图边界切换检测
     CheckBoundaryTransition()
 
-    -- 相机
+    -- 相机（使用 cameraZoom 调整可视范围）
+    local zoom = PLAYER_CONFIG.cameraZoom or 1.0
+    local visibleW = DESIGN_W * zoom
     local playerPx = (player.gridX - 1) * GRID
-    local targetCam = playerPx - DESIGN_W * 0.35
-    targetCam = math.max(0, math.min(targetCam, MAP_COLS * GRID - DESIGN_W))
+    local targetCam = playerPx - visibleW * 0.35
+    targetCam = math.max(0, math.min(targetCam, MAP_COLS * GRID - visibleW))
     cameraX = cameraX + (targetCam - cameraX) * math.min(1, dt * 8)
 end
 

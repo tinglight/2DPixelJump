@@ -93,6 +93,12 @@ end
 -- ====================================================================
 
 function M.HandleUpdate(dt)
+    -- 对话框打开时不处理编辑器键盘输入
+    if S.dialogMode then
+        UpdateAutoSave(dt)
+        return
+    end
+
     -- WASD 相机移动
     local scrollSpeed = 200
     if input:GetKeyDown(KEY_A) and not input:GetKeyDown(KEY_CTRL) then
@@ -106,6 +112,17 @@ function M.HandleUpdate(dt)
     end
     if input:GetKeyDown(KEY_S) and not input:GetKeyDown(KEY_CTRL) then
         S.cameraY = S.cameraY + scrollSpeed * dt
+    end
+
+    -- 中键拖拽视窗
+    if S.midDragging then
+        local mx, my = GetDesignMouse()
+        local dx = mx - S.midDragLastX
+        local dy = my - S.midDragLastY
+        S.cameraX = S.cameraX - dx
+        S.cameraY = S.cameraY - dy
+        S.midDragLastX = mx
+        S.midDragLastY = my
     end
 
     ClampCamera()
@@ -181,10 +198,10 @@ function UpdateDrawErase()
 end
 
 function UpdateAutoSave(dt)
-    if S.undo.saveTimer <= 0 then return end
-    S.undo.saveTimer = S.undo.saveTimer - dt
-    if S.undo.saveTimer <= 0 then
-        S.undo.saveTimer = 0
+    if Undo.saveTimer <= 0 then return end
+    Undo.saveTimer = Undo.saveTimer - dt
+    if Undo.saveTimer <= 0 then
+        Undo.saveTimer = 0
         Persistence.TryAutoSave()
     end
 end
@@ -292,7 +309,7 @@ function HandleEditorKey(key)
         Undo.Undo()
     elseif key == KEY_S and input:GetKeyDown(KEY_CTRL) then
         Persistence.SaveLevel()
-        S.undo.dirty = false
+        Undo.dirty = false
     elseif key == KEY_L and input:GetKeyDown(KEY_CTRL) then
         S.sidebarOpen = not S.sidebarOpen
     elseif key == KEY_ESCAPE then
@@ -308,6 +325,16 @@ end
 function M.HandleTextInput(text)
     if S.dialogMode then
         Dialogs.HandleTextInput(text)
+    end
+end
+
+-- ====================================================================
+-- HandleTextEditing (IME 组合输入)
+-- ====================================================================
+
+function M.HandleTextEditing(composition, cursor, selectionLength)
+    if S.dialogMode then
+        Dialogs.HandleTextEditing(composition, cursor, selectionLength)
     end
 end
 
@@ -354,6 +381,14 @@ function M.HandleMouseDown(button, mx, my)
     local barY = S.screenDesignH - BOTTOMBAR_H
     if my >= barY and my < S.screenDesignH - 16 and button == MOUSEB_LEFT then
         HandleToolbarClick(mx, my, barY)
+        return
+    end
+
+    -- 中键拖拽视窗
+    if button == MOUSEB_MIDDLE then
+        S.midDragging = true
+        S.midDragLastX = mx
+        S.midDragLastY = my
         return
     end
 
@@ -472,6 +507,8 @@ function DispatchTopBarBtn(id)
     end
 end
 
+local SIDEBAR_DOUBLE_CLICK_TIME = 0.4  -- 双击判定时间窗口（秒）
+
 function HandleSidebarClick(mx, my)
     local sbX = S.screenDesignW - SIDEBAR_W
     local sbY = TOPBAR_H
@@ -494,8 +531,21 @@ function HandleSidebarClick(mx, my)
                 Dialogs.OpenRenameDialog(lv)
                 return
             end
-            Persistence.AutoSaveBeforeSwitch()
-            Persistence.LoadLevel(lv.file)
+
+            -- 双击检测：同一关卡在时间窗口内被点击两次 → 进入编辑
+            local now = os.clock()
+            if S.sidebarLastClickFile == lv.file and (now - S.sidebarLastClickTime) < SIDEBAR_DOUBLE_CLICK_TIME then
+                -- 双击：进入关卡编辑
+                S.sidebarLastClickFile = nil
+                S.sidebarLastClickTime = 0
+                Persistence.AutoSaveBeforeSwitch()
+                Persistence.LoadLevel(lv.file)
+                S.SetMessage("编辑关卡: " .. lv.name, 2.0)
+            else
+                -- 单击：记录点击状态（用于双击检测）
+                S.sidebarLastClickFile = lv.file
+                S.sidebarLastClickTime = now
+            end
             return
         end
     end
@@ -672,8 +722,8 @@ function HandleLightToolClick(button, col, row)
             local idx = FogOfWar.AddLight(col, row, 6, 0.5)
             S.selectedLightIndex = idx
             S.lightSources = FogOfWar.GetLightSources()
-            S.undo.dirty = true
-            S.undo.saveTimer = S.undo.saveDelay
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
             S.SetMessage("放置光源 (" .. col .. "," .. row .. ")", 1.5)
             Dialogs.OpenLightDialog(idx)
         end
@@ -683,8 +733,8 @@ function HandleLightToolClick(button, col, row)
             S.lightSources = FogOfWar.GetLightSources()
             S.selectedLightIndex = 0
             S.dialogMode = nil
-            S.undo.dirty = true
-            S.undo.saveTimer = S.undo.saveDelay
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
             S.SetMessage("删除光源", 1.5)
         end
     end
@@ -699,6 +749,11 @@ function M.HandleMouseUp(button, mx, my)
 
     if S.editorMode == MODE.WORLDMAP then
         WorldMapEditor.HandleMouseUp(button, mx, my)
+        return
+    end
+
+    if button == MOUSEB_MIDDLE then
+        S.midDragging = false
         return
     end
 
@@ -922,8 +977,8 @@ function ExecuteMultiMove(targetCol, targetRow)
         st.row = st.row + offsetRow
     end
     S.lightSources = FogOfWar.GetLightSources()
-    S.undo.dirty = true
-    S.undo.saveTimer = S.undo.saveDelay
+    Undo.dirty = true
+    Undo.saveTimer = Undo.saveDelay
     S.SetMessage(#S.selectedTiles .. " 个物体已移动", 1.5)
 end
 
@@ -949,8 +1004,8 @@ function ExecuteLightMove(col, row)
     S.lightSources = FogOfWar.GetLightSources()
     S.selectedTileCol = col
     S.selectedTileRow = row
-    S.undo.dirty = true
-    S.undo.saveTimer = S.undo.saveDelay
+    Undo.dirty = true
+    Undo.saveTimer = Undo.saveDelay
     S.SetMessage("光源已移动到 (" .. col .. "," .. row .. ")", 1.5)
 end
 
@@ -973,8 +1028,8 @@ function ExecuteSingleTileMove(col, row)
     Undo.RecordTileChange(col, row, TILE.EMPTY, oldVal)
     S.selectedTileCol = col
     S.selectedTileRow = row
-    S.undo.dirty = true
-    S.undo.saveTimer = S.undo.saveDelay
+    Undo.dirty = true
+    Undo.saveTimer = Undo.saveDelay
     local names = { [TILE.SPAWN]="主角", [TILE.FUEL]="火焰", [TILE.GOAL]="终点",
                     [TILE.SPIKE]="刺", [TILE.SWITCH]="开关", [TILE.GATE]="门" }
     S.SetMessage((names[base] or "物体") .. " 移动到 (" .. col .. "," .. row .. ")", 1.5)

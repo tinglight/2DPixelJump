@@ -5,6 +5,8 @@ local C = require("editor.Constants")
 local S = require("editor.State")
 local TileUtils = require("editor.TileUtils")
 local FlameRenderer = require("editor.FlameRenderer")
+local Undo = require("editor.UndoSystem")
+local CrossLevel = require("editor.CrossLevel")
 
 local M = {}
 
@@ -148,6 +150,7 @@ function M.ProcessTileAt(col, row)
 
     if base == C.TILE.SPIKE then
         S.play.alive = false
+        S.play.deathTimer = 0
     elseif base == C.TILE.GOAL then
         S.play.won = true
     elseif base == C.TILE.FUEL and not S.play.collected[key] then
@@ -157,6 +160,10 @@ function M.ProcessTileAt(col, row)
     elseif base == C.TILE.SWITCH and not S.play.collected[key] then
         S.play.collected[key] = true
         S.play.switchState[group] = not S.play.switchState[group]
+        -- 记录到跨关卡状态（世界试玩模式）
+        if S.editorMode == C.MODE_WORLDPLAY and S.worldPlayCurrentFile then
+            CrossLevel.ActivateCrossSwitch(S.worldPlayCurrentFile, group)
+        end
     elseif base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then
         S.play.hiddenWallRevealed[group] = true
     end
@@ -212,7 +219,12 @@ end
 function M.CalcJump()
     local baseJump = S.playerParams.baseJumpGrids
     local bonus = S.play.fallGridCount * S.playerParams.fallJumpMultiplier
-    return math.min(math.floor(baseJump + bonus + 0.5), S.playerParams.maxJumpGrids)
+    local jump = math.floor(baseJump + bonus + 0.5)
+    -- maxJumpGrids = 0 表示无上限
+    if S.playerParams.maxJumpGrids > 0 then
+        jump = math.min(jump, S.playerParams.maxJumpGrids)
+    end
+    return jump
 end
 
 ------------------------------------------------------------
@@ -244,7 +256,11 @@ function M.Update(dt)
             return
         end
     end
-    if not S.play.alive or S.play.won then return end
+    if S.play.won then return end
+    if not S.play.alive then
+        M.UpdateDeathRespawn(dt)
+        return
+    end
 
     S.playGameTime = S.playGameTime + dt
     M.UpdateFlameTime(dt)
@@ -252,14 +268,23 @@ function M.Update(dt)
     M.UpdateFallParticles(dt)
     M.HandleMovementInput(dt)
     M.HandleJumpInput()
+    M.HandleProjectileInput()
     M.UpdateVerticalPhysics(dt)
     M.UpdateGroundRecovery(dt)
+    CrossLevel.Update(dt)
 
     if S.playAlivePixels <= 0 then
         S.play.alive = false
+        S.play.deathTimer = 0
     end
     M.CheckTiles()
     M.UpdateCamera(dt)
+end
+
+function M.HandleProjectileInput()
+    if input:GetKeyPress(KEY_E) then
+        CrossLevel.LaunchProjectile(S.play.gridX, S.play.gridY, S.play.facingRight)
+    end
 end
 
 function M.UpdateFlameTime(dt)
@@ -509,10 +534,16 @@ function M.ApplyFallOneGrid()
     local newY = S.play.gridY + 1
     if newY > S.MAP_ROWS then
         if S.editorMode == C.MODE_WORLDPLAY then
-            S.play.gridY = S.MAP_ROWS
-            return
+            -- 有下方连接的关卡时，保持在底部等待过渡
+            local targetFile = M.WorldPlayFindConnection("down")
+            if targetFile then
+                S.play.gridY = S.MAP_ROWS
+                return
+            end
         end
+        -- 单关卡或无连接：坠落死亡
         S.play.alive = false
+        S.play.deathTimer = 0
         return
     end
     if not M.Collides(S.play.gridX, newY) then
@@ -521,6 +552,7 @@ function M.ApplyFallOneGrid()
         S.play.fallGridCount = S.play.fallGridCount + 1
         if S.play.fallGridCount >= S.playerParams.maxFallGrids then
             S.play.alive = false
+            S.play.deathTimer = 0
             return
         end
         local stripCount = math.max(1, math.floor(S.playTotalPixels / 10 + 0.5))
@@ -545,7 +577,7 @@ end
 function M.UpdateCamera(dt)
     local boundLeftPx = (S.camBound.left - 1) * C.GRID
     local boundRightPx = S.camBound.right * C.GRID
-    local viewW = C.DESIGN_W
+    local viewW = C.DESIGN_W * (S.playerParams.cameraZoom or 1.0)
     local camMinX = boundLeftPx
     local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
     local targetCam = (S.play.gridX - 1) * C.GRID - viewW * 0.35
@@ -598,13 +630,13 @@ function M.ApplyBound(bound)
     if bound then
         S.camBound.left = bound.left or 1
         S.camBound.top = bound.top or 1
-        S.camBound.right = bound.right or C.CAM_BOUND_DEFAULT
-        S.camBound.bottom = bound.bottom or C.CAM_BOUND_DEFAULT
+        S.camBound.right = bound.right or S.MAP_COLS
+        S.camBound.bottom = bound.bottom or S.MAP_ROWS
     else
         S.camBound.left = 1
         S.camBound.top = 1
-        S.camBound.right = C.CAM_BOUND_DEFAULT
-        S.camBound.bottom = C.CAM_BOUND_DEFAULT
+        S.camBound.right = S.MAP_COLS
+        S.camBound.bottom = S.MAP_ROWS
     end
 end
 
@@ -613,14 +645,16 @@ function M.ApplyParams(params)
         S.playerParams.baseJumpGrids = params.baseJumpGrids or 3
         S.playerParams.fallJumpMultiplier = params.fallJumpMultiplier or 1.0
         S.playerParams.maxFallGrids = params.maxFallGrids or 10
-        S.playerParams.maxJumpGrids = params.maxJumpGrids or 8
-        S.playerParams.defaultLightDiameter = params.defaultLightDiameter or 6
+        S.playerParams.maxJumpGrids = params.maxJumpGrids or 0
+        S.playerParams.defaultLightDiameter = params.defaultLightDiameter or 12
+        S.playerParams.cameraZoom = params.cameraZoom or 1.0
     else
         S.playerParams.baseJumpGrids = 3
         S.playerParams.fallJumpMultiplier = 1.0
         S.playerParams.maxFallGrids = 10
-        S.playerParams.maxJumpGrids = 8
-        S.playerParams.defaultLightDiameter = 6
+        S.playerParams.maxJumpGrids = 0
+        S.playerParams.defaultLightDiameter = 12
+        S.playerParams.cameraZoom = 1.0
     end
 end
 
@@ -648,7 +682,7 @@ end
 function M.SnapCameraToPlayer()
     local boundLeftPx = (S.camBound.left - 1) * C.GRID
     local boundRightPx = S.camBound.right * C.GRID
-    local viewW = C.DESIGN_W
+    local viewW = C.DESIGN_W * (S.playerParams.cameraZoom or 1.0)
     local camMinX = boundLeftPx
     local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
     local targetCam = (S.play.gridX - 1) * C.GRID - viewW * 0.35
@@ -677,16 +711,75 @@ end
 
 function M.WorldPlayCheckBoundary()
     if S.worldPlayCooldown > 0 then return end
+    if S.transition.active then return end
     local gx, gy = S.play.gridX, S.play.gridY
     local dir, fromDir = M.DetectBoundaryDirection(gx, gy)
     if not dir then return end
     local targetFile = M.WorldPlayFindConnection(dir)
     if targetFile then
-        if M.WorldPlayLoadLevel(targetFile, fromDir, gx, gy) then
-            M.InitPlayPixels()
-            S.SetMessage("进入: " .. targetFile, 1.5)
+        -- 启动过渡动画（先 fadeOut，加载完再 fadeIn）
+        S.transition.active = true
+        S.transition.phase = "fadeOut"
+        S.transition.alpha = 0
+        S.transition.pendingFile = targetFile
+        S.transition.pendingDir = fromDir
+        S.transition.pendingGx = gx
+        S.transition.pendingGy = gy
+    end
+end
+
+--- 更新关卡切换过渡动画（每帧调用）
+function M.UpdateTransition(dt)
+    if not S.transition.active then return end
+
+    local t = S.transition
+    if t.phase == "fadeOut" then
+        t.alpha = t.alpha + t.speed * dt
+        if t.alpha >= 1.0 then
+            t.alpha = 1.0
+            -- 全黑时执行实际关卡加载
+            if t.pendingFile then
+                if M.WorldPlayLoadLevel(t.pendingFile, t.pendingDir, t.pendingGx, t.pendingGy) then
+                    CrossLevel.Clear()
+                    S.tipPixels = {}
+                    S.tipSpawnTimer = 0
+                    S.playFallParticles = {}
+                    S.play.fallGridCount = 0
+                    S.play.fallTickCurrent = C.PLAY_FALL_BASE
+                    S.play.collected = {}
+                    S.play.switchState = {}
+                    S.play.hiddenWallRevealed = {}
+                    -- 在 switchState 重置后，重新应用跨关卡开关状态
+                    CrossLevel.ApplyCrossSwitches(S.worldPlayCurrentFile)
+                    S.SetMessage("进入: " .. t.pendingFile, 1.5)
+                end
+            end
+            t.phase = "fadeIn"
+            t.pendingFile = nil
+            t.pendingDir = nil
+            t.pendingGx = nil
+            t.pendingGy = nil
+        end
+    elseif t.phase == "fadeIn" then
+        t.alpha = t.alpha - t.speed * dt
+        if t.alpha <= 0 then
+            t.alpha = 0
+            t.phase = "none"
+            t.active = false
         end
     end
+end
+
+--- 绘制关卡切换过渡遮罩
+function M.DrawTransition()
+    if not S.transition.active then return end
+    if S.transition.alpha <= 0 then return end
+    local vg = S.vg
+    local a = math.floor(S.transition.alpha * 255)
+    nvgBeginPath(vg)
+    nvgRect(vg, 0, 0, S.screenDesignW, S.screenDesignH)
+    nvgFillColor(vg, nvgRGBA(0, 0, 0, a))
+    nvgFill(vg)
 end
 
 function M.DetectBoundaryDirection(gx, gy)
@@ -717,6 +810,7 @@ local function ResetPlayState()
     S.play.fallGridCount = 0
     S.play.alive = true
     S.play.won = false
+    S.play.deathTimer = 0
     S.play.isMoving = false
     S.play.moveAnimTime = 0
     S.play.fallAnimTime = 0
@@ -733,8 +827,53 @@ local function ResetPlayState()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
-    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - C.DESIGN_W * 0.35)
+    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - C.DESIGN_W * (S.playerParams.cameraZoom or 1.0) * 0.35)
     M.InitPlayPixels()
+end
+
+------------------------------------------------------------
+-- 死亡后自动复活（不重置已收集道具和开关状态）
+------------------------------------------------------------
+
+local DEATH_RESPAWN_DELAY = 0.8  -- 死亡后等待时间（秒）
+
+function M.UpdateDeathRespawn(dt)
+    S.play.deathTimer = S.play.deathTimer + dt
+    if S.play.deathTimer >= DEATH_RESPAWN_DELAY then
+        M.Respawn()
+    end
+end
+
+function M.Respawn()
+    -- 重置位置到重生点
+    S.play.gridX = S.spawnCol
+    S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
+    -- 重置物理状态
+    S.play.isOnGround = false
+    S.play.isJumping = false
+    S.play.jumpGridsRemain = 0
+    S.play.moveTimer = 0
+    S.play.fallTimer = 0
+    S.play.fallTickCurrent = C.PLAY_FALL_BASE
+    S.play.jumpTimer = 0
+    S.play.fallGridCount = 0
+    S.play.isMoving = false
+    S.play.moveAnimTime = 0
+    S.play.fallAnimTime = 0
+    -- 复活
+    S.play.alive = true
+    S.play.deathTimer = 0
+    -- 重置输入记忆
+    S.prevPlayLeft = false
+    S.prevPlayRight = false
+    S.playMoveFirst = false
+    -- 恢复火焰像素
+    M.InitPlayPixels()
+    S.tipPixels = {}
+    S.tipSpawnTimer = 0
+    S.playFallParticles = {}
+    -- 相机立即跟随到重生点
+    M.SnapCameraToPlayer()
 end
 
 function M.StartPlayMode()
@@ -762,6 +901,7 @@ function M.StartWorldPlayMode()
     S.worldPlayCooldown = 0
     S.editorMode = C.MODE_WORLDPLAY
     ResetPlayState()
+    CrossLevel.Reset()
     S.SetMessage("世界试玩中! ESC返回 | 到达边界自动切换关卡", 3.0)
 end
 
@@ -790,10 +930,10 @@ function M.GenerateRandomLevel()
     S.camBound.bottom = S.MAP_ROWS
     S.cameraX = 0
     S.currentLevelName = ""
-    S.undo.stack = {}
-    S.undo.currentAction = nil
-    S.undo.dirty = false
-    S.undo.saveTimer = 0
+    Undo.stack = {}
+    Undo.currentAction = nil
+    Undo.dirty = false
+    Undo.saveTimer = 0
     FogOfWar.ClearAll()
     S.lightSources = FogOfWar.GetLightSources()
     S.selectedLightIndex = 0
@@ -819,9 +959,11 @@ function M.Draw()
     M.DrawTiles(vg, startCol, endCol)
     FlameRenderer.UpdateFlameAnim()
     FlameRenderer.Draw()
+    CrossLevel.Draw(vg, S.playCameraX)
     M.DrawFogOfWar(vg, startCol, endCol)
     M.DrawHUD(vg)
     M.DrawOverlays(vg)
+    M.DrawTransition()
 end
 
 function M.DrawBackground(vg)
@@ -1034,7 +1176,25 @@ end
 ------------------------------------------------------------
 
 function M.DrawFogOfWar(vg, startCol, endCol)
-    FogOfWar.SetLightSources(FogOfWar.GetLightSources())
+    -- 将玩家动态光源临时加入光源列表
+    local sources = FogOfWar.GetLightSources()
+    local playerLightIdx = nil
+    local flameRatio = S.playAlivePixels / math.max(1, S.playTotalPixels)
+    local playerDiameter = S.playerParams.defaultLightDiameter * flameRatio
+    if playerDiameter >= 1 then
+        local playerS = M.PlayerGridSize()
+        local lightCol = S.play.gridX + math.floor(playerS * 0.5)
+        local lightRow = S.play.gridY + math.floor(playerS * 0.5)
+        table.insert(sources, {
+            col = lightCol,
+            row = lightRow,
+            diameter = playerDiameter,
+            feather = 0.5,
+        })
+        playerLightIdx = #sources
+    end
+
+    FogOfWar.SetLightSources(sources)
     FogOfWar.Draw(vg, {
         gridSize = C.GRID,
         startCol = startCol,
@@ -1047,6 +1207,11 @@ function M.DrawFogOfWar(vg, startCol, endCol)
         mapX = 0,
         mapY = 0,
     })
+
+    -- 移除临时的玩家动态光源，恢复原始列表
+    if playerLightIdx then
+        table.remove(sources, playerLightIdx)
+    end
 end
 
 ------------------------------------------------------------
@@ -1121,17 +1286,22 @@ function M.DrawOverlays(vg)
 end
 
 function M.DrawDeathOverlay(vg, escHint)
+    -- 根据 deathTimer 计算渐入透明度
+    local progress = math.min(S.play.deathTimer / 0.3, 1.0)  -- 0.3秒内渐入
+    local overlayAlpha = math.floor(150 * progress)
+    local textAlpha = math.floor(255 * progress)
+
     nvgBeginPath(vg)
     nvgRect(vg, 0, 0, S.screenDesignW, S.screenDesignH)
-    nvgFillColor(vg, nvgRGBA(0, 0, 0, 120))
+    nvgFillColor(vg, nvgRGBA(0, 0, 0, overlayAlpha))
     nvgFill(vg)
     nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
     nvgFontSize(vg, 22)
-    nvgFillColor(vg, nvgRGBA(255, 60, 60, 255))
+    nvgFillColor(vg, nvgRGBA(255, 60, 60, textAlpha))
     nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.4, "FLAME OUT!")
     nvgFontSize(vg, 11)
-    nvgFillColor(vg, nvgRGBA(255, 255, 255, 200))
-    nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.52, "R:重试  " .. escHint)
+    nvgFillColor(vg, nvgRGBA(255, 255, 255, math.floor(200 * progress)))
+    nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.52, escHint)
 end
 
 function M.DrawWinOverlay(vg, escHint)

@@ -113,6 +113,7 @@ end
 -- ====================================================================
 function M.DrawSingleItem(vg, lv, index, sbX, iy, mx, my)
     local isCurrent = (lv.file == S.currentLevelName)
+    local isSelected = (lv.file == S.sidebarLastClickFile) and not isCurrent
     local isHover = mx >= sbX and mx < sbX + C.SIDEBAR_W and my >= iy and my < iy + ITEM_H
 
     -- 背景
@@ -120,6 +121,11 @@ function M.DrawSingleItem(vg, lv, index, sbX, iy, mx, my)
         nvgBeginPath(vg)
         nvgRect(vg, sbX + 4, iy + 1, C.SIDEBAR_W - 8, ITEM_H - 2)
         nvgFillColor(vg, nvgRGBA(60, 80, 40, 200))
+        nvgFill(vg)
+    elseif isSelected then
+        nvgBeginPath(vg)
+        nvgRect(vg, sbX + 4, iy + 1, C.SIDEBAR_W - 8, ITEM_H - 2)
+        nvgFillColor(vg, nvgRGBA(50, 60, 90, 200))
         nvgFill(vg)
     elseif isHover then
         nvgBeginPath(vg)

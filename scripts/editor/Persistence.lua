@@ -67,9 +67,14 @@ function M.SerializeLevel()
             maxFallGrids = S.playerParams.maxFallGrids,
             maxJumpGrids = S.playerParams.maxJumpGrids,
             defaultLightDiameter = S.playerParams.defaultLightDiameter,
+            cameraZoom = S.playerParams.cameraZoom,
         },
         lightSources = FogOfWar.Serialize(),
     }
+    -- 保留关卡显示名称（确保云端保存后不丢失）
+    if S.currentLevelDisplayName ~= "" then
+        data.levelName = S.currentLevelDisplayName
+    end
     for row = 1, S.MAP_ROWS do
         for col = 1, S.MAP_COLS do
             local v = S.levelData[row][col]
@@ -169,6 +174,9 @@ function M.ApplyLevelData(data)
     if data.cols and data.cols >= 10 then S.MAP_COLS = data.cols end
     if data.rows and data.rows >= 5 then S.MAP_ROWS = data.rows end
 
+    -- 加载关卡显示名称
+    S.currentLevelDisplayName = (data.levelName and data.levelName ~= "") and data.levelName or ""
+
     S.levelData = {}
     for row = 1, S.MAP_ROWS do
         S.levelData[row] = {}
@@ -205,13 +213,13 @@ function M.ApplyCamBound(bound)
     if bound then
         S.camBound.left = bound.left or 1
         S.camBound.top = bound.top or 1
-        S.camBound.right = bound.right or C.CAM_BOUND_DEFAULT
-        S.camBound.bottom = bound.bottom or C.CAM_BOUND_DEFAULT
+        S.camBound.right = bound.right or S.MAP_COLS
+        S.camBound.bottom = bound.bottom or S.MAP_ROWS
     else
         S.camBound.left = 1
         S.camBound.top = 1
-        S.camBound.right = C.CAM_BOUND_DEFAULT
-        S.camBound.bottom = C.CAM_BOUND_DEFAULT
+        S.camBound.right = S.MAP_COLS
+        S.camBound.bottom = S.MAP_ROWS
     end
 end
 
@@ -222,14 +230,16 @@ function M.ApplyPlayerParams(params)
         S.playerParams.baseJumpGrids = params.baseJumpGrids or 3
         S.playerParams.fallJumpMultiplier = params.fallJumpMultiplier or 1.0
         S.playerParams.maxFallGrids = params.maxFallGrids or 10
-        S.playerParams.maxJumpGrids = params.maxJumpGrids or 8
-        S.playerParams.defaultLightDiameter = params.defaultLightDiameter or 6
+        S.playerParams.maxJumpGrids = params.maxJumpGrids or 0
+        S.playerParams.defaultLightDiameter = params.defaultLightDiameter or 12
+        S.playerParams.cameraZoom = params.cameraZoom or 1.0
     else
         S.playerParams.baseJumpGrids = 3
         S.playerParams.fallJumpMultiplier = 1.0
         S.playerParams.maxFallGrids = 10
-        S.playerParams.maxJumpGrids = 8
-        S.playerParams.defaultLightDiameter = 6
+        S.playerParams.maxJumpGrids = 0
+        S.playerParams.defaultLightDiameter = 12
+        S.playerParams.cameraZoom = 1.0
     end
 end
 
@@ -270,6 +280,10 @@ function M.RenameLevel(oldFile, newDisplayName)
     local newJson = cjson.encode(data)
     CloudStorage.Save(oldFile, newJson, function(saveOk, err)
         if saveOk then
+            -- 如果重命名的是当前正在编辑的关卡，同步更新内存中的显示名称
+            if oldFile == S.currentLevelName then
+                S.currentLevelDisplayName = newDisplayName
+            end
             S.SetMessage("已重命名: " .. newDisplayName, 2.0)
             M.RefreshSavedLevels()
         else

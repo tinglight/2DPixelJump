@@ -57,9 +57,10 @@ S.msgText = ""
 S.msgTimer = 0
 
 -- ====================================================================
--- 当前关卡文件名
+-- 当前关卡文件名与显示名称
 -- ====================================================================
 S.currentLevelName = ""
+S.currentLevelDisplayName = ""
 
 -- ====================================================================
 -- 隐藏墙分组系统
@@ -86,8 +87,8 @@ S.lastPlacedRow = -1
 S.camBound = {
     left = 1,
     top = 1,
-    right = C.CAM_BOUND_DEFAULT,
-    bottom = C.CAM_BOUND_DEFAULT,
+    right = C.DEFAULT_MAP_COLS,
+    bottom = C.DEFAULT_MAP_ROWS,
 }
 
 -- ====================================================================
@@ -102,6 +103,8 @@ S.boundDragActive = false
 S.sidebarOpen = true
 S.savedLevels = {}
 S.sidebarScroll = 0
+S.sidebarLastClickFile = nil
+S.sidebarLastClickTime = 0
 
 -- ====================================================================
 -- 对话框
@@ -111,6 +114,12 @@ S.dialogTarget = nil
 S.renameInput = ""
 S.renameCursor = 0
 S.renameBlink = 0
+
+-- ====================================================================
+-- IME 组合输入状态
+-- ====================================================================
+S.imeComposition = ""    -- 当前 IME 组合文本（拼音等）
+S.imeCursor = 0          -- 组合文本中的光标位置
 
 -- ====================================================================
 -- 画布对话框
@@ -127,11 +136,12 @@ S.playerParams = {
     baseJumpGrids = 3,
     fallJumpMultiplier = 1.0,
     maxFallGrids = 10,
-    maxJumpGrids = 8,
-    defaultLightDiameter = 6,
+    maxJumpGrids = 0,
+    defaultLightDiameter = 12,
+    cameraZoom = 1.0,
 }
 
-S.playerParamInputs = {"3", "1.0", "10", "8", "6"}
+S.playerParamInputs = {"3", "1.0", "10", "0", "12", "1.0"}
 S.playerParamFocus = 1
 S.playerParamCursor = 0
 
@@ -166,6 +176,13 @@ S.moveDragCurrentRow = 0
 S.moveDragTileValue = 0
 S.moveDragLightIdx = 0
 S.multiMoving = false
+
+-- ====================================================================
+-- 中键拖拽视窗
+-- ====================================================================
+S.midDragging = false
+S.midDragLastX = 0
+S.midDragLastY = 0
 
 -- ====================================================================
 -- 框选
@@ -207,6 +224,7 @@ S.play = {
     fallGridCount = 0,
     alive = true,
     won = false,
+    deathTimer = 0,
     isMoving = false,
     moveAnimTime = 0,
     fallAnimTime = 0,
@@ -242,6 +260,25 @@ S.playGameTime = 0
 S.worldPlayData = nil
 S.worldPlayCurrentFile = nil
 S.worldPlayCooldown = 0
+
+-- 飞行道具（当前关卡内飞行中的道具列表）
+S.projectiles = {}
+
+-- 跨关卡开关状态（世界试玩期间持久，切关卡不清空）
+-- 格式: { ["level_2.json"] = { [1] = true, [3] = true } }
+S.crossSwitchState = {}
+
+-- 关卡切换过渡动画
+S.transition = {
+    active = false,       -- 是否正在过渡
+    phase = "none",       -- "fadeOut" | "fadeIn" | "none"
+    alpha = 0,            -- 当前遮罩透明度 0~1
+    speed = 5.0,          -- 淡入淡出速度（每秒 alpha 变化量）
+    pendingFile = nil,    -- 待加载的目标关卡文件名
+    pendingDir = nil,     -- 来源方向
+    pendingGx = nil,      -- 切换前的 gridX
+    pendingGy = nil,      -- 切换前的 gridY
+}
 
 -- ====================================================================
 -- 便捷方法
