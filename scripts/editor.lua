@@ -128,15 +128,14 @@ function Start()
     MapData.InitEmptyMap()
     Toolbar.InitTopBarButtons()
 
-    -- 云端加载
-    S.SetMessage("正在加载云存档...", 10.0)
+    -- 本地文件加载
     CloudStorage.Init(function(ok, err)
         Persistence.RefreshSavedLevels()
         if ok then
             local count = #S.savedLevels
-            S.SetMessage(count > 0 and ("云存档已加载 (" .. count .. " 个关卡)") or "云存档已就绪", 3.0)
+            S.SetMessage(count > 0 and ("已加载 " .. count .. " 个关卡") or "就绪", 2.0)
         else
-            S.SetMessage("云存档加载失败: " .. (err or "未知错误") .. "（可正常编辑，保存时重试）", 3.0)
+            S.SetMessage("加载失败: " .. (err or "未知错误"), 3.0)
         end
 
         -- 加载全局玩家参数

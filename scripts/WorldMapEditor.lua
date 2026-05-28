@@ -209,9 +209,9 @@ end
 function WorldMapEditor.Save()
     CloudStorage.SaveWorldMap(mapData, function(ok, err)
         if ok then
-            ShowMsg("世界地图已保存", 2.0)
+            ShowMsg("世界地图已保存", 1.5)
         else
-            ShowMsg("保存失败: " .. (err or "未知错误"), 3.0)
+            ShowMsg("世界地图保存失败: " .. (err or "未知错误"), 3.0)
         end
     end)
 end
@@ -246,6 +246,19 @@ end
 --- 获取所有连通数据（供 main.lua 使用）
 function WorldMapEditor.GetConnections()
     return mapData.connections, mapData.nodes
+end
+
+--- 更新节点显示名称（关卡重命名后同步）
+---@param file string 关卡文件名
+---@param newName string 新显示名称
+function WorldMapEditor.UpdateNodeName(file, newName)
+    for _, node in ipairs(mapData.nodes) do
+        if node.file == file then
+            node.name = newName
+            return true
+        end
+    end
+    return false
 end
 
 --- 获取当前是否处于连接模式

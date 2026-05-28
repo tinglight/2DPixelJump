@@ -7,6 +7,7 @@ local S = require "editor.State"
 local Undo = require "editor.UndoSystem"
 local FogOfWar = require "FogOfWar"
 local CloudStorage = require "CloudStorage"
+local WorldMapEditor = require "WorldMapEditor"
 
 local TILE = C.TILE
 local M = {}
@@ -100,11 +101,10 @@ function M.SaveLevel()
         S.currentLevelName = fname
     end
 
-    S.SetMessage("正在保存...", 5.0)
     CloudStorage.Save(fname, json, function(ok, err)
         if ok then
             local tileCount = #data.tiles
-            S.SetMessage("已保存: " .. fname .. " (" .. tileCount .. " 块)", 3.0)
+            S.SetMessage("已保存: " .. fname .. " (" .. tileCount .. " 块)", 2.0)
             M.RefreshSavedLevels()
         else
             S.SetMessage("保存失败: " .. (err or "未知错误"), 3.0)
@@ -284,6 +284,8 @@ function M.RenameLevel(oldFile, newDisplayName)
             if oldFile == S.currentLevelName then
                 S.currentLevelDisplayName = newDisplayName
             end
+            -- 同步更新世界地图中对应节点的显示名称
+            WorldMapEditor.UpdateNodeName(oldFile, newDisplayName)
             S.SetMessage("已重命名: " .. newDisplayName, 2.0)
             M.RefreshSavedLevels()
         else

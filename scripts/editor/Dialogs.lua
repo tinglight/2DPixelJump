@@ -180,7 +180,7 @@ function M.ApplyPlayerParams()
     p.defaultLightDiameter = tonumber(S.playerParamInputs[5]) or p.defaultLightDiameter
     p.cameraZoom = tonumber(S.playerParamInputs[6]) or p.cameraZoom
 
-    -- 保存到云端，持久化全局玩家参数
+    -- 保存全局玩家参数到本地文件
     CloudStorage.SavePlayerParams({
         baseJumpGrids = p.baseJumpGrids,
         fallJumpMultiplier = p.fallJumpMultiplier,
@@ -190,12 +190,11 @@ function M.ApplyPlayerParams()
         cameraZoom = p.cameraZoom,
     }, function(ok, err)
         if ok then
-            S.SetMessage("玩家参数已更新并保存到云端", 1.5)
+            S.SetMessage("玩家参数已保存", 1.5)
         else
-            S.SetMessage("玩家参数已更新（云端保存失败: " .. (err or "未知") .. "）", 2.5)
+            S.SetMessage("玩家参数保存失败: " .. (err or "未知"), 2.5)
         end
     end)
-    S.SetMessage("玩家参数已更新，正在同步...", 1.5)
 end
 
 function M.ConfirmDialog()
@@ -249,7 +248,7 @@ local function GetDialogSize()
     local w, h = 180, 65
     if S.dialogMode == "rename" then h = 80
     elseif S.dialogMode == "canvas" then h = 100
-    elseif S.dialogMode == "player" then w = 200; h = 170
+    elseif S.dialogMode == "player" then w = 200; h = 190
     elseif S.dialogMode == "light" then h = 100
     end
     return w, h
@@ -425,7 +424,7 @@ local function DrawPlayerDialog(vg, dlgX, dlgY, dlgW, dlgH)
     local rowGap = 20
     local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
 
-    for i = 1, 5 do
+    for i = 1, #S.playerParamInputs do
         local fieldY = startY + (i - 1) * rowGap
         nvgFontSize(vg, 9)
         nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
@@ -859,7 +858,7 @@ function M.HandleMouseDown(mx, my)
         local startY = dlgY + 28
         local rowGap = 20
         local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
-        for i = 1, 5 do
+        for i = 1, #S.playerParamInputs do
             local fieldY = startY + (i - 1) * rowGap
             if mx >= inputX and mx < inputX + inputW and my >= fieldY and my < fieldY + inputH then
                 S.playerParamFocus = i; S.playerParamCursor = #S.playerParamInputs[i]; S.renameBlink = 0
