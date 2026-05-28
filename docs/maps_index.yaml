@@ -1,0 +1,511 @@
+# ====================================================================
+# maps_index.yaml — 火焰像素平台跳跃关卡编辑器 模块索引
+# ====================================================================
+# 生成日期: 2026-05-28
+# 来源: scripts/editor.lua (主入口) + scripts/editor/*.lua (14个模块)
+
+modules:
+  - path: scripts/editor.lua
+    description: 主入口/编排器 — 初始化、事件订阅、模式分发
+    exports:
+      - Start
+      - Stop
+      - HandleNanoVGRender
+      - HandleUpdate
+      - HandleKeyDown
+      - HandleKeyUp
+      - HandleTextInput
+      - HandleMouseDown
+      - HandleMouseUp
+      - HandleMouseWheel
+      - HandleScreenMode
+    dependencies:
+      - urhox-libs.UI.VirtualControls
+      - CloudStorage
+      - WorldMapEditor
+      - FogOfWar
+      - LevelGenerator
+      - editor.Constants
+      - editor.State
+      - editor.MapData
+      - editor.UndoSystem
+      - editor.Placement
+      - editor.Persistence
+      - editor.PlayMode
+      - editor.FlameRenderer
+      - editor.Dialogs
+      - editor.Toolbar
+      - editor.Sidebar
+      - editor.GridRenderer
+      - editor.InputHandler
+    used_by: ["engine_entry"]
+
+  - path: scripts/editor/Constants.lua
+    description: 常量与配置 — 网格尺寸、TILE枚举、颜色表、难度定义
+    exports:
+      - GetToolGroupColor
+      - TILE
+      - GRID
+      - DESIGN_W
+      - DESIGN_H
+      - GROUP_COLORS
+      - FLAME_COLORS
+      - FLAME_CFG
+      - CHAR_SHAPE
+      - DIFFICULTIES
+      - DIFFICULTY_NAMES
+      - MODE
+      - INTERACT
+      - BOUND_EDGE
+    dependencies: []
+    used_by:
+      - editor.State
+      - editor.TileUtils
+      - editor.UndoSystem
+      - editor.Placement
+      - editor.MapData
+      - editor.Persistence
+      - editor.PlayMode
+      - editor.FlameRenderer
+      - editor.Dialogs
+      - editor.Toolbar
+      - editor.Sidebar
+      - editor.GridRenderer
+      - editor.InputHandler
+
+  - path: scripts/editor/State.lua
+    description: 共享可变状态 — 所有模块读写的全局状态容器
+    exports:
+      - SetMessage
+      - ClearSelection
+      - vg
+      - editorMode
+      - levelData
+      - currentTool
+      - currentGroup
+      - cameraX
+      - cameraY
+      - zoomLevel
+      - play
+      - pixelState
+      - playCameraX
+      - screenDesignW
+      - screenDesignH
+    dependencies:
+      - editor.Constants
+    used_by:
+      - editor.TileUtils
+      - editor.UndoSystem
+      - editor.Placement
+      - editor.MapData
+      - editor.Persistence
+      - editor.PlayMode
+      - editor.FlameRenderer
+      - editor.Dialogs
+      - editor.Toolbar
+      - editor.Sidebar
+      - editor.GridRenderer
+      - editor.InputHandler
+
+  - path: scripts/editor/TileUtils.lua
+    description: 纯函数工具 — 地块编解码、坐标转换、边界检测
+    exports:
+      - GetTileType
+      - MakeTileValue
+      - IsTileSelectable
+      - ScreenToGrid
+      - GridToScreen
+      - DetectBoundEdge
+    dependencies:
+      - editor.Constants
+    used_by:
+      - editor.Placement
+      - editor.GridRenderer
+      - editor.InputHandler
+      - editor.PlayMode
+
+  - path: scripts/editor/UndoSystem.lua
+    description: 撤销系统 — 合并绘制操作、单步撤销
+    exports:
+      - RecordTileChange
+      - RecordSpawnChange
+      - Undo
+      - FinalizeDrawAction
+      - Reset
+      - MarkDirty
+    dependencies:
+      - editor.Constants
+      - editor.State
+    used_by:
+      - editor.Placement
+      - editor.InputHandler
+      - editor.Persistence
+
+  - path: scripts/editor/MapData.lua
+    description: 地图数据操作 — 初始化空地图、画布缩放、坐标钳制
+    exports:
+      - InitEmptyMap
+      - ResizeCanvas
+      - ClampSpawnToBounds
+      - ClampCamBoundToBounds
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - FogOfWar
+    used_by:
+      - editor.InputHandler
+      - editor.Dialogs
+      - scripts/editor.lua
+
+  - path: scripts/editor/Placement.lua
+    description: 放置/擦除 — 单元格放置逻辑（含 spawn 唯一性保证）
+    exports:
+      - PlaceTile
+      - PlaceSpawn
+      - PlaceGrouped
+      - PlaceHiddenWall
+      - PlaceSimple
+      - EraseTile
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - editor.UndoSystem
+      - editor.TileUtils
+    used_by:
+      - editor.InputHandler
+
+  - path: scripts/editor/Persistence.lua
+    description: 持久化 — 云端存档 CRUD、序列化/反序列化、自动保存
+    exports:
+      - ReadLevelDisplayName
+      - RefreshSavedLevels
+      - SerializeLevel
+      - SaveLevel
+      - TryAutoSave
+      - AutoSaveBeforeSwitch
+      - SaveAsNewLevel
+      - LoadLevel
+      - ApplyLevelData
+      - ApplyCamBound
+      - ApplyPlayerParams
+      - RestoreViewport
+      - RenameLevel
+      - DeleteLevel
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - editor.UndoSystem
+      - FogOfWar
+      - CloudStorage
+    used_by:
+      - editor.InputHandler
+      - editor.Dialogs
+      - scripts/editor.lua
+
+  - path: scripts/editor/PlayMode.lua
+    description: 试玩模式 — 网格物理、碰撞、道具检测、相机跟踪、渲染
+    exports:
+      - Inject
+      - InitPlayPixels
+      - BuildStripOrder
+      - StripPixels
+      - RecoverPixels
+      - PlayerGridSize
+      - IsSolid
+      - OnGround
+      - Collides
+      - CheckTilesOverlap
+      - ProcessTileAt
+      - SyncFallGridCount
+      - CheckAdjacentHiddenWalls
+      - CheckTiles
+      - CalcJump
+      - MoveOneGrid
+      - Update
+      - WorldPlayLoadLevel
+      - WorldPlayCheckBoundary
+      - StartPlayMode
+      - StartWorldPlayMode
+      - GenerateRandomLevel
+      - CycleDifficulty
+      - Draw
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - editor.TileUtils
+      - editor.FlameRenderer
+      - FogOfWar (injected)
+      - CloudStorage (injected)
+      - WorldMapEditor (injected)
+      - LevelGenerator (injected)
+    used_by:
+      - editor.InputHandler
+      - scripts/editor.lua
+
+  - path: scripts/editor/FlameRenderer.lua
+    description: 火焰渲染 — 像素动画、光晕、尖端粒子、下落火星
+    exports:
+      - UpdateFlameAnim
+      - Draw
+      - DrawGlow
+      - DrawPixels
+      - DrawOnePixel
+      - CalcBrightness
+      - DrawTipPixels
+      - DrawFallParticles
+    dependencies:
+      - editor.Constants
+      - editor.State
+    used_by:
+      - editor.PlayMode
+
+  - path: scripts/editor/Dialogs.lua
+    description: 对话框系统 — 重命名/画布/玩家/灯光/删除确认
+    exports:
+      - Inject
+      - OpenCanvasDialog
+      - OpenPlayerDialog
+      - OpenLightDialog
+      - OpenRenameDialog
+      - OpenDeleteDialog
+      - ApplyPlayerParams
+      - ConfirmDialog
+      - CancelDialog
+      - Draw
+      - HandleKeyDown
+      - HandleTextInput
+      - HandleMouseDown
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - FogOfWar (injected)
+      - MapData (injected)
+      - Persistence (injected)
+    used_by:
+      - editor.InputHandler
+      - scripts/editor.lua
+
+  - path: scripts/editor/Toolbar.lua
+    description: 工具栏 — 顶栏按钮、底栏状态、工具选择、组色指示器
+    exports:
+      - InitTopBarButtons
+      - DrawTopBar
+      - DrawToolbar
+      - DrawInteractModeButtons
+      - DrawToolButtons
+      - DrawGroupIndicator
+      - DrawBottomBar
+      - HitTestTopBar
+      - HitTestToolbar
+      - HitTestInteractMode
+      - HitTestGroup
+    dependencies:
+      - editor.Constants
+      - editor.State
+    used_by:
+      - editor.InputHandler
+      - scripts/editor.lua
+
+  - path: scripts/editor/Sidebar.lua
+    description: 侧边栏 — 关卡列表显示、滚动、点击分发
+    exports:
+      - Draw
+      - DrawEmptyHint
+      - DrawLevelItems
+      - DrawSingleItem
+      - DrawItemActions
+      - IsInSidebar
+      - HitTest
+      - Scroll
+    dependencies:
+      - editor.Constants
+      - editor.State
+    used_by:
+      - editor.InputHandler
+      - scripts/editor.lua
+
+  - path: scripts/editor/GridRenderer.lua
+    description: 网格渲染 — 编辑模式地图绘制（地块、选区、边界、光源）
+    exports:
+      - Inject
+      - Draw
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - editor.TileUtils
+      - FogOfWar (injected)
+    used_by:
+      - scripts/editor.lua
+
+  - path: scripts/editor/InputHandler.lua
+    description: 输入处理 — 键盘/鼠标/滚轮事件分发与编辑操作执行
+    exports:
+      - Inject
+      - HandleUpdate
+      - HandleKeyDown
+      - HandleTextInput
+      - HandleMouseDown
+      - HandleMouseUp
+      - HandleMouseWheel
+    dependencies:
+      - editor.Constants
+      - editor.State
+      - editor.TileUtils
+      - editor.UndoSystem
+      - editor.Placement
+      - Dialogs (injected)
+      - Persistence (injected)
+      - PlayMode (injected)
+      - FogOfWar (injected)
+      - WorldMapEditor (injected)
+      - MapData (injected)
+    used_by:
+      - scripts/editor.lua
+
+# ====================================================================
+# APIs — 外部引擎/库依赖
+# ====================================================================
+apis:
+  - name: CloudStorage
+    type: external_module
+    description: 云端键值存储（Init/Save/Load/Delete/List/Rename）
+    used_by:
+      - editor.Persistence
+      - scripts/editor.lua
+
+  - name: FogOfWar
+    type: external_module
+    description: 战争迷雾系统（Draw/SetLightSources/GetLightSources/ClearAll/Serialize/Deserialize）
+    used_by:
+      - editor.MapData
+      - editor.Persistence
+      - editor.PlayMode
+      - editor.GridRenderer
+      - editor.Dialogs
+      - editor.InputHandler
+
+  - name: WorldMapEditor
+    type: external_module
+    description: 世界地图编辑器（Init/Draw/Update/Save/GetMapData/SetLayout）
+    used_by:
+      - editor.PlayMode
+      - editor.InputHandler
+      - scripts/editor.lua
+
+  - name: LevelGenerator
+    type: external_module
+    description: 随机关卡生成器（GenerateValid/MAP_ROWS/MAP_COLS）
+    used_by:
+      - editor.PlayMode
+
+  - name: NanoVG
+    type: engine_api
+    description: 矢量图形渲染（nvgBeginFrame/nvgRect/nvgText/nvgFill 等）
+    used_by:
+      - editor.PlayMode
+      - editor.FlameRenderer
+      - editor.GridRenderer
+      - editor.Dialogs
+      - editor.Toolbar
+      - editor.Sidebar
+
+  - name: cjson
+    type: engine_global
+    description: JSON 编解码（encode/decode）
+    used_by:
+      - editor.Persistence
+      - editor.PlayMode
+
+# ====================================================================
+# 符号交叉引用
+# ====================================================================
+symbols:
+  - name: S.levelData
+    defined_in: scripts/editor/State.lua
+    type: "table<int, table<int, int>>"
+    used_by:
+      - editor.MapData
+      - editor.Placement
+      - editor.Persistence
+      - editor.PlayMode
+      - editor.GridRenderer
+      - editor.InputHandler
+
+  - name: S.editorMode
+    defined_in: scripts/editor/State.lua
+    type: int
+    used_by:
+      - editor.PlayMode
+      - editor.InputHandler
+      - editor.Toolbar
+      - scripts/editor.lua
+
+  - name: S.play
+    defined_in: scripts/editor/State.lua
+    type: table
+    description: 试玩模式运行时状态（gridX/gridY/alive/won/collected 等）
+    used_by:
+      - editor.PlayMode
+      - editor.FlameRenderer
+      - editor.InputHandler
+
+  - name: S.pixelState
+    defined_in: scripts/editor/State.lua
+    type: "table<int, table<int, boolean>>"
+    used_by:
+      - editor.PlayMode
+      - editor.FlameRenderer
+
+  - name: S.vg
+    defined_in: scripts/editor/State.lua
+    type: userdata
+    description: NanoVG context handle
+    used_by:
+      - editor.PlayMode
+      - editor.FlameRenderer
+      - editor.GridRenderer
+      - editor.Dialogs
+      - editor.Toolbar
+      - editor.Sidebar
+      - scripts/editor.lua
+
+  - name: C.TILE
+    defined_in: scripts/editor/Constants.lua
+    type: table
+    description: 地块类型枚举（EMPTY/SOLID/SPAWN/FUEL/GOAL/SPIKE/SWITCH/GATE/HIDDEN_WALL/LIGHT）
+    used_by:
+      - editor.TileUtils
+      - editor.Placement
+      - editor.Persistence
+      - editor.PlayMode
+      - editor.GridRenderer
+      - editor.InputHandler
+      - editor.Dialogs
+
+  - name: C.GRID
+    defined_in: scripts/editor/Constants.lua
+    type: int
+    description: 网格单元像素尺寸
+    used_by:
+      - editor.TileUtils
+      - editor.PlayMode
+      - editor.GridRenderer
+      - editor.InputHandler
+      - editor.FlameRenderer
+
+  - name: C.GROUP_COLORS
+    defined_in: scripts/editor/Constants.lua
+    type: "table<int, table<int,int,int>>"
+    description: 8组颜色 RGB 用于开关/门/隐藏墙分组标识
+    used_by:
+      - editor.PlayMode
+      - editor.GridRenderer
+      - editor.Toolbar
+
+  - name: C.FLAME_COLORS
+    defined_in: scripts/editor/Constants.lua
+    type: "table<int, table<int,int,int>>"
+    description: 10行火焰像素颜色梯度（从顶到底：白→黄→橙→红→暗红）
+    used_by:
+      - editor.FlameRenderer
+      - editor.PlayMode

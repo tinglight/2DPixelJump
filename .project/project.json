@@ -4,7 +4,7 @@
   "author": {
     "id": "1651617118"
   },
-  "entry": "main.lua",
+  "entry": "editor.lua",
   "version": "1.0.0",
   "taptap_publish": {
     "title": "<game title, required>",
