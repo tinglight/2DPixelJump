@@ -49,7 +49,8 @@ end
 ---@param path string 相对资源路径，如 "data/index.json"
 ---@return string|nil
 local function ReadLocalFile(path)
-    local file = cache:GetFile(path)
+    local resCache = GetCache()
+    local file = resCache:GetFile(path)
     if not file or not file:IsOpen() then return nil end
     local content = file:ReadString()
     file:Close()
