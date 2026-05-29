@@ -123,6 +123,26 @@ function M.Undo()
     M.saveTimer = M.saveDelay
 end
 
+--- 批量记录多个地块变更为单次撤销操作
+---@param deltas table[] 每项 {col, row, oldVal, newVal}
+---@param actionType string|nil 操作类型标记
+function M.RecordBatch(deltas, actionType)
+    if #deltas == 0 then return end
+    local now = os.clock()
+    local action = {
+        deltas = deltas,
+        timestamp = now,
+        lastTime = now,
+        actionType = actionType or "batch",
+    }
+    table.insert(M.stack, action)
+    if #M.stack > M.maxHistory then
+        table.remove(M.stack, 1)
+    end
+    M.dirty = true
+    M.saveTimer = M.saveDelay
+end
+
 --- 结束当前绘制动作合并
 function M.FinalizeDrawAction()
     M.currentAction = nil

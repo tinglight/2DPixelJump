@@ -352,6 +352,24 @@ function HandleEditorKey(key)
         return
     end
 
+    -- 删除键（批量删除框选内容）
+    if key == KEY_DELETE then
+        DeleteSelection()
+        return
+    end
+
+    -- Ctrl+C 复制
+    if key == KEY_C and input:GetKeyDown(KEY_CTRL) then
+        CopySelection()
+        return
+    end
+
+    -- Ctrl+V 粘贴
+    if key == KEY_V and input:GetKeyDown(KEY_CTRL) then
+        PasteClipboard()
+        return
+    end
+
     -- 功能键
     if key == KEY_F then
         S.fogShowInEditor = not S.fogShowInEditor
@@ -1136,6 +1154,176 @@ function M.HandleMouseWheel(wheel)
     local worldY = (mapRelY + S.cameraY) / oldZoom
     S.cameraX = worldX * S.zoomLevel - mapRelX
     S.cameraY = worldY * S.zoomLevel - mapRelY
+end
+
+-- ====================================================================
+-- 批量删除
+-- ====================================================================
+
+function DeleteSelection()
+    if #S.selectedTiles == 0 then
+        S.SetMessage("没有选中内容", 1.0)
+        return
+    end
+
+    local deltas = {}
+    local lightRemoveCount = 0
+
+    for _, st in ipairs(S.selectedTiles) do
+        if st.isLight then
+            -- 删除光源
+            local removed = FogOfWar.RemoveLight(st.col, st.row)
+            if removed then
+                lightRemoveCount = lightRemoveCount + 1
+            end
+        else
+            -- 删除地块（不删除 SPAWN）
+            local oldVal = S.levelData[st.row][st.col]
+            if oldVal ~= TILE.EMPTY and oldVal ~= TILE.SPAWN then
+                S.levelData[st.row][st.col] = TILE.EMPTY
+                deltas[#deltas + 1] = {
+                    col = st.col, row = st.row,
+                    oldVal = oldVal, newVal = TILE.EMPTY,
+                }
+            end
+        end
+    end
+
+    -- 记录到撤销栈（单次撤销）
+    if #deltas > 0 then
+        Undo.RecordBatch(deltas, "delete")
+    end
+    if lightRemoveCount > 0 then
+        S.lightSources = FogOfWar.GetLightSources()
+        Undo.dirty = true
+        Undo.saveTimer = Undo.saveDelay
+    end
+
+    local total = #deltas + lightRemoveCount
+    S.SetMessage("已删除 " .. total .. " 个物体", 1.5)
+    S.ClearSelection()
+end
+
+-- ====================================================================
+-- 复制
+-- ====================================================================
+
+function CopySelection()
+    if #S.selectedTiles == 0 then
+        S.SetMessage("没有选中内容", 1.0)
+        return
+    end
+
+    -- 计算选区左上角作为锚点
+    local minCol, minRow = math.huge, math.huge
+    for _, st in ipairs(S.selectedTiles) do
+        if st.col < minCol then minCol = st.col end
+        if st.row < minRow then minRow = st.row end
+    end
+
+    local clipTiles = {}
+    local clipLights = {}
+
+    for _, st in ipairs(S.selectedTiles) do
+        local colOff = st.col - minCol
+        local rowOff = st.row - minRow
+        if st.isLight then
+            local light = FogOfWar.GetLight(st.lightIdx)
+            if light then
+                clipLights[#clipLights + 1] = {
+                    colOffset = colOff,
+                    rowOffset = rowOff,
+                    diameter = light.diameter,
+                    feather = light.feather,
+                }
+            end
+        else
+            local val = S.levelData[st.row][st.col]
+            if val ~= TILE.EMPTY and val ~= TILE.SPAWN then
+                clipTiles[#clipTiles + 1] = {
+                    colOffset = colOff,
+                    rowOffset = rowOff,
+                    value = val,
+                }
+            end
+        end
+    end
+
+    if #clipTiles == 0 and #clipLights == 0 then
+        S.SetMessage("没有可复制的内容", 1.0)
+        return
+    end
+
+    S.clipboard = { tiles = clipTiles, lights = clipLights }
+    S.SetMessage("已复制 " .. (#clipTiles + #clipLights) .. " 个物体", 1.5)
+end
+
+-- ====================================================================
+-- 粘贴
+-- ====================================================================
+
+function PasteClipboard()
+    if not S.clipboard then
+        S.SetMessage("剪贴板为空", 1.0)
+        return
+    end
+
+    -- 粘贴到当前鼠标所在格子位置
+    local mx, my = GetDesignMouse()
+    local baseCol, baseRow = ScreenToGrid(mx, my)
+    baseCol = math.max(1, math.min(S.MAP_COLS, baseCol))
+    baseRow = math.max(1, math.min(S.MAP_ROWS, baseRow))
+
+    local deltas = {}
+    local pastedCount = 0
+
+    -- 粘贴地块
+    for _, ct in ipairs(S.clipboard.tiles) do
+        local col = baseCol + ct.colOffset
+        local row = baseRow + ct.rowOffset
+        if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
+            local oldVal = S.levelData[row][col]
+            if oldVal == TILE.EMPTY then
+                S.levelData[row][col] = ct.value
+                deltas[#deltas + 1] = {
+                    col = col, row = row,
+                    oldVal = oldVal, newVal = ct.value,
+                }
+                pastedCount = pastedCount + 1
+            end
+        end
+    end
+
+    -- 粘贴光源
+    local lightPastedCount = 0
+    for _, cl in ipairs(S.clipboard.lights) do
+        local col = baseCol + cl.colOffset
+        local row = baseRow + cl.rowOffset
+        if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
+            -- 避免重复放置光源
+            if not FogOfWar.FindLight(col, row) then
+                FogOfWar.AddLight(col, row, cl.diameter, cl.feather)
+                lightPastedCount = lightPastedCount + 1
+            end
+        end
+    end
+
+    -- 记录到撤销栈
+    if #deltas > 0 then
+        Undo.RecordBatch(deltas, "paste")
+    end
+    if lightPastedCount > 0 then
+        S.lightSources = FogOfWar.GetLightSources()
+        Undo.dirty = true
+        Undo.saveTimer = Undo.saveDelay
+    end
+
+    local total = pastedCount + lightPastedCount
+    if total > 0 then
+        S.SetMessage("已粘贴 " .. total .. " 个物体", 1.5)
+    else
+        S.SetMessage("粘贴失败: 目标位置被占用", 1.5)
+    end
 end
 
 return M
