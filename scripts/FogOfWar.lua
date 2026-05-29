@@ -223,7 +223,50 @@ function FogOfWar.Draw(vg, params)
 end
 
 -- ====================================================================
--- 编辑模式：绘制光源标记（像素方块风格）
+-- 像素提灯形状定义（7列 x 9行）
+-- 0=透明, 1=灯框(深色金属), 2=灯芯(亮黄), 3=玻璃(暖橙), 4=挂环(金属), 5=底座
+-- ====================================================================
+local LANTERN_SHAPE = {
+    { 0, 0, 0, 4, 0, 0, 0 },  -- 顶部挂环
+    { 0, 0, 4, 1, 4, 0, 0 },  -- 挂环+灯顶
+    { 0, 0, 1, 1, 1, 0, 0 },  -- 灯顶盖
+    { 0, 1, 3, 3, 3, 1, 0 },  -- 灯身上部
+    { 0, 1, 3, 2, 3, 1, 0 },  -- 灯身中部（含灯芯）
+    { 0, 1, 3, 2, 3, 1, 0 },  -- 灯身中部
+    { 0, 1, 3, 3, 3, 1, 0 },  -- 灯身下部
+    { 0, 0, 1, 1, 1, 0, 0 },  -- 灯底盖
+    { 0, 0, 0, 5, 0, 0, 0 },  -- 底座
+}
+local LANTERN_COLS = 7
+local LANTERN_ROWS = 9
+
+--- 像素提灯调色板（带动态闪烁）
+local function GetLanternColor(pixelType, flickerT)
+    local flicker = 0.85 + 0.15 * math.sin(flickerT * 5.0)
+    if pixelType == 1 then
+        return 90, 70, 40, 255       -- 灯框：深铜色金属
+    elseif pixelType == 2 then
+        -- 灯芯：明亮黄白（闪烁）
+        local r = math.min(255, math.floor(255 * flicker))
+        local g = math.min(255, math.floor(240 * flicker))
+        local b = math.min(255, math.floor(140 * flicker))
+        return r, g, b, 255
+    elseif pixelType == 3 then
+        -- 玻璃灯罩：暖橙透光（半透明 + 闪烁）
+        local r = math.min(255, math.floor(255 * flicker * 0.9))
+        local g = math.min(255, math.floor(160 * flicker * 0.9))
+        local b = math.min(255, math.floor(40 * flicker * 0.6))
+        return r, g, b, 200
+    elseif pixelType == 4 then
+        return 110, 100, 80, 255     -- 挂环：暗灰金属
+    elseif pixelType == 5 then
+        return 70, 60, 50, 255       -- 底座：深灰
+    end
+    return 0, 0, 0, 0
+end
+
+-- ====================================================================
+-- 编辑模式：绘制光源标记（像素提灯风格）
 -- ====================================================================
 --- 在编辑模式下绘制光源的像素圆边界和中心标记
 ---@param vg userdata NanoVG context
@@ -238,6 +281,7 @@ function FogOfWar.DrawLightMarkers(vg, params)
     local selectedIndex = params.selectedIndex or 0
 
     local zGrid = gridSize * zoomLevel
+    local flickerT = os.clock()
 
     for i, light in ipairs(lightSources) do
         local isSelected = (i == selectedIndex)
@@ -330,16 +374,61 @@ function FogOfWar.DrawLightMarkers(vg, params)
             end
         end
 
-        -- 中心标记（小十字 + 点）
+        -- ============================================================
+        -- 像素提灯绘制（替代原中心标记）
+        -- ============================================================
         local cx = mapX + (light.col - 1) * zGrid - offsetX
         local cy = mapY + (light.row - 1) * zGrid - offsetY
-        local markAlpha = isSelected and 255 or 160
 
-        -- 中心格高亮
+        -- 提灯像素大小：整体占 7 像素宽 = 1 格宽度
+        local lanternPixel = zGrid / 7.0
+        local lanternW = LANTERN_COLS * lanternPixel
+        local lanternH = LANTERN_ROWS * lanternPixel
+        -- 居中于光源格子
+        local lx = cx + (zGrid - lanternW) * 0.5
+        local ly = cy + (zGrid - lanternH) * 0.5
+
+        -- 发光光晕（从灯内向外辐射的暖光）
+        local glowCx = lx + lanternW * 0.5
+        local glowCy = ly + lanternH * 0.45  -- 偏上对齐灯芯
+        local glowRadius = zGrid * 1.2
+        local glowFlicker = 0.7 + 0.3 * math.sin(flickerT * 4.0 + i * 1.7)
+        local glowAlpha = math.floor((isSelected and 100 or 70) * glowFlicker)
+
+        -- 外层大光晕
         nvgBeginPath(vg)
-        nvgRect(vg, cx, cy, zGrid, zGrid)
-        nvgFillColor(vg, nvgRGBA(255, 220, 50, markAlpha))
+        nvgCircle(vg, glowCx, glowCy, glowRadius)
+        local outerGlow = nvgRadialGradient(vg, glowCx, glowCy, lanternPixel * 2, glowRadius,
+            nvgRGBA(255, 180, 50, math.min(255, glowAlpha)),
+            nvgRGBA(255, 100, 0, 0))
+        nvgFillPaint(vg, outerGlow)
         nvgFill(vg)
+
+        -- 内层强光（灯芯附近）
+        local innerAlpha2 = math.min(255, math.floor(glowAlpha * 1.2))
+        nvgBeginPath(vg)
+        nvgCircle(vg, glowCx, glowCy, lanternPixel * 3)
+        local innerGlow = nvgRadialGradient(vg, glowCx, glowCy, 0, lanternPixel * 3,
+            nvgRGBA(255, 240, 150, innerAlpha2),
+            nvgRGBA(255, 180, 50, 0))
+        nvgFillPaint(vg, innerGlow)
+        nvgFill(vg)
+
+        -- 逐像素绘制提灯主体
+        for row = 1, LANTERN_ROWS do
+            for col = 1, LANTERN_COLS do
+                local pType = LANTERN_SHAPE[row][col]
+                if pType > 0 then
+                    local r, g, b, a = GetLanternColor(pType, flickerT + i * 0.5)
+                    local px = lx + (col - 1) * lanternPixel
+                    local py = ly + (row - 1) * lanternPixel
+                    nvgBeginPath(vg)
+                    nvgRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5)
+                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                    nvgFill(vg)
+                end
+            end
+        end
 
         -- 选中时边框加亮
         if isSelected then
@@ -348,6 +437,78 @@ function FogOfWar.DrawLightMarkers(vg, params)
             nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 220))
             nvgStrokeWidth(vg, 2)
             nvgStroke(vg)
+        end
+    end
+end
+
+-- ====================================================================
+-- 游戏模式：绘制像素提灯（仅灯笼+光晕，无圆形边界标记）
+-- ====================================================================
+--- 在游戏/试玩模式下绘制光源位置的像素提灯
+---@param vg userdata NanoVG context
+---@param params table { gridSize, offsetX, offsetY, zoomLevel?, mapX?, mapY? }
+function FogOfWar.DrawLanterns(vg, params)
+    local gridSize = params.gridSize or 16
+    local offsetX = params.offsetX or 0
+    local offsetY = params.offsetY or 0
+    local zoomLevel = params.zoomLevel or 1.0
+    local mapX = params.mapX or 0
+    local mapY = params.mapY or 0
+
+    local zGrid = gridSize * zoomLevel
+    local flickerT = os.clock()
+
+    for i, light in ipairs(lightSources) do
+        local cx = mapX + (light.col - 1) * zGrid - offsetX
+        local cy = mapY + (light.row - 1) * zGrid - offsetY
+
+        -- 提灯像素大小
+        local lanternPixel = zGrid / 7.0
+        local lanternW = LANTERN_COLS * lanternPixel
+        local lanternH = LANTERN_ROWS * lanternPixel
+        local lx = cx + (zGrid - lanternW) * 0.5
+        local ly = cy + (zGrid - lanternH) * 0.5
+
+        -- 发光光晕
+        local glowCx = lx + lanternW * 0.5
+        local glowCy = ly + lanternH * 0.45
+        local glowRadius = zGrid * 1.2
+        local glowFlicker = 0.7 + 0.3 * math.sin(flickerT * 4.0 + i * 1.7)
+        local glowAlpha = math.min(255, math.floor(70 * glowFlicker))
+
+        -- 外层光晕
+        nvgBeginPath(vg)
+        nvgCircle(vg, glowCx, glowCy, glowRadius)
+        local outerGlow = nvgRadialGradient(vg, glowCx, glowCy, lanternPixel * 2, glowRadius,
+            nvgRGBA(255, 180, 50, glowAlpha),
+            nvgRGBA(255, 100, 0, 0))
+        nvgFillPaint(vg, outerGlow)
+        nvgFill(vg)
+
+        -- 内层强光
+        local innerAlpha = math.min(255, math.floor(glowAlpha * 1.2))
+        nvgBeginPath(vg)
+        nvgCircle(vg, glowCx, glowCy, lanternPixel * 3)
+        local innerGlow = nvgRadialGradient(vg, glowCx, glowCy, 0, lanternPixel * 3,
+            nvgRGBA(255, 240, 150, innerAlpha),
+            nvgRGBA(255, 180, 50, 0))
+        nvgFillPaint(vg, innerGlow)
+        nvgFill(vg)
+
+        -- 逐像素绘制提灯主体
+        for row = 1, LANTERN_ROWS do
+            for col = 1, LANTERN_COLS do
+                local pType = LANTERN_SHAPE[row][col]
+                if pType > 0 then
+                    local r, g, b, a = GetLanternColor(pType, flickerT + i * 0.5)
+                    local px = lx + (col - 1) * lanternPixel
+                    local py = ly + (row - 1) * lanternPixel
+                    nvgBeginPath(vg)
+                    nvgRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5)
+                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                    nvgFill(vg)
+                end
+            end
         end
     end
 end
