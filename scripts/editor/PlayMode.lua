@@ -577,7 +577,7 @@ end
 function M.UpdateCamera(dt)
     local boundLeftPx = (S.camBound.left - 1) * C.GRID
     local boundRightPx = S.camBound.right * C.GRID
-    local viewW = C.DESIGN_W * (S.playerParams.cameraZoom or 1.0)
+    local viewW = S.screenDesignW * (S.playerParams.cameraZoom or 1.0)
     local camMinX = boundLeftPx
     local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
     local targetCam = (S.play.gridX - 1) * C.GRID - viewW * 0.35
@@ -603,7 +603,14 @@ function M.WorldPlayLoadLevel(filename, fromDirection, prevGx, prevGy)
 end
 
 function M.ApplyWorldLevelData(data)
+    -- 先更新地图尺寸（关键！不同关卡可能有不同尺寸）
+    if data.cols and data.cols >= 10 then S.MAP_COLS = data.cols end
+    if data.rows and data.rows >= 5 then S.MAP_ROWS = data.rows end
+
+    -- 用新尺寸重建 levelData
+    S.levelData = {}
     for row = 1, S.MAP_ROWS do
+        S.levelData[row] = {}
         for col = 1, S.MAP_COLS do
             S.levelData[row][col] = C.TILE.EMPTY
         end
@@ -621,6 +628,31 @@ function M.ApplyWorldLevelData(data)
         end
     end
     M.ApplyBound(data.camBound)
+
+    -- 确保 MAP_COLS/MAP_ROWS 覆盖 camBound + 玩家尺寸，防止 IsSolid 在边界前挡住玩家
+    local ps = M.PlayerGridSize()
+    local needCols = S.camBound.right + ps - 1
+    local needRows = S.camBound.bottom + ps - 1
+    if needCols > S.MAP_COLS then
+        local oldCols = S.MAP_COLS
+        S.MAP_COLS = needCols
+        for row = 1, S.MAP_ROWS do
+            for col = oldCols + 1, S.MAP_COLS do
+                S.levelData[row][col] = C.TILE.EMPTY
+            end
+        end
+    end
+    if needRows > S.MAP_ROWS then
+        local oldRows = S.MAP_ROWS
+        S.MAP_ROWS = needRows
+        for row = oldRows + 1, S.MAP_ROWS do
+            S.levelData[row] = {}
+            for col = 1, S.MAP_COLS do
+                S.levelData[row][col] = C.TILE.EMPTY
+            end
+        end
+    end
+
     M.ApplyParams(data.playerParams)
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
@@ -682,7 +714,7 @@ end
 function M.SnapCameraToPlayer()
     local boundLeftPx = (S.camBound.left - 1) * C.GRID
     local boundRightPx = S.camBound.right * C.GRID
-    local viewW = C.DESIGN_W * (S.playerParams.cameraZoom or 1.0)
+    local viewW = S.screenDesignW * (S.playerParams.cameraZoom or 1.0)
     local camMinX = boundLeftPx
     local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
     local targetCam = (S.play.gridX - 1) * C.GRID - viewW * 0.35
@@ -785,10 +817,12 @@ end
 function M.DetectBoundaryDirection(gx, gy)
     local pressLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
     local pressRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
+    local ps = M.PlayerGridSize()
     if gx <= S.camBound.left and pressLeft then return "left", "right" end
-    if gx >= S.camBound.right and pressRight then return "right", "left" end
+    -- 玩家宽度为 ps 格，最右能到达 camBound.right - ps + 1
+    if gx + ps - 1 >= S.camBound.right and pressRight then return "right", "left" end
     if gy <= S.camBound.top then return "up", "down" end
-    if gy >= S.camBound.bottom or gy >= S.MAP_ROWS then return "down", "up" end
+    if gy + ps - 1 >= S.camBound.bottom or gy >= S.MAP_ROWS then return "down", "up" end
     return nil, nil
 end
 
@@ -827,7 +861,7 @@ local function ResetPlayState()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
-    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - C.DESIGN_W * (S.playerParams.cameraZoom or 1.0) * 0.35)
+    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - S.screenDesignW * (S.playerParams.cameraZoom or 1.0) * 0.35)
     M.InitPlayPixels()
 end
 
@@ -968,17 +1002,22 @@ function M.Draw()
 end
 
 function M.DrawBackground(vg)
-    local bg = nvgLinearGradient(vg, 0, 0, 0, S.screenDesignH,
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local bgW = S.screenDesignW * zoom
+    local bgH = S.screenDesignH * zoom
+    local bg = nvgLinearGradient(vg, 0, 0, 0, bgH,
         nvgRGBA(10, 5, 20, 255), nvgRGBA(30, 15, 40, 255))
     nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, S.screenDesignW, S.screenDesignH)
+    nvgRect(vg, 0, 0, bgW, bgH)
     nvgFillPaint(vg, bg)
     nvgFill(vg)
 end
 
 function M.DrawGrid(vg)
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local visibleW = S.screenDesignW * zoom
     local startCol = math.max(1, math.floor(S.playCameraX / C.GRID) + 1)
-    local endCol = math.min(S.MAP_COLS, startCol + math.ceil(S.screenDesignW / C.GRID) + 2)
+    local endCol = math.min(S.MAP_COLS, startCol + math.ceil(visibleW / C.GRID) + 2)
 
     -- 细线
     nvgBeginPath(vg)
