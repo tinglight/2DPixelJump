@@ -7,6 +7,7 @@ local S = require "editor.State"
 local TileUtils = require "editor.TileUtils"
 local Undo = require "editor.UndoSystem"
 local Placement = require "editor.Placement"
+local Toolbar = require "editor.Toolbar"
 
 local TILE = C.TILE
 local MODE = C.MODE
@@ -158,6 +159,12 @@ function M.HandleUpdate(dt)
         return
     end
 
+    -- 更新工具栏滑动拖拽
+    UpdateToolbarDrag()
+
+    -- 更新工具编辑模式拖拽
+    UpdateToolEditDrag()
+
     -- WASD 相机移动
     local scrollSpeed = 200
     if input:GetKeyDown(KEY_A) and not input:GetKeyDown(KEY_CTRL) then
@@ -190,6 +197,41 @@ function M.HandleUpdate(dt)
     UpdateBoxSelect()
     UpdateDrawErase()
     UpdateAutoSave(dt)
+end
+
+-- ====================================================================
+-- 工具栏滑动更新
+-- ====================================================================
+function UpdateToolbarDrag()
+    -- pending 阶段：判定是否超阈值转为拖拽
+    if S.toolbarDragPending then
+        local mx = input:GetMousePosition().x / S.dpr / S.scaleF
+        local dx = math.abs(mx - S.toolbarDragStartX)
+        if dx > S.toolbarDragThreshold then
+            -- 超过阈值 → 转为真正的滑动拖拽
+            S.toolbarDragPending = false
+            S.toolbarDragPendingSlot = nil
+            S.toolbarDragging = true
+        end
+        return
+    end
+
+    if not S.toolbarDragging then return end
+    local mx = input:GetMousePosition().x / S.dpr / S.scaleF
+    local dx = mx - S.toolbarDragStartX
+    local newScroll = S.toolbarDragStartScroll + dx
+    -- 边界约束
+    local maxScroll = Toolbar.GetToolbarMaxScroll()
+    S.toolbarScrollX = math.max(maxScroll, math.min(0, newScroll))
+end
+
+-- ====================================================================
+-- 工具编辑模式拖拽更新
+-- ====================================================================
+function UpdateToolEditDrag()
+    if not S.toolEditDragging then return end
+    local mx = input:GetMousePosition().x / S.dpr / S.scaleF
+    S.toolEditDragOffsetX = mx - S.toolEditDragStartX
 end
 
 function ClampCamera()
@@ -340,14 +382,16 @@ function HandleEditorKey(key)
         return
     end
 
-    -- 工具数字键
+    -- 工具数字键（绑定到槽位，不绑定具体工具）
     if key >= KEY_1 and key <= KEY_9 then
-        local idx = key - KEY_1 + 1
-        if idx <= #TOOLS then
+        local slotIdx = key - KEY_1 + 1
+        local order = Toolbar.GetToolOrder()
+        if slotIdx <= #order then
+            local toolIdx = order[slotIdx]
             local prevTool = S.currentTool
-            S.currentTool = idx
+            S.currentTool = toolIdx
             S.interactMode = INTERACT.DRAW
-            SwitchToHiddenWallTool(idx, prevTool)
+            SwitchToHiddenWallTool(toolIdx, prevTool)
         end
         return
     end
@@ -458,6 +502,15 @@ function M.HandleMouseDown(button, mx, my)
     local barY = S.screenDesignH - BOTTOMBAR_H
     if my >= barY and my < S.screenDesignH - 16 and button == MOUSEB_LEFT then
         HandleToolbarClick(mx, my, barY)
+        return
+    end
+
+    -- 编辑模式下，点击非工具区域退出编辑（不保存）
+    if S.toolbarEditMode and button == MOUSEB_LEFT then
+        S.toolbarEditMode = false
+        S.toolOrderPending = nil
+        S.toolEditDragging = false
+        S.SetMessage("退出编辑(未保存)", 1.5)
         return
     end
 
@@ -633,37 +686,77 @@ function HandleSidebarClick(mx, my)
 end
 
 function HandleToolbarClick(mx, my, barY)
-    -- 交互模式按钮
-    local modeBtnW, modeBtnH, modeBtnPad = 20, 11, 2
-    local modeBtnStartX, modeBtnStartY = 6, barY + 3
-    for i = 1, 3 do
-        local mbx = modeBtnStartX
-        local mby = modeBtnStartY + (i - 1) * (modeBtnH + modeBtnPad)
-        if mx >= mbx and mx < mbx + modeBtnW and my >= mby and my < mby + modeBtnH then
-            S.interactMode = i
-            if i ~= INTERACT.SELECT and i ~= INTERACT.MOVE then
-                S.ClearSelection()
+    -- 交互模式按钮（非编辑模式时可用）
+    if not S.toolbarEditMode then
+        local modeBtnW, modeBtnH, modeBtnPad = 20, 11, 2
+        local modeBtnStartX, modeBtnStartY = 6, barY + 3
+        for i = 1, 3 do
+            local mbx = modeBtnStartX
+            local mby = modeBtnStartY + (i - 1) * (modeBtnH + modeBtnPad)
+            if mx >= mbx and mx < mbx + modeBtnW and my >= mby and my < mby + modeBtnH then
+                S.interactMode = i
+                if i ~= INTERACT.SELECT and i ~= INTERACT.MOVE then
+                    S.ClearSelection()
+                end
+                return
             end
-            return
         end
     end
 
-    -- 工具按钮
-    local btnW, btnH, btnPad = 36, 28, 4
-    local totalW = #TOOLS * (btnW + btnPad) - btnPad
-    local startX = (S.screenDesignW - totalW) * 0.5
-    local toolBarH = BOTTOMBAR_H - 16
-    local btnY = barY + (toolBarH - btnH) * 0.5
-    for i = 1, #TOOLS do
-        local bx = startX + (i - 1) * (btnW + btnPad)
-        if mx >= bx and mx < bx + btnW and my >= btnY and my < btnY + btnH then
-            local prevTool = S.currentTool
-            S.currentTool = i
-            S.interactMode = INTERACT.DRAW
-            SwitchToHiddenWallTool(i, prevTool)
-            S.ClearSelection()
-            return
+    -- 编辑/确认按钮
+    local editHit = Toolbar.HitTestEditButtons(mx, my)
+    if editHit == "edit" then
+        if not S.toolbarEditMode then
+            -- 进入编辑模式：复制当前工具顺序作为临时编辑顺序
+            S.toolbarEditMode = true
+            local currentOrder = Toolbar.GetToolOrder()
+            S.toolOrderPending = {}
+            for i, v in ipairs(currentOrder) do
+                S.toolOrderPending[i] = v
+            end
+            S.SetMessage("工具编辑模式: 拖拽调整顺序", 2.0)
+        else
+            -- 已在编辑模式，点击编辑按钮退出不保存
+            S.toolbarEditMode = false
+            S.toolOrderPending = nil
+            S.toolEditDragging = false
+            S.SetMessage("退出编辑(未保存)", 1.5)
         end
+        return
+    elseif editHit == "confirm" then
+        -- 确认保存编辑
+        if S.toolbarEditMode and S.toolOrderPending then
+            S.toolOrder = {}
+            for i, v in ipairs(S.toolOrderPending) do
+                S.toolOrder[i] = v
+            end
+        end
+        S.toolbarEditMode = false
+        S.toolOrderPending = nil
+        S.toolEditDragging = false
+        S.SetMessage("工具顺序已保存", 1.5)
+        return
+    end
+
+    -- 工具栏区域点击
+    if Toolbar.HitTestToolbarArea(mx, my) then
+        if S.toolbarEditMode then
+            -- 编辑模式下：开始拖拽工具（重排）
+            local slotIdx = Toolbar.HitTestToolbar(mx, my)
+            if slotIdx then
+                S.toolEditDragging = true
+                S.toolEditDragIndex = slotIdx
+                S.toolEditDragStartX = mx
+                S.toolEditDragOffsetX = 0
+            end
+        else
+            -- 非编辑模式：进入 pending 状态（等阈值判定是拖拽还是点击）
+            S.toolbarDragPending = true
+            S.toolbarDragStartX = mx
+            S.toolbarDragStartScroll = S.toolbarScrollX
+            S.toolbarDragPendingSlot = Toolbar.HitTestToolbar(mx, my) -- 可能为 nil
+        end
+        return
     end
 end
 
@@ -851,6 +944,40 @@ function M.HandleMouseUp(button, mx, my)
 end
 
 function HandleLeftRelease(mx, my)
+    -- 工具栏滑动拖拽释放
+    -- pending 状态释放：未超阈值，视为点击
+    if S.toolbarDragPending then
+        local slotIdx = S.toolbarDragPendingSlot
+        S.toolbarDragPending = false
+        S.toolbarDragPendingSlot = nil
+        if slotIdx then
+            local order = Toolbar.GetToolOrder()
+            local toolIdx = order[slotIdx]
+            if toolIdx then
+                local prevTool = S.currentTool
+                S.currentTool = toolIdx
+                S.interactMode = INTERACT.DRAW
+                SwitchToHiddenWallTool(toolIdx, prevTool)
+                S.ClearSelection()
+            end
+        end
+        return
+    end
+
+    if S.toolbarDragging then
+        S.toolbarDragging = false
+        -- 确保边界约束
+        local maxScroll = Toolbar.GetToolbarMaxScroll()
+        S.toolbarScrollX = math.max(maxScroll, math.min(0, S.toolbarScrollX))
+        return
+    end
+
+    -- 编辑模式下工具拖拽释放（执行重排）
+    if S.toolEditDragging then
+        FinishToolEditDrag(mx)
+        return
+    end
+
     if S.boxSelectActive then
         FinishBoxSelect(mx, my)
         return
@@ -870,6 +997,37 @@ function HandleLeftRelease(mx, my)
         S.boundDragActive = false
         S.boundDragEdge = BOUND_EDGE.NONE
     end
+end
+
+-- ====================================================================
+-- 工具编辑模式拖拽完成：交换位置
+-- ====================================================================
+function FinishToolEditDrag(mx)
+    if not S.toolOrderPending then
+        S.toolEditDragging = false
+        return
+    end
+
+    local btnW = Toolbar.TOOL_BTN_W
+    local btnPad = Toolbar.TOOL_BTN_PAD
+    local areaStartX = Toolbar.GetToolbarStartX()
+    local scrollX = S.toolbarScrollX
+    local dragIdx = S.toolEditDragIndex
+
+    -- 计算目标槽位
+    local relX = mx - areaStartX - scrollX
+    local targetSlot = math.floor(relX / (btnW + btnPad)) + 1
+    targetSlot = math.max(1, math.min(#S.toolOrderPending, targetSlot))
+
+    -- 执行位置交换（移动而非简单交换）
+    if targetSlot ~= dragIdx then
+        local item = table.remove(S.toolOrderPending, dragIdx)
+        table.insert(S.toolOrderPending, targetSlot, item)
+    end
+
+    S.toolEditDragging = false
+    S.toolEditDragIndex = 0
+    S.toolEditDragOffsetX = 0
 end
 
 -- ====================================================================

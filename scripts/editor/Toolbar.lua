@@ -368,28 +368,113 @@ function M.DrawInteractModeButtons(vg, barY)
 end
 
 -- ====================================================================
--- DrawToolButtons - 居中水平排列的工具按钮
+-- 工具栏布局常量
+-- ====================================================================
+M.TOOL_BTN_W = 36
+M.TOOL_BTN_H = 28
+M.TOOL_BTN_PAD = 4
+M.EDIT_BTN_W = 20       -- 编辑按钮宽度
+M.EDIT_BTN_H = 14       -- 编辑按钮高度
+M.EDIT_BTN_GAP = 4      -- 编辑按钮与工具区的间距
+
+-- ====================================================================
+-- GetToolOrder - 获取当前工具显示顺序
+-- ====================================================================
+function M.GetToolOrder()
+    if S.toolbarEditMode and S.toolOrderPending then
+        return S.toolOrderPending
+    end
+    if S.toolOrder then
+        return S.toolOrder
+    end
+    -- 默认顺序
+    local order = {}
+    for i = 1, #C.TOOLS do order[i] = i end
+    return order
+end
+
+-- ====================================================================
+-- GetToolbarVisibleWidth - 工具栏可视区域宽度（最多显示6.5个按钮）
+-- ====================================================================
+function M.GetToolbarVisibleWidth()
+    local btnW = M.TOOL_BTN_W
+    local btnPad = M.TOOL_BTN_PAD
+    return 6.5 * (btnW + btnPad) - btnPad
+end
+
+-- ====================================================================
+-- GetToolbarTotalWidth - 工具栏总内容宽度
+-- ====================================================================
+function M.GetToolbarTotalWidth()
+    local order = M.GetToolOrder()
+    local btnW = M.TOOL_BTN_W
+    local btnPad = M.TOOL_BTN_PAD
+    return #order * (btnW + btnPad) - btnPad
+end
+
+-- ====================================================================
+-- GetToolbarMaxScroll - 最大滑动偏移（负值）
+-- ====================================================================
+function M.GetToolbarMaxScroll()
+    local totalW = M.GetToolbarTotalWidth()
+    local visibleW = M.GetToolbarVisibleWidth()
+    if totalW <= visibleW then return 0 end
+    return -(totalW - visibleW)
+end
+
+-- ====================================================================
+-- GetToolbarStartX - 工具按钮区域起始X（编辑按钮右侧）
+-- ====================================================================
+function M.GetToolbarStartX()
+    -- 交互模式按钮占据左侧 (6 + 20 + 4 = 30px)
+    -- 编辑按钮在交互模式右侧
+    return 6 + 20 + M.EDIT_BTN_GAP + M.EDIT_BTN_W + M.EDIT_BTN_GAP
+end
+
+-- ====================================================================
+-- DrawToolButtons - 支持左右滑动的水平工具按钮
 -- ====================================================================
 function M.DrawToolButtons(vg, barY, toolBarH)
-    local btnW = 36
-    local btnH = 28
-    local btnPad = 4
-    local totalW = #C.TOOLS * (btnW + btnPad) - btnPad
-    local startX = (S.screenDesignW - totalW) * 0.5
+    local btnW = M.TOOL_BTN_W
+    local btnH = M.TOOL_BTN_H
+    local btnPad = M.TOOL_BTN_PAD
+    local order = M.GetToolOrder()
+
+    local visibleW = M.GetToolbarVisibleWidth()
+    local areaStartX = M.GetToolbarStartX()
     local btnY = barY + (toolBarH - btnH) * 0.5
 
-    for i, tool in ipairs(C.TOOLS) do
-        local bx = startX + (i - 1) * (btnW + btnPad)
+    -- 裁剪区域：只在可视范围内绘制工具按钮
+    nvgSave(vg)
+    nvgScissor(vg, areaStartX, barY, visibleW, toolBarH)
+
+    local scrollX = S.toolbarScrollX
+
+    for slotIdx, toolIdx in ipairs(order) do
+        local tool = C.TOOLS[toolIdx]
+        if not tool then goto continue end
+
+        local bx = areaStartX + (slotIdx - 1) * (btnW + btnPad) + scrollX
+
+        -- 编辑模式下被拖拽的工具跟随鼠标
+        if S.toolbarEditMode and S.toolEditDragging and slotIdx == S.toolEditDragIndex then
+            bx = bx + S.toolEditDragOffsetX
+        end
+
+        -- 跳过不可见的按钮
+        if bx + btnW < areaStartX - 10 or bx > areaStartX + visibleW + 10 then
+            goto continue
+        end
 
         -- 分组颜色色带
         local gc = C.GetToolGroupColor(tool)
         nvgBeginPath(vg)
         nvgRoundedRect(vg, bx, btnY + btnH - 3, btnW, 3, 1)
-        nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], i == S.currentTool and 255 or 120))
+        nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], toolIdx == S.currentTool and 255 or 120))
         nvgFill(vg)
 
-        -- 选中高亮边框
-        if i == S.currentTool then
+        -- 选中高亮边框（非编辑模式时显示）
+        if not S.toolbarEditMode and toolIdx == S.currentTool then
             nvgBeginPath(vg)
             nvgRoundedRect(vg, bx - 2, btnY - 2, btnW + 4, btnH + 4, 5)
             nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 200))
@@ -397,12 +482,27 @@ function M.DrawToolButtons(vg, barY, toolBarH)
             nvgStroke(vg)
         end
 
+        -- 编辑模式下被拖拽的工具半透明
+        local bgAlpha = toolIdx == S.currentTool and 255 or 120
+        if S.toolbarEditMode and S.toolEditDragging and slotIdx == S.toolEditDragIndex then
+            bgAlpha = 200
+        end
+
         -- 按钮背景
         nvgBeginPath(vg)
         nvgRoundedRect(vg, bx, btnY, btnW, btnH - 3, 3)
         local c = tool.color
-        nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], i == S.currentTool and 255 or 120))
+        nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], bgAlpha))
         nvgFill(vg)
+
+        -- 编辑模式下显示拖拽手柄样式
+        if S.toolbarEditMode then
+            nvgBeginPath(vg)
+            nvgRoundedRect(vg, bx, btnY, btnW, btnH - 3, 3)
+            nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 80))
+            nvgStrokeWidth(vg, 1)
+            nvgStroke(vg)
+        end
 
         -- 工具名称
         nvgFontFace(vg, "sans")
@@ -411,10 +511,91 @@ function M.DrawToolButtons(vg, barY, toolBarH)
         nvgFillColor(vg, nvgRGBA(255, 255, 255, 220))
         nvgText(vg, bx + btnW * 0.5, btnY + (btnH - 3) * 0.5 - 2, tool.name)
 
-        -- 快捷键编号
+        -- 快捷键编号（显示槽位号）
         nvgFontSize(vg, 7)
         nvgFillColor(vg, nvgRGBA(200, 200, 200, 150))
-        nvgText(vg, bx + btnW * 0.5, btnY + (btnH - 3) * 0.5 + 7, tostring(i))
+        nvgText(vg, bx + btnW * 0.5, btnY + (btnH - 3) * 0.5 + 7, tostring(slotIdx))
+
+        ::continue::
+    end
+
+    nvgRestore(vg)
+
+    -- 绘制编辑按钮
+    M.DrawEditButton(vg, barY, toolBarH)
+end
+
+-- ====================================================================
+-- DrawEditButton - 绘制编辑按钮（交互模式按钮右侧）
+-- ====================================================================
+function M.DrawEditButton(vg, barY, toolBarH)
+    local editBtnX = 6 + 20 + M.EDIT_BTN_GAP  -- 交互模式右侧
+    local editBtnY = barY + (toolBarH - M.EDIT_BTN_H) * 0.5 - (S.toolbarEditMode and 8 or 0)
+    local ebW = M.EDIT_BTN_W
+    local ebH = M.EDIT_BTN_H
+
+    -- 编辑按钮背景
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, editBtnX, editBtnY, ebW, ebH, 3)
+    if S.toolbarEditMode then
+        nvgFillColor(vg, nvgRGBA(60, 130, 220, 255))
+    else
+        nvgFillColor(vg, nvgRGBA(50, 55, 70, 255))
+    end
+    nvgFill(vg)
+
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, editBtnX, editBtnY, ebW, ebH, 3)
+    nvgStrokeColor(vg, nvgRGBA(90, 100, 130, 180))
+    nvgStrokeWidth(vg, 0.8)
+    nvgStroke(vg)
+
+    -- 编辑图标：绘制铅笔形状
+    local cx = editBtnX + ebW * 0.5
+    local cy = editBtnY + ebH * 0.5
+    nvgSave(vg)
+    nvgTranslate(vg, cx, cy)
+    nvgRotate(vg, math.rad(-45))
+    -- 笔身
+    nvgBeginPath(vg)
+    nvgRect(vg, -1.5, -5, 3, 7)
+    nvgFillColor(vg, nvgRGBA(220, 220, 240, 255))
+    nvgFill(vg)
+    -- 笔尖
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, -1.5, 2)
+    nvgLineTo(vg, 1.5, 2)
+    nvgLineTo(vg, 0, 4.5)
+    nvgClosePath(vg)
+    nvgFill(vg)
+    nvgRestore(vg)
+
+    -- 编辑模式下，在编辑按钮下方显示确认(√)按钮
+    if S.toolbarEditMode then
+        local confirmY = editBtnY + ebH + 3
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, editBtnX, confirmY, ebW, ebH, 3)
+        nvgFillColor(vg, nvgRGBA(40, 160, 80, 255))
+        nvgFill(vg)
+
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, editBtnX, confirmY, ebW, ebH, 3)
+        nvgStrokeColor(vg, nvgRGBA(60, 200, 100, 200))
+        nvgStrokeWidth(vg, 0.8)
+        nvgStroke(vg)
+
+        -- 打勾图标
+        local ccx = editBtnX + ebW * 0.5
+        local ccy = confirmY + ebH * 0.5
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, ccx - 4, ccy)
+        nvgLineTo(vg, ccx - 1, ccy + 3)
+        nvgLineTo(vg, ccx + 4, ccy - 3)
+        nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 255))
+        nvgStrokeWidth(vg, 2)
+        nvgLineCap(vg, NVG_ROUND)
+        nvgLineJoin(vg, NVG_ROUND)
+        nvgStroke(vg)
     end
 end
 
@@ -507,23 +688,28 @@ function M.HitTestTopBar(mx, my)
     return nil
 end
 
----@return number|nil 命中的工具索引(1-based)
+---@return number|nil 命中的槽位索引(1-based)
 function M.HitTestToolbar(mx, my)
     local toolBarH = C.BOTTOMBAR_H
     local barY = S.screenDesignH - toolBarH - 16
     if my < barY or my > barY + toolBarH then return nil end
 
-    local btnW = 36
-    local btnH = 28
-    local btnPad = 4
-    local totalW = #C.TOOLS * (btnW + btnPad) - btnPad
-    local startX = (S.screenDesignW - totalW) * 0.5
+    local btnW = M.TOOL_BTN_W
+    local btnH = M.TOOL_BTN_H
+    local btnPad = M.TOOL_BTN_PAD
+    local order = M.GetToolOrder()
+    local areaStartX = M.GetToolbarStartX()
+    local visibleW = M.GetToolbarVisibleWidth()
     local btnY = barY + (toolBarH - btnH) * 0.5
+    local scrollX = S.toolbarScrollX
 
-    for i = 1, #C.TOOLS do
-        local bx = startX + (i - 1) * (btnW + btnPad)
+    -- 只在可视区域内命中
+    if mx < areaStartX or mx > areaStartX + visibleW then return nil end
+
+    for slotIdx = 1, #order do
+        local bx = areaStartX + (slotIdx - 1) * (btnW + btnPad) + scrollX
         if mx >= bx and mx < bx + btnW and my >= btnY and my < btnY + btnH then
-            return i
+            return slotIdx
         end
     end
     return nil
@@ -547,6 +733,43 @@ function M.HitTestInteractMode(mx, my)
         end
     end
     return nil
+end
+
+---@return string|nil "edit" 或 "confirm" 或 nil
+function M.HitTestEditButtons(mx, my)
+    local toolBarH = C.BOTTOMBAR_H
+    local barY = S.screenDesignH - toolBarH - 16
+    if my < barY or my > barY + toolBarH then return nil end
+
+    local editBtnX = 6 + 20 + M.EDIT_BTN_GAP
+    local editBtnY = barY + (toolBarH - M.EDIT_BTN_H) * 0.5 - (S.toolbarEditMode and 8 or 0)
+    local ebW = M.EDIT_BTN_W
+    local ebH = M.EDIT_BTN_H
+
+    -- 编辑按钮
+    if mx >= editBtnX and mx < editBtnX + ebW and my >= editBtnY and my < editBtnY + ebH then
+        return "edit"
+    end
+
+    -- 确认按钮（仅编辑模式下可见）
+    if S.toolbarEditMode then
+        local confirmY = editBtnY + ebH + 3
+        if mx >= editBtnX and mx < editBtnX + ebW and my >= confirmY and my < confirmY + ebH then
+            return "confirm"
+        end
+    end
+
+    return nil
+end
+
+---@return boolean 鼠标是否在工具栏可滑动区域内
+function M.HitTestToolbarArea(mx, my)
+    local toolBarH = C.BOTTOMBAR_H
+    local barY = S.screenDesignH - toolBarH - 16
+    if my < barY or my > barY + toolBarH then return false end
+    local areaStartX = M.GetToolbarStartX()
+    local visibleW = M.GetToolbarVisibleWidth()
+    return mx >= areaStartX and mx < areaStartX + visibleW
 end
 
 ---@return number|nil 命中的颜色分组索引

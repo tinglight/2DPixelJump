@@ -194,6 +194,28 @@ S.boxSelectCurrentX = 0
 S.boxSelectCurrentY = 0
 
 -- ====================================================================
+-- 工具栏滑动状态
+-- ====================================================================
+S.toolbarScrollX = 0          -- 当前滑动偏移（设计像素，<=0 表示向右滑）
+S.toolbarDragging = false     -- 正在拖拽滑动工具栏
+S.toolbarDragStartX = 0       -- 拖拽起始鼠标X
+S.toolbarDragStartScroll = 0  -- 拖拽起始时的 scrollX
+S.toolbarDragPending = false  -- 按下但尚未确定是拖拽还是点击
+S.toolbarDragPendingSlot = nil -- pending 时命中的工具槽位（nil=未命中按钮）
+S.toolbarDragThreshold = 4    -- 超过此像素视为拖拽（设计坐标）
+
+-- ====================================================================
+-- 工具栏编辑模式状态
+-- ====================================================================
+S.toolbarEditMode = false           -- 是否处于工具编辑模式
+S.toolOrder = nil                   -- 自定义工具顺序（nil=默认顺序），1-based 索引数组
+S.toolOrderPending = nil            -- 编辑中的临时工具顺序（未保存）
+S.toolEditDragging = false          -- 编辑模式中正在拖拽工具
+S.toolEditDragIndex = 0             -- 正在被拖拽的工具在 pending 数组中的索引
+S.toolEditDragStartX = 0            -- 拖拽起始鼠标X
+S.toolEditDragOffsetX = 0           -- 拖拽中的像素偏移
+
+-- ====================================================================
 -- 剪贴板（复制粘贴）
 -- ====================================================================
 S.clipboard = nil  -- { tiles = {{colOffset, rowOffset, value}}, lights = {{colOffset, rowOffset, diameter, feather}} }
