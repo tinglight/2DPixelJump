@@ -1,18 +1,18 @@
 -- ====================================================================
--- CloudStorage.lua - 本地文件持久化存储模块
+-- CloudStorage.lua - 云端持久化存储模块
 -- ====================================================================
 --
--- 将关卡数据、玩家参数、世界地图持久化到本地 data/ 目录下，
--- 文件以 JSON 格式存储，随项目代码一起提交到 git。
+-- 使用 clientCloud API 将关卡数据、玩家参数、世界地图持久化到云端，
+-- 刷新页面后数据不丢失。
 --
--- 存储结构:
---   data/levels/level_1.json   -- 各关卡数据
---   data/levels/level_2.json
---   data/world_map.json        -- 世界地图连通关系
---   data/player_params.json    -- 全局玩家参数
---   data/index.json            -- 关卡索引（nextIndex）
+-- 云端 key 规范:
+--   "editor_index"       -- 关卡索引（nextIndex）
+--   "player_params"      -- 全局玩家参数
+--   "world_map"          -- 世界地图连通关系
+--   "level_1" ~ "level_N" -- 各关卡数据
 --
--- 接口保持不变，回调 callback(ok, err) 同步立即调用。
+-- 首次使用时从本地 data/ 目录读取默认值（随项目打包的初始配置）。
+-- 接口保持不变，回调 callback(ok, err) 异步调用。
 -- ====================================================================
 
 local CloudStorage = {}
@@ -35,17 +35,20 @@ local initialized = false
 -- 内部辅助函数
 -- ====================================================================
 
---- 确保目录存在
-local function EnsureDir(dir)
-    if not fileSystem:DirExists(dir) then
-        fileSystem:CreateDir(dir)
-    end
+--- 从云端 key 名转为文件名: "level_1" -> "level_1.json"
+local function KeyToFilename(key)
+    return key .. ".json"
 end
 
---- 读取文件内容
+--- 从文件名转为云端 key: "level_1.json" -> "level_1"
+local function FilenameToKey(fname)
+    return fname:match("^(.+)%.json$") or fname
+end
+
+--- 读取本地文件内容（仅用于读取初始默认值）
 ---@param path string
 ---@return string|nil
-local function ReadFile(path)
+local function ReadLocalFile(path)
     if not fileSystem:FileExists(path) then return nil end
     local file = File(path, FILE_READ)
     if not file or not file:IsOpen() then return nil end
@@ -54,38 +57,119 @@ local function ReadFile(path)
     return content
 end
 
---- 写入文件内容
----@param path string
----@param content string
----@return boolean
-local function WriteFile(path, content)
-    local file = File(path, FILE_WRITE)
-    if not file or not file:IsOpen() then return false end
-    file:WriteString(content)
-    file:Close()
-    return true
-end
-
---- 保存索引文件
+--- 保存索引到云端
 local function SaveIndex()
-    WriteFile(INDEX_FILE, cjson.encode({ nextIndex = cache.nextIndex }))
+    clientCloud:Set("editor_index", { nextIndex = cache.nextIndex })
 end
 
 -- ====================================================================
 -- 公共接口
 -- ====================================================================
 
---- 初始化：从本地 data/levels/ 目录加载关卡列表到内存
+--- 初始化：从云端加载所有关卡数据到内存，若云端无数据则从本地读取默认值
 ---@param callback fun(ok: boolean, err?: string)
 function CloudStorage.Init(callback)
-    EnsureDir(DATA_DIR)
-    EnsureDir(LEVELS_DIR)
+    cache.levels = {}
+    cache.nextIndex = 1
 
+    -- 先尝试从云端读取索引，判断是否有云端数据
+    clientCloud:Get("editor_index", {
+        ok = function(values, iscores)
+            local indexData = values.editor_index
+            if indexData and indexData.nextIndex then
+                -- 云端有数据，加载所有关卡
+                cache.nextIndex = indexData.nextIndex
+                CloudStorage._LoadAllLevelsFromCloud(callback)
+            else
+                -- 云端无数据，从本地文件加载初始值并同步到云端
+                CloudStorage._LoadFromLocalAndSync(callback)
+            end
+        end,
+        error = function(code, reason)
+            -- 网络错误，尝试从本地文件加载（只读，不写云端）
+            print("[CloudStorage] 云端读取失败，使用本地默认: " .. tostring(reason))
+            CloudStorage._LoadFromLocalOnly(callback)
+        end
+    })
+end
+
+--- 从云端加载所有关卡（已知 nextIndex）
+function CloudStorage._LoadAllLevelsFromCloud(callback)
+    if cache.nextIndex <= 1 then
+        -- 没有任何关卡
+        initialized = true
+        if callback then callback(true) end
+        return
+    end
+
+    -- 构建批量读取请求
+    local batch = clientCloud:BatchGet()
+    for i = 1, cache.nextIndex - 1 do
+        batch:Key("level_" .. i)
+    end
+
+    batch:Fetch({
+        ok = function(values, iscores)
+            for i = 1, cache.nextIndex - 1 do
+                local key = "level_" .. i
+                local data = values[key]
+                if data then
+                    local fname = KeyToFilename(key)
+                    cache.levels[fname] = cjson.encode(data)
+                end
+            end
+            initialized = true
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 批量读取关卡失败: " .. tostring(reason))
+            -- 降级到本地
+            CloudStorage._LoadFromLocalOnly(callback)
+        end
+    })
+end
+
+--- 从本地文件加载并同步到云端（首次使用）
+function CloudStorage._LoadFromLocalAndSync(callback)
+    CloudStorage._LoadFromLocalOnly(function(ok)
+        if not ok then
+            if callback then callback(false, "本地加载失败") end
+            return
+        end
+
+        -- 将本地数据同步到云端
+        local batch = clientCloud:BatchSet()
+        batch:Set("editor_index", { nextIndex = cache.nextIndex })
+
+        for fname, jsonStr in pairs(cache.levels) do
+            local key = FilenameToKey(fname)
+            local decodeOk, data = pcall(cjson.decode, jsonStr)
+            if decodeOk and data then
+                batch:Set(key, data)
+            end
+        end
+
+        batch:Save("初始同步", {
+            ok = function()
+                print("[CloudStorage] 本地数据已同步到云端")
+            end,
+            error = function(code, reason)
+                print("[CloudStorage] 同步到云端失败: " .. tostring(reason))
+            end
+        })
+
+        -- 不等同步完成就返回，内存缓存已可用
+        if callback then callback(true) end
+    end)
+end
+
+--- 仅从本地文件加载（不写云端）
+function CloudStorage._LoadFromLocalOnly(callback)
     cache.levels = {}
     cache.nextIndex = 1
 
     -- 读取索引
-    local indexJson = ReadFile(INDEX_FILE)
+    local indexJson = ReadLocalFile(INDEX_FILE)
     if indexJson then
         local ok, indexData = pcall(cjson.decode, indexJson)
         if ok and indexData then
@@ -93,17 +177,18 @@ function CloudStorage.Init(callback)
         end
     end
 
-    -- 扫描 levels 目录，加载所有 JSON 文件到内存
-    local files = fileSystem:ScanDir(LEVELS_DIR .. "/", "*.json", SCAN_FILES, false)
-    if files then
-        for _, fname in ipairs(files) do
-            local content = ReadFile(LEVELS_DIR .. "/" .. fname)
-            if content then
-                cache.levels[fname] = content
-                -- 修正 nextIndex
-                local idx = tonumber(fname:match("level_(%d+)%.json"))
-                if idx and idx >= cache.nextIndex then
-                    cache.nextIndex = idx + 1
+    -- 扫描 levels 目录
+    if fileSystem:DirExists(LEVELS_DIR) then
+        local files = fileSystem:ScanDir(LEVELS_DIR .. "/", "*.json", SCAN_FILES, false)
+        if files then
+            for _, fname in ipairs(files) do
+                local content = ReadLocalFile(LEVELS_DIR .. "/" .. fname)
+                if content then
+                    cache.levels[fname] = content
+                    local idx = tonumber(fname:match("level_(%d+)%.json"))
+                    if idx and idx >= cache.nextIndex then
+                        cache.nextIndex = idx + 1
+                    end
                 end
             end
         end
@@ -132,14 +217,11 @@ function CloudStorage.Load(fname)
     return cache.levels[fname]
 end
 
---- 保存关卡（写入内存缓存 + 同步写入本地文件）
+--- 保存关卡（写入内存缓存 + 异步写入云端）
 ---@param fname string
 ---@param jsonStr string
 ---@param callback? fun(ok: boolean, err?: string)
 function CloudStorage.Save(fname, jsonStr, callback)
-    EnsureDir(DATA_DIR)
-    EnsureDir(LEVELS_DIR)
-
     cache.levels[fname] = jsonStr
 
     -- 更新 nextIndex
@@ -148,14 +230,27 @@ function CloudStorage.Save(fname, jsonStr, callback)
         cache.nextIndex = idx + 1
     end
 
-    -- 写入文件
-    local ok = WriteFile(LEVELS_DIR .. "/" .. fname, jsonStr)
-    if ok then
-        SaveIndex()
-        if callback then callback(true) end
-    else
-        if callback then callback(false, "写入文件失败: " .. fname) end
+    -- 写入云端
+    local key = FilenameToKey(fname)
+    local decodeOk, data = pcall(cjson.decode, jsonStr)
+    if not decodeOk or not data then
+        if callback then callback(false, "JSON 解码失败") end
+        return
     end
+
+    clientCloud:BatchSet()
+        :Set(key, data)
+        :Set("editor_index", { nextIndex = cache.nextIndex })
+        :Save("保存关卡 " .. fname, {
+            ok = function()
+                if callback then callback(true) end
+            end,
+            error = function(code, reason)
+                print("[CloudStorage] 云端保存失败: " .. tostring(reason))
+                -- 内存缓存已更新，功能不受影响，下次保存会重试
+                if callback then callback(true) end
+            end
+        })
 end
 
 --- 删除关卡
@@ -168,13 +263,17 @@ function CloudStorage.Delete(fname, callback)
     end
     cache.levels[fname] = nil
 
-    -- 删除本地文件
-    local path = LEVELS_DIR .. "/" .. fname
-    if fileSystem:FileExists(path) then
-        fileSystem:Delete(path)
-    end
-
-    if callback then callback(true) end
+    -- 云端删除（设为空表标记删除）
+    local key = FilenameToKey(fname)
+    clientCloud:Set(key, { _deleted = true }, {
+        ok = function()
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 云端删除失败: " .. tostring(reason))
+            if callback then callback(true) end
+        end
+    })
 end
 
 --- 获取所有已保存关卡文件名列表（排序后返回）
@@ -204,22 +303,41 @@ end
 -- ====================================================================
 local playerParamsCache = nil  -- table or nil
 
---- 初始化全局玩家参数（从本地文件加载到内存）
+--- 初始化全局玩家参数（从云端加载到内存）
 ---@param callback fun(ok: boolean, err?: string)
 function CloudStorage.InitPlayerParams(callback)
-    EnsureDir(DATA_DIR)
-    local json = ReadFile(PLAYER_PARAMS_FILE)
-    if json then
-        local ok, data = pcall(cjson.decode, json)
-        if ok and data and data.baseJumpGrids ~= nil then
-            playerParamsCache = data
-        else
-            playerParamsCache = nil
+    clientCloud:Get("player_params", {
+        ok = function(values, iscores)
+            local data = values.player_params
+            if data and data.baseJumpGrids ~= nil then
+                playerParamsCache = data
+            else
+                -- 云端无数据，从本地读默认值
+                local json = ReadLocalFile(PLAYER_PARAMS_FILE)
+                if json then
+                    local ok2, localData = pcall(cjson.decode, json)
+                    if ok2 and localData and localData.baseJumpGrids ~= nil then
+                        playerParamsCache = localData
+                        -- 同步到云端
+                        clientCloud:Set("player_params", playerParamsCache)
+                    end
+                end
+            end
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 读取玩家参数失败: " .. tostring(reason))
+            -- 降级本地
+            local json = ReadLocalFile(PLAYER_PARAMS_FILE)
+            if json then
+                local ok2, localData = pcall(cjson.decode, json)
+                if ok2 and localData then
+                    playerParamsCache = localData
+                end
+            end
+            if callback then callback(true) end
         end
-    else
-        playerParamsCache = nil
-    end
-    if callback then callback(true) end
+    })
 end
 
 --- 读取玩家参数（同步，从缓存）
@@ -228,18 +346,20 @@ function CloudStorage.LoadPlayerParams()
     return playerParamsCache
 end
 
---- 保存全局玩家参数到本地文件
+--- 保存全局玩家参数到云端
 ---@param params table
 ---@param callback? fun(ok: boolean, err?: string)
 function CloudStorage.SavePlayerParams(params, callback)
-    EnsureDir(DATA_DIR)
     playerParamsCache = params
-    local ok = WriteFile(PLAYER_PARAMS_FILE, cjson.encode(params))
-    if ok then
-        if callback then callback(true) end
-    else
-        if callback then callback(false, "写入玩家参数失败") end
-    end
+    clientCloud:Set("player_params", params, {
+        ok = function()
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 保存玩家参数失败: " .. tostring(reason))
+            if callback then callback(true) end
+        end
+    })
 end
 
 -- ====================================================================
@@ -247,22 +367,48 @@ end
 -- ====================================================================
 local worldMapCache = nil  -- table or nil
 
---- 加载世界地图（从本地文件加载到内存）
+--- 加载世界地图（从云端加载到内存）
 ---@param callback fun(ok: boolean, err?: string)
 function CloudStorage.InitWorldMap(callback)
-    EnsureDir(DATA_DIR)
-    local json = ReadFile(WORLD_MAP_FILE)
-    if json then
-        local ok, data = pcall(cjson.decode, json)
-        if ok and data and data.nodes then
-            worldMapCache = data
-        else
-            worldMapCache = { nodes = {}, connections = {}, nextId = 1 }
+    clientCloud:Get("world_map", {
+        ok = function(values, iscores)
+            local data = values.world_map
+            if data and data.nodes then
+                worldMapCache = data
+            else
+                -- 云端无数据，从本地读默认值
+                local json = ReadLocalFile(WORLD_MAP_FILE)
+                if json then
+                    local ok2, localData = pcall(cjson.decode, json)
+                    if ok2 and localData and localData.nodes then
+                        worldMapCache = localData
+                        -- 同步到云端
+                        clientCloud:Set("world_map", worldMapCache)
+                    else
+                        worldMapCache = { nodes = {}, connections = {}, nextId = 1 }
+                    end
+                else
+                    worldMapCache = { nodes = {}, connections = {}, nextId = 1 }
+                end
+            end
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 读取世界地图失败: " .. tostring(reason))
+            local json = ReadLocalFile(WORLD_MAP_FILE)
+            if json then
+                local ok2, localData = pcall(cjson.decode, json)
+                if ok2 and localData and localData.nodes then
+                    worldMapCache = localData
+                else
+                    worldMapCache = { nodes = {}, connections = {}, nextId = 1 }
+                end
+            else
+                worldMapCache = { nodes = {}, connections = {}, nextId = 1 }
+            end
+            if callback then callback(true) end
         end
-    else
-        worldMapCache = { nodes = {}, connections = {}, nextId = 1 }
-    end
-    if callback then callback(true) end
+    })
 end
 
 --- 读取世界地图数据（同步，从缓存）
@@ -271,18 +417,112 @@ function CloudStorage.LoadWorldMap()
     return worldMapCache
 end
 
---- 保存世界地图数据到本地文件
+--- 保存世界地图数据到云端
 ---@param data table
 ---@param callback? fun(ok: boolean, err?: string)
 function CloudStorage.SaveWorldMap(data, callback)
-    EnsureDir(DATA_DIR)
     worldMapCache = data
-    local ok = WriteFile(WORLD_MAP_FILE, cjson.encode(data))
-    if ok then
-        if callback then callback(true) end
-    else
-        if callback then callback(false, "写入世界地图失败") end
+    clientCloud:Set("world_map", data, {
+        ok = function()
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 保存世界地图失败: " .. tostring(reason))
+            if callback then callback(true) end
+        end
+    })
+end
+
+-- ====================================================================
+-- 导出/导入（用于剪贴板备份/恢复）
+-- ====================================================================
+
+--- 导出全部数据为一个 JSON 字符串
+---@return string JSON 字符串，包含 levels/playerParams/worldMap/index
+function CloudStorage.ExportAll()
+    local exportData = {
+        _format = "editor_export_v1",
+        index = { nextIndex = cache.nextIndex },
+        playerParams = playerParamsCache,
+        worldMap = worldMapCache,
+        levels = {},
+    }
+
+    -- 导出所有关卡（解码为 table 以避免双重编码）
+    local files = CloudStorage.ListLevels()
+    for _, fname in ipairs(files) do
+        local json = cache.levels[fname]
+        if json then
+            local ok, data = pcall(cjson.decode, json)
+            if ok and data then
+                exportData.levels[fname] = data
+            end
+        end
     end
+
+    return cjson.encode(exportData)
+end
+
+--- 从导出的 JSON 导入全部数据（覆盖云端）
+---@param jsonStr string ExportAll 导出的 JSON
+---@return boolean, string|nil
+function CloudStorage.ImportAll(jsonStr)
+    local ok, exportData = pcall(cjson.decode, jsonStr)
+    if not ok or not exportData or exportData._format ~= "editor_export_v1" then
+        return false, "无效的导出数据格式"
+    end
+
+    -- 导入 playerParams
+    if exportData.playerParams then
+        playerParamsCache = exportData.playerParams
+    end
+
+    -- 导入 worldMap
+    if exportData.worldMap then
+        worldMapCache = exportData.worldMap
+    end
+
+    -- 导入 levels
+    if exportData.levels then
+        for fname, data in pairs(exportData.levels) do
+            cache.levels[fname] = cjson.encode(data)
+        end
+    end
+
+    -- 导入 index
+    if exportData.index then
+        cache.nextIndex = exportData.index.nextIndex or cache.nextIndex
+    end
+
+    -- 批量同步到云端
+    local batch = clientCloud:BatchSet()
+    batch:Set("editor_index", { nextIndex = cache.nextIndex })
+
+    if playerParamsCache then
+        batch:Set("player_params", playerParamsCache)
+    end
+    if worldMapCache then
+        batch:Set("world_map", worldMapCache)
+    end
+
+    for fname, jsonStr2 in pairs(cache.levels) do
+        local key = FilenameToKey(fname)
+        local decOk, data = pcall(cjson.decode, jsonStr2)
+        if decOk and data then
+            batch:Set(key, data)
+        end
+    end
+
+    batch:Save("导入全部数据", {
+        ok = function()
+            print("[CloudStorage] 导入数据已同步到云端")
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] 导入同步失败: " .. tostring(reason))
+        end
+    })
+
+    return true
 end
 
 return CloudStorage

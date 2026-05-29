@@ -42,6 +42,7 @@ function M.InitTopBarButtons()
         { id = "random",   label = "随机", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE },
         { id = "worldmap", label = "世界", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE, hasSubmenu = true },
         { id = "sidebar",  label = "关卡", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE },
+        { id = "export",   label = "导出", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_FILE },
     }
 end
 
@@ -115,6 +116,9 @@ local function GetButtonColors(btn)
             bgR, bgG, bgB = 45, 42, 38
             borderR, borderG, borderB = 80, 70, 60
         end
+    elseif btn.id == "export" then
+        bgR, bgG, bgB = 50, 70, 100
+        borderR, borderG, borderB = 80, 120, 180
     end
 
     return bgR, bgG, bgB, bgA, borderR, borderG, borderB, borderA, textR, textG, textB, isActive

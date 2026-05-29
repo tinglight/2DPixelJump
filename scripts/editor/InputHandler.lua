@@ -78,6 +78,70 @@ local function CycleDifficulty()
     S.currentDifficulty = diffs[1].id
 end
 
+--- 导出全部数据：将云端缓存直接写入本地 data/ 目录文件
+function DoExport()
+    local ok, err = pcall(function()
+        local CloudStorage = require "CloudStorage"
+
+        -- 获取各项数据
+        local playerParams = CloudStorage.LoadPlayerParams()
+        local worldMap = CloudStorage.LoadWorldMap()
+        local nextIndex = CloudStorage.GetNextIndex()
+        local levelFiles = CloudStorage.ListLevels()
+
+        -- 写入 data/index.json
+        local indexFile = File("data/index.json", FILE_WRITE)
+        if indexFile and indexFile:IsOpen() then
+            indexFile:WriteString(cjson.encode({ nextIndex = nextIndex }))
+            indexFile:Close()
+            print("[Export] 写入 data/index.json")
+        end
+
+        -- 写入 data/player_params.json
+        if playerParams then
+            local ppFile = File("data/player_params.json", FILE_WRITE)
+            if ppFile and ppFile:IsOpen() then
+                ppFile:WriteString(cjson.encode(playerParams))
+                ppFile:Close()
+                print("[Export] 写入 data/player_params.json")
+            end
+        end
+
+        -- 写入 data/world_map.json
+        if worldMap then
+            local wmFile = File("data/world_map.json", FILE_WRITE)
+            if wmFile and wmFile:IsOpen() then
+                wmFile:WriteString(cjson.encode(worldMap))
+                wmFile:Close()
+                print("[Export] 写入 data/world_map.json")
+            end
+        end
+
+        -- 写入 data/levels/level_N.json
+        local levelCount = 0
+        for _, fname in ipairs(levelFiles) do
+            local jsonStr = CloudStorage.Load(fname)
+            if jsonStr then
+                local path = "data/levels/" .. fname
+                local lf = File(path, FILE_WRITE)
+                if lf and lf:IsOpen() then
+                    lf:WriteString(jsonStr)
+                    lf:Close()
+                    levelCount = levelCount + 1
+                end
+            end
+        end
+        print("[Export] 写入 " .. levelCount .. " 个关卡文件到 data/levels/")
+
+        S.SetMessage("已导出 " .. levelCount .. " 个关卡到本地文件!", 3.0)
+    end)
+
+    if not ok then
+        print("[Export Error] " .. tostring(err))
+        S.SetMessage("导出出错: " .. tostring(err), 3.0)
+    end
+end
+
 local function SwitchToHiddenWallTool(idx, prevTool)
     local hiddenWallToolIdx = 8
     if idx == hiddenWallToolIdx and prevTool ~= hiddenWallToolIdx then
@@ -467,6 +531,8 @@ function HandleWorldMapTopBarBtn(id)
         WorldMapEditor.Save()
     elseif id == "sidebar" then
         S.sidebarOpen = not S.sidebarOpen
+    elseif id == "export" then
+        DoExport()
     end
 end
 
@@ -504,6 +570,8 @@ function DispatchTopBarBtn(id)
         S.SetMessage("世界地图编辑模式", 2.0)
     elseif id == "sidebar" then
         S.sidebarOpen = not S.sidebarOpen
+    elseif id == "export" then
+        DoExport()
     end
 end
 
