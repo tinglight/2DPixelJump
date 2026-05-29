@@ -1208,7 +1208,12 @@ function M.DrawFogOfWar(vg, startCol, endCol)
         mapY = 0,
     })
 
-    -- 在迷雾上方绘制像素提灯（发光体在黑暗中可见）
+    -- 移除临时的玩家动态光源，恢复原始列表（玩家不挂灯笼）
+    if playerLightIdx then
+        table.remove(sources, playerLightIdx)
+    end
+
+    -- 在迷雾上方绘制像素提灯（仅地图光源，不含玩家）
     FogOfWar.DrawLanterns(vg, {
         gridSize = C.GRID,
         offsetX = S.playCameraX,
@@ -1217,11 +1222,6 @@ function M.DrawFogOfWar(vg, startCol, endCol)
         mapX = 0,
         mapY = 0,
     })
-
-    -- 移除临时的玩家动态光源，恢复原始列表
-    if playerLightIdx then
-        table.remove(sources, playerLightIdx)
-    end
 end
 
 ------------------------------------------------------------
