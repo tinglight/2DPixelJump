@@ -2,3 +2,4 @@
 dist/
 .tmp/
 logs/build/
+docs/git.txt

@@ -1,0 +1,6 @@
+9dfdf2e init: 初始化关卡配置数据
+20552de feat: 将关卡/世界地图/玩家配置从云端存储迁移为本地JSON文件配置，随git版本管理
+ff1534d feat: 编辑器模块化重构 + 跨关卡系统 + 工具链更新
+bfcc1f9 feat: 重构编辑器为模块化架构（14模块 + 薄主入口）
+05c04a4 init: 项目初始化
+a4b61b7 Initial commit

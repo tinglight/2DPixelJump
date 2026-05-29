@@ -911,11 +911,12 @@ end
 
 function M.GenerateRandomLevel()
     local diff = C.DIFFICULTIES[S.currentDifficulty]
-    local map, sc, sr, templateName = LevelGenerator.GenerateValid(diff, 5)
+    -- v2.1: 传入当前画布尺寸，不使用固定地图大小
+    local map, sc, sr, templateName = LevelGenerator.GenerateValid(diff, 5, S.MAP_COLS, S.MAP_ROWS)
     for row = 1, S.MAP_ROWS do
         S.levelData[row] = {}
         for col = 1, S.MAP_COLS do
-            if row <= LevelGenerator.MAP_ROWS and col <= LevelGenerator.MAP_COLS then
+            if map[row] and map[row][col] then
                 S.levelData[row][col] = map[row][col]
             else
                 S.levelData[row][col] = C.TILE.EMPTY

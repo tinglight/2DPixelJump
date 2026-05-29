@@ -351,7 +351,7 @@ local levelData = {}
 --- 使用随机关卡生成器初始化关卡
 local function InitLevel()
     local map, spawnCol, spawnRow, templateName, diff =
-        LevelGenerator.GenerateValid(currentDifficulty, 5)
+        LevelGenerator.GenerateValid(currentDifficulty, 5, MAP_COLS, MAP_ROWS)
 
     levelData = map
     currentTemplateName = templateName or ""
