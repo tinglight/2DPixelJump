@@ -653,7 +653,8 @@ function M.ApplyWorldLevelData(data)
         end
     end
 
-    M.ApplyParams(data.playerParams)
+    -- 世界试玩模式下不覆盖玩家参数，保持全局配置一致
+    -- （全局 playerParams 已在 StartWorldPlayMode 时从 data/player_params.json 加载）
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
 end
