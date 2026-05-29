@@ -290,16 +290,23 @@ function M.DrawTopBar()
         end
     end
 
-    -- 右侧当前模式信息
+    -- 右侧：版本号 + 当前模式信息
     nvgFontFace(vg, "sans")
     nvgFontSize(vg, 9)
     nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+
+    -- 版本号（最右侧）
+    nvgFillColor(vg, nvgRGBA(100, 105, 120, 180))
+    nvgText(vg, S.screenDesignW - 6, centerY, "v" .. C.VERSION)
+
+    -- 当前模式信息（版本号左侧）
+    local versionW = nvgTextBounds(vg, 0, 0, "v" .. C.VERSION) + 8
     if S.editorMode == C.MODE_WORLDMAP then
         nvgFillColor(vg, nvgRGBA(160, 165, 180, 200))
-        nvgText(vg, S.screenDesignW - 6, centerY, "世界地图模式")
+        nvgText(vg, S.screenDesignW - 6 - versionW, centerY, "世界地图模式")
     else
         nvgFillColor(vg, nvgRGBA(200, 200, 210, 200))
-        nvgText(vg, S.screenDesignW - 6, centerY, "工具:" .. C.TOOLS[S.currentTool].name)
+        nvgText(vg, S.screenDesignW - 6 - versionW, centerY, "工具:" .. C.TOOLS[S.currentTool].name)
     end
 end
 

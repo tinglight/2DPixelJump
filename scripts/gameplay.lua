@@ -20,6 +20,7 @@
 require "urhox-libs.UI.VirtualControls"
 local LevelGenerator = require "LevelGenerator"
 local CloudStorage = require "CloudStorage"
+local GAME_VERSION = require "version"
 
 -- ====================================================================
 -- 游戏常量
@@ -1707,10 +1708,17 @@ local function DrawHUD()
     nvgFillColor(vg, nvgRGBA(255, 140, 40, 255))
     nvgText(vg, 235, 11, "FUEL:" .. fuelCount)
 
-    -- 操作提示
+    -- 右侧：版本号
     nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+    nvgFontSize(vg, 8)
+    nvgFillColor(vg, nvgRGBA(100, 105, 120, 150))
+    nvgText(vg, screenDesignW - 6, 11, "v" .. GAME_VERSION)
+
+    -- 操作提示（版本号下方）
+    nvgFontSize(vg, 11)
     nvgFillColor(vg, nvgRGBA(180, 180, 180, 150))
-    nvgText(vg, screenDesignW - 6, 11, "R:Retry N:Next 1/2/3:Diff")
+    local versionW = nvgTextBounds(vg, 0, 0, "v" .. GAME_VERSION) + 8
+    nvgText(vg, screenDesignW - 6 - versionW, 11, "R:Retry N:Next 1/2/3:Diff")
 
     -- 游戏结束/胜利
     if gameState == STATE_GAMEOVER then
