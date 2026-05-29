@@ -67,15 +67,10 @@ end
 
 local function CycleDifficulty()
     local diffs = C.DIFFICULTIES
-    for i, d in ipairs(diffs) do
-        if d.id == S.currentDifficulty then
-            local next = (i % #diffs) + 1
-            S.currentDifficulty = diffs[next].id
-            S.SetMessage("难度: " .. diffs[next].name, 1.5)
-            return
-        end
-    end
-    S.currentDifficulty = diffs[1].id
+    S.currentDifficulty = S.currentDifficulty % #diffs + 1
+    local diff = diffs[S.currentDifficulty]
+    local diffName = C.DIFFICULTY_NAMES[diff] or diff
+    S.SetMessage("难度: " .. diffName, 1.5)
 end
 
 --- 导出全部数据：将云端缓存直接写入本地 data/ 目录文件
