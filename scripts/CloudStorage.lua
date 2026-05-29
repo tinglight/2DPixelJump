@@ -45,12 +45,11 @@ local function FilenameToKey(fname)
     return fname:match("^(.+)%.json$") or fname
 end
 
---- 读取本地文件内容（仅用于读取初始默认值）
----@param path string
+--- 读取项目打包的默认配置文件（通过 resource cache 读取 scripts/data/ 下的文件）
+---@param path string 相对资源路径，如 "data/index.json"
 ---@return string|nil
 local function ReadLocalFile(path)
-    if not fileSystem:FileExists(path) then return nil end
-    local file = File(path, FILE_READ)
+    local file = cache:GetFile(path)
     if not file or not file:IsOpen() then return nil end
     local content = file:ReadString()
     file:Close()
@@ -168,7 +167,7 @@ function CloudStorage._LoadFromLocalOnly(callback)
     cache.levels = {}
     cache.nextIndex = 1
 
-    -- 读取索引
+    -- 读取索引（通过 resource cache 从 scripts/data/index.json 读取）
     local indexJson = ReadLocalFile(INDEX_FILE)
     if indexJson then
         local ok, indexData = pcall(cjson.decode, indexJson)
@@ -177,20 +176,12 @@ function CloudStorage._LoadFromLocalOnly(callback)
         end
     end
 
-    -- 扫描 levels 目录
-    if fileSystem:DirExists(LEVELS_DIR) then
-        local files = fileSystem:ScanDir(LEVELS_DIR .. "/", "*.json", SCAN_FILES, false)
-        if files then
-            for _, fname in ipairs(files) do
-                local content = ReadLocalFile(LEVELS_DIR .. "/" .. fname)
-                if content then
-                    cache.levels[fname] = content
-                    local idx = tonumber(fname:match("level_(%d+)%.json"))
-                    if idx and idx >= cache.nextIndex then
-                        cache.nextIndex = idx + 1
-                    end
-                end
-            end
+    -- 根据 nextIndex 逐个加载关卡文件（resource cache 不支持目录扫描）
+    for i = 1, cache.nextIndex - 1 do
+        local fname = "level_" .. i .. ".json"
+        local content = ReadLocalFile(LEVELS_DIR .. "/" .. fname)
+        if content then
+            cache.levels[fname] = content
         end
     end
 
