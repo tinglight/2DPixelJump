@@ -11,6 +11,7 @@ local C = require "editor.Constants"
 local S = require "editor.State"
 local UI = require("urhox-libs/UI")
 local LevelFileIO = require "editor.LevelFileIO"
+local Undo = require "editor.UndoSystem"
 
 local M = {}
 
@@ -221,21 +222,10 @@ local function DestroyImportUI()
     S.cloudDialogMode = nil
 end
 
---- 执行导出逻辑
-local function DoExport(exportName)
-    if not exportName or exportName == "" then
-        S.SetMessage("导出名称不能为空", 2.0)
-        return
-    end
-
-    -- 确保目录存在
-    fileSystem:CreateDir("data")
-    fileSystem:CreateDir("data/levels")
-
-    -- 获取当前关卡文件名
-    local currentFile = S.currentLevelFile
+--- 实际执行导出（内部调用，确保关卡已保存）
+local function DoExportInternal(exportName)
+    local currentFile = S.currentLevelName
     if not currentFile or currentFile == "" then
-        -- 如果没有在编辑某个已保存关卡，先保存
         S.SetMessage("请先保存当前关卡", 2.0)
         return
     end
@@ -246,6 +236,29 @@ local function DoExport(exportName)
     else
         S.SetMessage("导出失败: " .. tostring(err), 3.0)
     end
+end
+
+--- 执行导出逻辑（dirty 时先保存，等回调成功再导出）
+local function DoExport(exportName)
+    if not exportName or exportName == "" then
+        S.SetMessage("导出名称不能为空", 2.0)
+        return
+    end
+
+    -- 如果当前关卡有未保存修改，先保存再导出
+    if Undo.dirty and Persistence then
+        Persistence.SaveLevel(function(ok, err)
+            if ok then
+                DoExportInternal(exportName)
+            else
+                S.SetMessage("保存失败，无法导出: " .. (err or "未知错误"), 3.0)
+            end
+        end)
+        return
+    end
+
+    -- 没有 dirty 或没有 Persistence，直接导出
+    DoExportInternal(exportName)
 end
 
 --- 打开导出对话框

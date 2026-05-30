@@ -221,12 +221,20 @@ function M.LoadLevelFromFile(filename, player)
     M.hiddenWallRevealed = {}
     M.collectedItems = {}
 
-    -- 加载装饰物
+    -- 加载装饰物（保留完整字段以确保渲染正确）
     M.decorations = {}
     if data.decorations then
         for _, d in ipairs(data.decorations) do
             if d.col and d.row and d.typeId then
-                table.insert(M.decorations, { col = d.col, row = d.row, typeId = d.typeId })
+                table.insert(M.decorations, {
+                    col = d.col,
+                    row = d.row,
+                    typeId = d.typeId,
+                    brightness = d.brightness or 100,
+                    scale = d.scale or 100,
+                    touchTransform = d.touchTransform or false,
+                    transformTarget = d.transformTarget or 0,
+                })
             end
         end
     end
@@ -238,6 +246,7 @@ function M.LoadLevelFromFile(filename, player)
     if data.lightZones then
         FogOfWar.DeserializeZones(data.lightZones)
     end
+    FogOfWar.ResetZoneState()
 
     -- gameplay 模式：只有编辑器中标记为"无光"(extinguished)的灯才初始熄灭，
     -- 普通光源正常发光

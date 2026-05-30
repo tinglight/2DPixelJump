@@ -93,7 +93,8 @@ function M.SerializeLevel()
 end
 
 --- 保存当前关卡到云存储
-function M.SaveLevel()
+---@param callback? fun(ok: boolean, err?: string) 可选回调，保存完成后调用
+function M.SaveLevel(callback)
     local data = M.SerializeLevel()
     local json = cjson.encode(data)
 
@@ -108,12 +109,14 @@ function M.SaveLevel()
 
     CloudStorage.Save(fname, json, function(ok, err)
         if ok then
+            Undo.dirty = false
             local tileCount = #data.tiles
             S.SetMessage("已保存: " .. fname .. " (" .. tileCount .. " 块)", 2.0)
             M.RefreshSavedLevels()
         else
             S.SetMessage("保存失败: " .. (err or "未知错误"), 3.0)
         end
+        if callback then callback(ok, err) end
     end)
 end
 
@@ -121,7 +124,6 @@ end
 function M.TryAutoSave()
     if Undo.dirty and S.currentLevelName ~= "" then
         M.SaveLevel()
-        Undo.dirty = false
     end
 end
 
@@ -136,7 +138,6 @@ function M.AutoSaveBeforeSwitch()
     end
     if Undo.dirty and S.currentLevelName ~= "" then
         M.SaveLevel()
-        Undo.dirty = false
     end
     Undo.Reset()
 end

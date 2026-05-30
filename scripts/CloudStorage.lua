@@ -366,8 +366,7 @@ function CloudStorage.Save(fname, jsonStr, callback)
             end,
             error = function(code, reason)
                 print("[CloudStorage] 云端保存失败: " .. tostring(reason))
-                -- 内存缓存已更新，功能不受影响，下次保存会重试
-                if callback then callback(true) end
+                if callback then callback(false, tostring(reason)) end
             end
         })
 end

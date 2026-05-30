@@ -478,6 +478,14 @@ local function BuildUI()
                 alignItems = "center",
                 paddingBottom = "18%",
                 children = {
+                    -- 游戏标题
+                    UI.Label {
+                        text = "Fire Souls",
+                        fontSize = 42,
+                        textColor = { 255, 200, 60, 255 },
+                        marginBottom = 24,
+                        textAlign = "center",
+                    },
                     -- 按钮容器（居中偏下，无背景）
                     UI.Panel {
                         alignItems = "center",

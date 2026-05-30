@@ -93,7 +93,6 @@ function DoExport()
             elseif S.currentLevelName ~= "" and Undo.dirty then
                 -- 有修改未保存的已有关卡
                 Persistence.SaveLevel()
-                Undo.dirty = false
                 print("[Export] 自动保存当前关卡: " .. S.currentLevelName)
             end
         end
@@ -519,7 +518,6 @@ function HandleEditorKey(key)
         Undo.Undo()
     elseif key == KEY_S and input:GetKeyDown(KEY_CTRL) then
         Persistence.SaveLevel()
-        Undo.dirty = false
     elseif key == KEY_L and input:GetKeyDown(KEY_CTRL) then
         S.sidebarOpen = not S.sidebarOpen
     elseif key == KEY_ESCAPE then
