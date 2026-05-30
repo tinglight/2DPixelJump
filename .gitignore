@@ -3,3 +3,4 @@ dist/
 .tmp/
 node_modules/
 logs/build/
+docs/git.txt
