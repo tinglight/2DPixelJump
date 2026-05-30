@@ -20,13 +20,14 @@ local PauseMenu = require "PauseMenu"
 local LaunchGame, LaunchEditor
 
 -- ====================================================================
--- 切换到编辑器/游戏模式
+-- 进入游戏
 -- ====================================================================
 LaunchGame = function()
     MainMenu.Cleanup()
     require "editor"
     local S = require "editor.State"
     S.fromMainMenu = true
+    S.editorActive = true
     ---@diagnostic disable-next-line: redundant-parameter
     Start()
 
@@ -35,6 +36,7 @@ LaunchGame = function()
         onResume = nil,
         onBackToMenu = function()
             PauseMenu.Cleanup()
+            S.editorActive = false
             S.fromMainMenu = false
             MainMenu.Init({
                 onStartGame = LaunchGame,
@@ -43,8 +45,9 @@ LaunchGame = function()
             })
         end,
         onOpenEditor = function()
-            PauseMenu.Cleanup()
-            S.fromMainMenu = false
+            -- 保持 S.fromMainMenu = true，PauseMenu 不清理
+            -- 这样在编辑器中按 M 键仍可回主菜单
+            PauseMenu.Close()
         end,
     })
 end
@@ -54,8 +57,27 @@ LaunchEditor = function()
     require "editor"
     local S = require "editor.State"
     S.fromMainMenu = false
+    S.editorActive = true
     ---@diagnostic disable-next-line: redundant-parameter
     Start()
+
+    -- 也初始化暂停菜单（确保 ESC 可以返回主菜单）
+    PauseMenu.Init({
+        onResume = nil,
+        onBackToMenu = function()
+            PauseMenu.Cleanup()
+            S.editorActive = false
+            S.fromMainMenu = false
+            MainMenu.Init({
+                onStartGame = LaunchGame,
+                onContinue = LaunchGame,
+                onOpenEditor = LaunchEditor,
+            })
+        end,
+        onOpenEditor = function()
+            PauseMenu.Close()
+        end,
+    })
 end
 
 -- ====================================================================

@@ -207,7 +207,7 @@ end
 -- ====================================================================
 
 function HandleNanoVGRender(eventType, eventData)
-    if not S.vg then return end
+    if not S.editorActive or not S.vg then return end
     nvgBeginFrame(S.vg, S.logicalW, S.logicalH, S.dpr)
     nvgScale(S.vg, S.scaleF, S.scaleF)
 
@@ -262,6 +262,7 @@ end
 -- ====================================================================
 
 function HandleUpdate(eventType, eventData)
+    if not S.editorActive then return end
     local dt = eventData["TimeStep"]:GetFloat()
     S.editorClock = S.editorClock + dt
 
@@ -305,6 +306,7 @@ end
 -- ====================================================================
 
 function HandleKeyDown(eventType, eventData)
+    if not S.editorActive then return end
     local key = eventData["Key"]:GetInt()
     InputHandler.HandleKeyDown(key)
 end
@@ -313,6 +315,7 @@ function HandleKeyUp(eventType, eventData)
 end
 
 function HandleTextInput(eventType, eventData)
+    if not S.editorActive then return end
     local text = eventData["Text"]:GetString()
     if text and #text > 0 then
         InputHandler.HandleTextInput(text)
@@ -320,6 +323,7 @@ function HandleTextInput(eventType, eventData)
 end
 
 function HandleTextEditing(eventType, eventData)
+    if not S.editorActive then return end
     local composition = eventData["Composition"]:GetString()
     local cursor = eventData["Cursor"]:GetInt()
     local selectionLength = eventData["SelectionLength"]:GetInt()
@@ -327,6 +331,7 @@ function HandleTextEditing(eventType, eventData)
 end
 
 function HandleMouseDown(eventType, eventData)
+    if not S.editorActive then return end
     local button = eventData["Button"]:GetInt()
     local mx = input:GetMousePosition().x / S.dpr / S.scaleF
     local my = input:GetMousePosition().y / S.dpr / S.scaleF
@@ -334,6 +339,7 @@ function HandleMouseDown(eventType, eventData)
 end
 
 function HandleMouseUp(eventType, eventData)
+    if not S.editorActive then return end
     local button = eventData["Button"]:GetInt()
     local mx = input:GetMousePosition().x / S.dpr / S.scaleF
     local my = input:GetMousePosition().y / S.dpr / S.scaleF
@@ -341,6 +347,7 @@ function HandleMouseUp(eventType, eventData)
 end
 
 function HandleMouseWheel(eventType, eventData)
+    if not S.editorActive then return end
     local wheel = eventData["Wheel"]:GetInt()
     InputHandler.HandleMouseWheel(wheel)
 end

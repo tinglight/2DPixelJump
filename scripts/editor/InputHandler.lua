@@ -312,6 +312,9 @@ end
 -- ====================================================================
 
 function M.HandleKeyDown(key)
+    if key == KEY_ESCAPE then
+        print("[InputHandler] HandleKeyDown ESC, editorMode=" .. tostring(S.editorMode) .. " fromMainMenu=" .. tostring(S.fromMainMenu))
+    end
     -- 试玩模式
     if S.editorMode == MODE.PLAY then
         HandlePlayModeKey(key)
@@ -338,8 +341,20 @@ end
 
 function HandlePlayModeKey(key)
     if key == KEY_ESCAPE then
-        S.editorMode = MODE.EDIT
-        S.SetMessage("返回编辑模式", 1.5)
+        print("[InputHandler] ESC in PLAY mode, fromMainMenu=" .. tostring(S.fromMainMenu))
+        if S.fromMainMenu then
+            -- 正式游戏：ESC 切换暂停菜单
+            local PauseMenuMod = require("PauseMenu")
+            print("[InputHandler] → calling PauseMenu.Toggle()")
+            PauseMenuMod.Toggle()
+        else
+            -- 编辑器试玩：ESC 返回编辑模式
+            local okPipe, PipeSystem = pcall(require, "editor.PipeSystem")
+            if okPipe and PipeSystem then PipeSystem.StopSound() end
+            S.editorMode = MODE.EDIT
+            print("[InputHandler] → returning to MODE_EDIT")
+            S.SetMessage("返回编辑模式", 1.5)
+        end
     elseif key == KEY_R then
         PlayMode.StartPlayMode()
     end
@@ -347,9 +362,21 @@ end
 
 function HandleWorldPlayModeKey(key)
     if key == KEY_ESCAPE then
-        S.editorMode = MODE.WORLDMAP
-        WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
-        S.SetMessage("返回世界地图编辑", 1.5)
+        print("[InputHandler] ESC in WORLDPLAY mode, fromMainMenu=" .. tostring(S.fromMainMenu))
+        if S.fromMainMenu then
+            -- 正式游戏：ESC 切换暂停菜单
+            local PauseMenuMod = require("PauseMenu")
+            print("[InputHandler] → calling PauseMenu.Toggle()")
+            PauseMenuMod.Toggle()
+        else
+            -- 世界地图试玩：ESC 返回世界地图编辑
+            local okPipe, PipeSystem = pcall(require, "editor.PipeSystem")
+            if okPipe and PipeSystem then PipeSystem.StopSound() end
+            S.editorMode = MODE.WORLDMAP
+            WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
+            print("[InputHandler] → returning to MODE_WORLDMAP")
+            S.SetMessage("返回世界地图编辑", 1.5)
+        end
     elseif key == KEY_R then
         PlayMode.StartWorldPlayMode()
     end
@@ -357,6 +384,7 @@ end
 
 function HandleWorldMapKey(key)
     if key == KEY_ESCAPE then
+        -- 世界地图编辑：ESC 返回关卡编辑模式
         S.editorMode = MODE.EDIT
         S.SetMessage("返回编辑模式", 1.5)
         return
@@ -365,6 +393,16 @@ function HandleWorldMapKey(key)
 end
 
 function HandleEditorKey(key)
+    -- ESC 返回主菜单
+    if key == KEY_ESCAPE then
+        print("[InputHandler] ESC in EDIT mode → BackToMenu")
+        local PauseMenuMod = require("PauseMenu")
+        S.editorActive = false
+        S.fromMainMenu = false
+        PauseMenuMod.BackToMenu()
+        return
+    end
+
     -- 交互模式快捷键
     if key == KEY_R then
         S.interactMode = INTERACT.DRAW

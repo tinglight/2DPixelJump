@@ -37,6 +37,12 @@ local audioNode = nil
 ---@type Scene
 local audioScene = nil
 
+-- BGM
+---@type Sound
+local bgmSound = nil
+---@type SoundSource
+local bgmSource = nil
+
 -- 音量设置
 local musicVolume = 0.25
 local sfxVolume = 1.0
@@ -83,41 +89,67 @@ local function CheckSaveData(callback)
 end
 
 -- ====================================================================
+-- 关卡检测：异步检测世界地图是否有节点
+-- ====================================================================
+---@type any
+local noLevelModal = nil
+
+local function CheckWorldMapAndStart(callback)
+    local CS = require "CloudStorage"
+    CS.InitWorldMap(function(ok)
+        local worldMap = CS.LoadWorldMap()
+        local hasNodes = worldMap and worldMap.nodes and #worldMap.nodes > 0
+        if hasNodes then
+            if callback then callback() end
+        else
+            -- 没有关卡，弹窗提示
+            if noLevelModal then
+                noLevelModal:Open()
+            end
+        end
+    end)
+end
+
+-- ====================================================================
 -- UI 构建
 -- ====================================================================
 
 local function BuildUI()
-    -- 按钮通用样式
-    local btnWidth = 200
-    local btnHeight = 44
-    local btnFontSize = 16
+    -- 按钮通用样式（像素风格，纯文字无边框）
+    local btnHeight = 48
+    local btnFontSize = 22
 
-    -- 深色半透明风格（暗黑之魂风）
-    local btnBg = { 30, 30, 30, 200 }
-    local btnBgHover = { 60, 50, 40, 220 }
-    local btnBgPressed = { 80, 60, 30, 240 }
-    local btnTextColor = { 220, 200, 170, 255 }
-    local btnBorderColor = { 120, 100, 70, 180 }
+    -- 纯文字颜色方案
+    local btnTextNormal = { 180, 170, 150, 255 }        -- 默认：暗金灰
+    local btnTextHover = { 255, 220, 100, 255 }          -- 悬停/选中：亮金色
+    local btnTextPressed = { 255, 180, 50, 255 }         -- 按下：深金色
 
-    -- 通用按钮配置
+    -- 通用按钮配置（纯文字，无背景无边框，悬停变色）
     local function MenuButton(props)
-        return UI.Button {
+        local btn = UI.Button {
             text = props.text,
-            width = btnWidth,
             height = btnHeight,
             fontSize = btnFontSize,
-            textColor = btnTextColor,
-            backgroundColor = btnBg,
-            hoverBackgroundColor = btnBgHover,
-            pressedBackgroundColor = btnBgPressed,
-            borderWidth = 1,
-            borderColor = btnBorderColor,
-            borderRadius = 4,
+            textColor = btnTextNormal,
+            backgroundColor = { 0, 0, 0, 0 },
+            hoverBackgroundColor = { 0, 0, 0, 0 },
+            pressedBackgroundColor = { 0, 0, 0, 0 },
+            borderWidth = 0,
+            borderRadius = 0,
+            paddingHorizontal = 8,
+            onPointerEnter = function(event, self)
+                self.props.textColor = btnTextHover
+            end,
+            onPointerLeave = function(event, self)
+                self.props.textColor = btnTextNormal
+            end,
             onClick = function(self)
+                self.props.textColor = btnTextPressed
                 PlayClickSound()
                 if props.onClick then props.onClick(self) end
             end
         }
+        return btn
     end
 
     -- ============================================================
@@ -254,7 +286,7 @@ local function BuildUI()
                         backgroundColor = { 50, 50, 50, 200 },
                         hoverBackgroundColor = { 70, 70, 70, 220 },
                         pressedBackgroundColor = { 90, 90, 90, 240 },
-                        textColor = btnTextColor,
+                        textColor = btnTextNormal,
                         borderRadius = 4,
                         onClick = function(self)
                             PlayClickSound()
@@ -309,11 +341,51 @@ local function BuildUI()
                         backgroundColor = { 50, 50, 50, 200 },
                         hoverBackgroundColor = { 70, 70, 70, 220 },
                         pressedBackgroundColor = { 90, 90, 90, 240 },
-                        textColor = btnTextColor,
+                        textColor = btnTextNormal,
                         borderRadius = 4,
                         onClick = function(self)
                             PlayClickSound()
                             newGameModal:Close()
+                        end
+                    },
+                }
+            }
+        }
+    }
+
+    -- ============================================================
+    -- 无关卡提示弹窗
+    -- ============================================================
+    noLevelModal = UI.Modal {
+        title = "提示",
+        isOpen = false,
+        size = "md",
+        closeOnOverlay = true,
+        closeOnEscape = true,
+        showCloseButton = false,
+        children = {
+            UI.Label {
+                text = "没有关卡可运行，请先在编辑器中创建关卡。",
+                fontSize = 14,
+                textColor = { 200, 190, 170, 255 },
+                textAlign = "center",
+                width = "100%",
+                marginBottom = 16,
+            },
+            UI.Panel {
+                flexDirection = "row", justifyContent = "center", width = "100%",
+                children = {
+                    UI.Button {
+                        text = "确定",
+                        width = 80, height = 36, fontSize = 13,
+                        backgroundColor = { 80, 60, 40, 220 },
+                        hoverBackgroundColor = { 100, 80, 50, 240 },
+                        pressedBackgroundColor = { 120, 90, 60, 255 },
+                        textColor = { 255, 220, 180, 255 },
+                        borderRadius = 4,
+                        onClick = function(self)
+                            PlayClickSound()
+                            noLevelModal:Close()
                         end
                     },
                 }
@@ -331,7 +403,9 @@ local function BuildUI()
         table.insert(buttonChildren, MenuButton {
             text = "继续游戏",
             onClick = function(self)
-                if onContinue then onContinue() end
+                CheckWorldMapAndStart(function()
+                    if onContinue then onContinue() end
+                end)
             end
         })
     end
@@ -343,7 +417,9 @@ local function BuildUI()
             if hasSaveData then
                 newGameModal:Open()
             else
-                if onStartGame then onStartGame() end
+                CheckWorldMapAndStart(function()
+                    if onStartGame then onStartGame() end
+                end)
             end
         end
     })
@@ -394,22 +470,18 @@ local function BuildUI()
         backgroundImage = "image/传火祭祀场背景_20260530100114.png",
         backgroundSize = "cover",
         children = {
-            -- 半透明遮罩（让按钮区域更清晰）
+            -- 遮罩层
             UI.Panel {
                 width = "100%", height = "100%",
-                backgroundColor = { 0, 0, 0, 80 },
-                justifyContent = "center",
+                backgroundColor = { 0, 0, 0, 60 },
+                justifyContent = "flex-end",
                 alignItems = "center",
+                paddingBottom = "18%",
                 children = {
-                    -- 按钮容器
+                    -- 按钮容器（居中偏下，无背景）
                     UI.Panel {
                         alignItems = "center",
-                        gap = 12,
-                        padding = 24,
-                        backgroundColor = { 10, 10, 10, 140 },
-                        borderRadius = 8,
-                        borderWidth = 1,
-                        borderColor = { 80, 70, 50, 100 },
+                        gap = 6,
                         children = buttonChildren,
                     }
                 }
@@ -422,6 +494,7 @@ local function BuildUI()
             settingsModal,
             exitModal,
             newGameModal,
+            noLevelModal,
         }
     }
 
@@ -441,11 +514,11 @@ function MainMenu.Init(callbacks)
     onContinue = callbacks.onContinue
     onOpenEditor = callbacks.onOpenEditor
 
-    -- 初始化 UI 系统
+    -- 初始化 UI 系统（像素字体风格）
     UI.Init({
         theme = "dark",
         fonts = {
-            { name = "sans", path = "Fonts/MiSans-Regular.ttf" },
+            { name = "sans", path = "Fonts/zpix.ttf" },
         },
         scale = UI.Scale.DEFAULT,
     })
@@ -458,6 +531,16 @@ function MainMenu.Init(callbacks)
     clickSource.soundType = "Effect"
     clickSource.gain = sfxVolume
     clickSound = cache:GetResource("Sound", "audio/sfx/ui_click.ogg")
+
+    -- BGM 初始化
+    bgmSource = audioNode:CreateComponent("SoundSource")
+    bgmSource.soundType = "Music"
+    bgmSource.gain = musicVolume
+    bgmSound = cache:GetResource("Sound", "audio/menu_bgm.ogg")
+    if bgmSound then
+        bgmSound.looped = true
+        bgmSource:Play(bgmSound)
+    end
 
     -- 确保音频系统可用
     audio:SetMasterGain("Effect", sfxVolume)
@@ -478,17 +561,27 @@ function MainMenu.ResetSaveAndStart()
     clientCloud:Set("editor_index", { nextIndex = 1 }, {
         ok = function()
             print("[MainMenu] Save data reset")
-            if onStartGame then onStartGame() end
+            CheckWorldMapAndStart(function()
+                if onStartGame then onStartGame() end
+            end)
         end,
         err = function()
             print("[MainMenu] Failed to reset save, starting anyway")
-            if onStartGame then onStartGame() end
+            CheckWorldMapAndStart(function()
+                if onStartGame then onStartGame() end
+            end)
         end
     })
 end
 
 --- 显示主菜单
 function MainMenu.Show()
+    -- 恢复 BGM
+    if bgmSource and bgmSound then
+        if not bgmSource:IsPlaying() then
+            bgmSource:Play(bgmSound)
+        end
+    end
     -- 重新检查存档状态并重建 UI
     CheckSaveData(function()
         BuildUI()
@@ -498,11 +591,18 @@ end
 --- 隐藏主菜单
 function MainMenu.Hide()
     UI.SetRoot(nil)
+    -- 停止 BGM
+    if bgmSource then
+        bgmSource:Stop()
+    end
 end
 
 --- 清理
 function MainMenu.Cleanup()
     UI.SetRoot(nil)
+    if bgmSource then
+        bgmSource:Stop()
+    end
     if audioScene then
         audioScene:Dispose()
         audioScene = nil
@@ -510,6 +610,8 @@ function MainMenu.Cleanup()
     audioNode = nil
     clickSource = nil
     clickSound = nil
+    bgmSource = nil
+    bgmSound = nil
     initialized = false
 end
 
