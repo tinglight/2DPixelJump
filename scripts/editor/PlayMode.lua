@@ -9,6 +9,7 @@ local Undo = require("editor.UndoSystem")
 local CrossLevel = require("editor.CrossLevel")
 local SolidRenderer = require("SolidRenderer")
 local PipeSystem = require("editor.PipeSystem")
+local PauseMenu = require("PauseMenu")
 
 local M = {}
 
@@ -322,19 +323,50 @@ function M.Update(dt)
         return
     end
 
+    -- F2 快捷键：快速进入关卡编辑器（无论是否暂停）
+    if S.fromMainMenu and input:GetKeyPress(KEY_F2) then
+        PauseMenu.Close()
+        S.fromMainMenu = false
+        return
+    end
+
+    -- F3 快捷键：退出编辑器模式回到主菜单（无论是否暂停）
+    if S.fromMainMenu and input:GetKeyPress(KEY_F3) then
+        PauseMenu.Close()
+        S.fromMainMenu = false
+        -- 触发回到主菜单回调
+        local PauseMenuMod = require("PauseMenu")
+        PauseMenuMod.BackToMenu()
+        return
+    end
+
+    -- 暂停时仅处理 ESC 切换，跳过游戏逻辑
+    if PauseMenu.IsPaused() then
+        if input:GetKeyPress(KEY_ESCAPE) then
+            PauseMenu.Close()
+        end
+        return
+    end
+
     if input:GetKeyPress(KEY_ESCAPE) then
-        -- 退出试玩：清理篝火光源和存档点状态
-        CleanupCheckpointLight()
-        PipeSystem.StopSound()
-        if S.editorMode == C.MODE_PLAY then
-            S.editorMode = C.MODE_EDIT
-            S.SetMessage("返回编辑模式", 1.5)
+        if S.fromMainMenu then
+            -- 从主菜单进入：ESC 切换暂停菜单
+            PauseMenu.Toggle()
             return
-        elseif S.editorMode == C.MODE_WORLDPLAY then
-            S.editorMode = C.MODE_WORLDMAP
-            WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
-            S.SetMessage("返回世界地图编辑", 1.5)
-            return
+        else
+            -- 从编辑器进入：ESC 退回编辑模式
+            CleanupCheckpointLight()
+            PipeSystem.StopSound()
+            if S.editorMode == C.MODE_PLAY then
+                S.editorMode = C.MODE_EDIT
+                S.SetMessage("返回编辑模式", 1.5)
+                return
+            elseif S.editorMode == C.MODE_WORLDPLAY then
+                S.editorMode = C.MODE_WORLDMAP
+                WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
+                S.SetMessage("返回世界地图编辑", 1.5)
+                return
+            end
         end
     end
     if S.play.won then return end
@@ -357,23 +389,9 @@ function M.Update(dt)
         S.play.deathTimer = 0
     end
     M.CheckTiles()
-
-    -- 普通水：持续消耗能量
-    if S.play.inWater and S.play.alive then
-        S.play.waterDrainAccum = (S.play.waterDrainAccum or 0) + C.WATER_ENERGY_DRAIN_PER_SEC * dt
-        if S.play.waterDrainAccum >= 1.0 then
-            local drain = math.floor(S.play.waterDrainAccum)
-            S.play.waterDrainAccum = S.play.waterDrainAccum - drain
-            M.StripPixels(drain)
-            M.SyncFallGridCount()
-        end
-    else
-        S.play.waterDrainAccum = 0
-    end
-
     PipeSystem.Update(dt)
 
-    -- 管道水流碰撞玩家
+    -- 管道水流碰撞玩家（在水效果判定之前设置标志）
     if S.play.alive then
         local pipeHitType = PipeSystem.CheckPlayerHit()
         if pipeHitType then
@@ -390,6 +408,19 @@ function M.Update(dt)
                 S.play.inBlackWater = true
             end
         end
+    end
+
+    -- 普通水：持续消耗能量
+    if S.play.inWater and S.play.alive then
+        S.play.waterDrainAccum = (S.play.waterDrainAccum or 0) + C.WATER_ENERGY_DRAIN_PER_SEC * dt
+        if S.play.waterDrainAccum >= 1.0 then
+            local drain = math.floor(S.play.waterDrainAccum)
+            S.play.waterDrainAccum = S.play.waterDrainAccum - drain
+            M.StripPixels(drain)
+            M.SyncFallGridCount()
+        end
+    else
+        S.play.waterDrainAccum = 0
     end
 
     FogOfWar.UpdateTweens(dt)

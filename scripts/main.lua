@@ -12,17 +12,48 @@
 
 require "LuaScripts/Utilities/Sample"
 local MainMenu = require "MainMenu"
+local PauseMenu = require "PauseMenu"
+
+-- ====================================================================
+-- 前向声明
+-- ====================================================================
+local LaunchGame, LaunchEditor
 
 -- ====================================================================
 -- 切换到编辑器/游戏模式
--- require "editor" 会定义全局 Start/Stop/HandleUpdate 等函数，
--- 我们保存自己的 Start 引用后再 require，然后调用 editor 的 Start
 -- ====================================================================
-local function LaunchEditor()
+LaunchGame = function()
     MainMenu.Cleanup()
-    -- require editor（它会覆盖全局 Start 等函数）
     require "editor"
-    -- editor 的 Start 现在是全局的，直接调用
+    local S = require "editor.State"
+    S.fromMainMenu = true
+    ---@diagnostic disable-next-line: redundant-parameter
+    Start()
+
+    -- 初始化暂停菜单（编辑器启动后）
+    PauseMenu.Init({
+        onResume = nil,
+        onBackToMenu = function()
+            PauseMenu.Cleanup()
+            S.fromMainMenu = false
+            MainMenu.Init({
+                onStartGame = LaunchGame,
+                onContinue = LaunchGame,
+                onOpenEditor = LaunchEditor, ---@diagnostic disable-line: undefined-global
+            })
+        end,
+        onOpenEditor = function()
+            PauseMenu.Cleanup()
+            S.fromMainMenu = false
+        end,
+    })
+end
+
+LaunchEditor = function()
+    MainMenu.Cleanup()
+    require "editor"
+    local S = require "editor.State"
+    S.fromMainMenu = false
     ---@diagnostic disable-next-line: redundant-parameter
     Start()
 end
@@ -34,10 +65,9 @@ function Start()
     SampleStart()
     SampleInitMouseMode(MM_FREE)
 
-    -- 显示主菜单
     MainMenu.Init({
-        onStartGame = LaunchEditor,
-        onContinue = LaunchEditor,
+        onStartGame = LaunchGame,
+        onContinue = LaunchGame,
         onOpenEditor = LaunchEditor,
     })
 

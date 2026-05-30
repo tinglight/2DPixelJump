@@ -157,6 +157,18 @@ end
 function M.Update(dt)
     local G = C.GRID
 
+    -- 计算玩家碰撞区域（每帧缓存一次）
+    M.hitWaterType = nil
+    local playerAlive = S.play and S.play.alive
+    local plx1, ply1, plx2, ply2 = 0, 0, 0, 0
+    if playerAlive then
+        local playerSize = math.ceil((C.FLAME_CFG.pixelGridSize * C.FLAME_CFG.pixelSize) / G)
+        plx1 = (S.play.gridX - 1) * G
+        ply1 = (S.play.gridY - 1) * G
+        plx2 = plx1 + playerSize * G
+        ply2 = ply1 + playerSize * G
+    end
+
     for _, pipe in ipairs(M.pipes) do
         local active = M.IsPipeActive(pipe)
 
@@ -184,6 +196,13 @@ function M.Update(dt)
             p.y = p.y + p.vy * dt
             p.life = p.life - dt
 
+            -- 玩家碰撞检测（在移除粒子之前）
+            if playerAlive and not M.hitWaterType then
+                if p.x >= plx1 and p.x <= plx2 and p.y >= ply1 and p.y <= ply2 then
+                    M.hitWaterType = pipe.waterTypeIndex
+                end
+            end
+
             -- 碰撞检测（管道区域内不碰撞）
             local pcol = math.floor(p.x / G) + 1
             local prow = math.floor(p.y / G) + 1
@@ -201,7 +220,7 @@ function M.Update(dt)
                     local val = S.levelData[prow] and S.levelData[prow][pcol]
                     if val then
                         local base = TileUtils.GetTileType(val)
-                        if base == C.TILE.SOLID then
+                        if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then
                             hitSolid = true
                         elseif base == C.TILE.WATER or base == C.TILE.POISON_WATER or base == C.TILE.BLACK_WATER then
                             hitWater = true
@@ -295,28 +314,10 @@ function M.SpawnSplash(x, y, waterTypeIndex)
 end
 
 ------------------------------------------------------------
--- 玩家碰撞检测
+-- 玩家碰撞检测（返回 Update 中缓存的结果）
 ------------------------------------------------------------
 function M.CheckPlayerHit()
-    if not S.play.alive then return nil end
-
-    local G = C.GRID
-    local playerSize = math.ceil((C.FLAME_CFG.pixelGridSize * C.FLAME_CFG.pixelSize) / G)
-    local px1 = (S.play.gridX - 1) * G
-    local py1 = (S.play.gridY - 1) * G
-    local px2 = px1 + playerSize * G
-    local py2 = py1 + playerSize * G
-
-    for _, pipe in ipairs(M.pipes) do
-        if M.IsPipeActive(pipe) then
-            for _, p in ipairs(pipe.particles) do
-                if p.x >= px1 and p.x <= px2 and p.y >= py1 and p.y <= py2 then
-                    return pipe.waterTypeIndex
-                end
-            end
-        end
-    end
-    return nil
+    return M.hitWaterType
 end
 
 ------------------------------------------------------------

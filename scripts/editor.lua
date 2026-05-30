@@ -172,6 +172,11 @@ function Start()
                 S.SetMessage("编辑关卡: " .. (nodeName or nodeFile), 2.0)
             end)
             WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
+
+            -- 从主菜单进入时，自动进入世界试玩模式
+            if S.fromMainMenu then
+                PlayMode.StartWorldPlayMode()
+            end
         end)
     end)
 
