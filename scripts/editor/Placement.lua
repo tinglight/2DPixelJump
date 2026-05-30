@@ -26,6 +26,8 @@ function M.PlaceTile(col, row)
         M.PlaceGrouped(col, row, tileType)
     elseif tileType == TILE.HIDDEN_WALL then
         M.PlaceHiddenWall(col, row)
+    elseif tileType == TILE.LADDER then
+        M.PlaceLadder(col, row)
     else
         M.PlaceSimple(col, row, tileType)
     end
@@ -100,6 +102,22 @@ function M.PlaceSimple(col, row, tileType)
     end
     S.levelData[row][col] = tileType
     Undo.RecordTileChange(col, row, oldVal, tileType)
+end
+
+--- 放置梯子（2格宽，匹配2x2玩家）
+---@param col number
+---@param row number
+function M.PlaceLadder(col, row)
+    for dx = 0, 1 do
+        local c = col + dx
+        if c >= 1 and c <= S.MAP_COLS then
+            local oldVal = S.levelData[row][c]
+            if oldVal ~= TILE.LADDER then
+                S.levelData[row][c] = TILE.LADDER
+                Undo.RecordTileChange(c, row, oldVal, TILE.LADDER)
+            end
+        end
+    end
 end
 
 --- 擦除地块

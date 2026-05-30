@@ -66,7 +66,7 @@ end
 -- ====================================================================
 -- 内部：绘制单个地块
 -- ====================================================================
-local function DrawTile(vg, base, group, px, py, zGrid)
+local function DrawTile(vg, base, group, px, py, zGrid, row, col)
     if base == TILE.SOLID then
         nvgBeginPath(vg)
         nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
@@ -169,6 +169,86 @@ local function DrawTile(vg, base, group, px, py, zGrid)
         nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(vg, nvgRGBA(255, 255, 255, 230))
         nvgText(vg, px + zGrid * 0.5, py + zGrid * 0.5, tostring(group))
+
+    elseif base == TILE.WATER then
+        nvgBeginPath(vg)
+        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
+        nvgFillColor(vg, nvgRGBA(30, 90, 200, 180))
+        nvgFill(vg)
+        -- 波浪线指示
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + 2, py + zGrid * 0.4)
+        nvgLineTo(vg, px + zGrid * 0.33, py + zGrid * 0.3)
+        nvgLineTo(vg, px + zGrid * 0.66, py + zGrid * 0.4)
+        nvgLineTo(vg, px + zGrid - 2, py + zGrid * 0.3)
+        nvgStrokeColor(vg, nvgRGBA(150, 210, 255, 220))
+        nvgStrokeWidth(vg, 1)
+        nvgStroke(vg)
+
+    elseif base == TILE.POISON_WATER then
+        nvgBeginPath(vg)
+        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
+        nvgFillColor(vg, nvgRGBA(20, 150, 40, 180))
+        nvgFill(vg)
+        -- 骷髅标记
+        nvgBeginPath(vg)
+        nvgCircle(vg, px + zGrid * 0.5, py + zGrid * 0.4, 3 * S.zoomLevel)
+        nvgFillColor(vg, nvgRGBA(200, 255, 200, 200))
+        nvgFill(vg)
+        nvgBeginPath(vg)
+        nvgRect(vg, px + zGrid * 0.35, py + zGrid * 0.65, zGrid * 0.3, 2)
+        nvgFillColor(vg, nvgRGBA(200, 255, 200, 200))
+        nvgFill(vg)
+
+    elseif base == TILE.BLACK_WATER then
+        nvgBeginPath(vg)
+        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
+        nvgFillColor(vg, nvgRGBA(50, 50, 60, 220))
+        nvgFill(vg)
+        -- 减速标记（水平线条）
+        for i = 0, 2 do
+            nvgBeginPath(vg)
+            nvgRect(vg, px + 3, py + 4 + i * 4 * S.zoomLevel, zGrid - 6, 1)
+            nvgFillColor(vg, nvgRGBA(100, 100, 120, 150))
+            nvgFill(vg)
+        end
+
+    elseif base == TILE.LADDER then
+        -- 2格宽梯子：只由左半格绘制整体
+        -- 如果左邻格也是梯子，则当前格是右半部分，跳过
+        if col > 1 then
+            local leftVal = S.levelData[row][col - 1]
+            local leftBase = TileUtils.GetTileType(leftVal)
+            if leftBase == TILE.LADDER then goto skipLadder end
+        end
+        do
+            local W = zGrid * 2  -- 2格宽
+            local railW = 2 * S.zoomLevel
+            local railL = px + 1 * S.zoomLevel
+            local railR = px + W - 3 * S.zoomLevel
+            -- 侧柱（深棕色）
+            nvgBeginPath(vg)
+            nvgRect(vg, railL, py, railW, zGrid)
+            nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
+            nvgFill(vg)
+            nvgBeginPath(vg)
+            nvgRect(vg, railR, py, railW, zGrid)
+            nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
+            nvgFill(vg)
+            -- 横档（浅棕色，2根，跨越2格宽）
+            local rungH = 1.5 * S.zoomLevel
+            local rungY1 = py + zGrid * 0.3
+            local rungY2 = py + zGrid * 0.7
+            nvgBeginPath(vg)
+            nvgRect(vg, railL, rungY1, railR + railW - railL, rungH)
+            nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
+            nvgFill(vg)
+            nvgBeginPath(vg)
+            nvgRect(vg, railL, rungY2, railR + railW - railL, rungH)
+            nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
+            nvgFill(vg)
+        end
+        ::skipLadder::
     end
 end
 
@@ -184,7 +264,7 @@ local function DrawTiles(vg, mapX, mapY, startCol, endCol, startRow, endRow, zGr
             local px = mapX + (col - 1) * zGrid - S.cameraX
             local py = mapY + (row - 1) * zGrid - S.cameraY
             local base, group = TileUtils.GetTileType(val)
-            DrawTile(vg, base, group, px, py, zGrid)
+            DrawTile(vg, base, group, px, py, zGrid, row, col)
             ::continueCol::
         end
         ::continueRow::

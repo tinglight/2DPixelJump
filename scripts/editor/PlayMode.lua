@@ -108,6 +108,23 @@ function M.IsSolid(col, row)
     return false
 end
 
+--- 检测玩家是否在梯子上（任意身体格子重叠梯子）
+function M.IsOnLadder(gx, gy)
+    local s = M.PlayerGridSize()
+    for dy = 0, s - 1 do
+        for dx = 0, s - 1 do
+            local col = gx + dx
+            local row = gy + dy
+            if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
+                local val = S.levelData[row][col]
+                local base = TileUtils.GetTileType(val)
+                if base == C.TILE.LADDER then return true end
+            end
+        end
+    end
+    return false
+end
+
 function M.OnGround(gx, gy)
     local s = M.PlayerGridSize()
     local feetRow = gy + s
@@ -132,6 +149,10 @@ end
 ------------------------------------------------------------
 
 function M.CheckTilesOverlap()
+    -- 每帧重置水状态标志（由 ProcessTileAt 重新设置）
+    S.play.inWater = false
+    S.play.inBlackWater = false
+
     local s = M.PlayerGridSize()
     for dy = 0, s - 1 do
         for dx = 0, s - 1 do
@@ -148,9 +169,13 @@ function M.ProcessTileAt(col, row)
     local base, group = TileUtils.GetTileType(val)
     local key = row .. "_" .. col
 
-    if base == C.TILE.SPIKE then
+    if base == C.TILE.SPIKE or base == C.TILE.POISON_WATER then
         S.play.alive = false
         S.play.deathTimer = 0
+    elseif base == C.TILE.WATER then
+        S.play.inWater = true
+    elseif base == C.TILE.BLACK_WATER then
+        S.play.inBlackWater = true
     elseif base == C.TILE.GOAL then
         S.play.won = true
     elseif base == C.TILE.FUEL and not S.play.collected[key] then
@@ -267,6 +292,7 @@ function M.Update(dt)
     M.UpdateTipPixels(dt)
     M.UpdateFallParticles(dt)
     M.HandleMovementInput(dt)
+    M.HandleClimbInput(dt)
     M.HandleJumpInput()
     M.HandleProjectileInput()
     M.UpdateVerticalPhysics(dt)
@@ -278,6 +304,20 @@ function M.Update(dt)
         S.play.deathTimer = 0
     end
     M.CheckTiles()
+
+    -- 普通水：持续消耗能量
+    if S.play.inWater and S.play.alive then
+        S.play.waterDrainAccum = (S.play.waterDrainAccum or 0) + C.WATER_ENERGY_DRAIN_PER_SEC * dt
+        if S.play.waterDrainAccum >= 1.0 then
+            local drain = math.floor(S.play.waterDrainAccum)
+            S.play.waterDrainAccum = S.play.waterDrainAccum - drain
+            M.StripPixels(drain)
+            M.SyncFallGridCount()
+        end
+    else
+        S.play.waterDrainAccum = 0
+    end
+
     M.UpdateCamera(dt)
 end
 
@@ -451,6 +491,12 @@ function M.HandleMovementInput(dt)
     if curLeft and not curRight then dir = -1
     elseif curRight and not curLeft then dir = 1 end
 
+    -- 黑水减速：增大移动间隔
+    local moveTick = C.PLAY_MOVE_TICK
+    if S.play.inBlackWater then
+        moveTick = moveTick * C.BLACK_WATER_SPEED_MULT
+    end
+
     if dir ~= 0 then
         local justPressed = (dir == -1 and not S.prevPlayLeft) or (dir == 1 and not S.prevPlayRight)
         if justPressed then
@@ -459,8 +505,8 @@ function M.HandleMovementInput(dt)
             S.playMoveFirst = true
         else
             S.play.moveTimer = S.play.moveTimer + dt
-            if S.play.moveTimer >= C.PLAY_MOVE_TICK then
-                S.play.moveTimer = S.play.moveTimer - C.PLAY_MOVE_TICK
+            if S.play.moveTimer >= moveTick then
+                S.play.moveTimer = S.play.moveTimer - moveTick
                 M.MoveOneGrid(dir)
             end
         end
@@ -477,17 +523,59 @@ function M.HandleMovementInput(dt)
 end
 
 function M.HandleJumpInput()
-    if input:GetKeyPress(KEY_SPACE) or input:GetKeyPress(KEY_W) or input:GetKeyPress(KEY_UP) then
-        if S.play.isOnGround and not S.play.isJumping then
+    if input:GetKeyPress(KEY_SPACE) then
+        local canJump = S.play.isOnGround or S.play.isClimbing
+        if canJump and not S.play.isJumping then
             S.play.isJumping = true
             S.play.jumpGridsRemain = M.CalcJump()
             S.play.isOnGround = false
+            S.play.isClimbing = false
             S.play.jumpTimer = 0
         end
     end
 end
 
+function M.HandleClimbInput(dt)
+    local onLadder = M.IsOnLadder(S.play.gridX, S.play.gridY)
+
+    if onLadder then
+        -- 在梯子上自动进入攀爬状态（停住不下落）
+        if not S.play.isClimbing then
+            S.play.isClimbing = true
+            S.play.isJumping = false
+            S.play.jumpGridsRemain = 0
+            S.play.fallTickCurrent = C.PLAY_FALL_BASE
+            S.play.fallGridCount = 0
+            S.play.climbTimer = 0
+        end
+
+        -- 只有按上/下才移动
+        local pressUp = input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP)
+        local pressDown = input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_DOWN)
+        if pressUp or pressDown then
+            S.play.climbTimer = S.play.climbTimer + dt
+            if S.play.climbTimer >= C.PLAY_CLIMB_TICK then
+                S.play.climbTimer = S.play.climbTimer - C.PLAY_CLIMB_TICK
+                local dir = pressUp and -1 or 1
+                local newY = S.play.gridY + dir
+                if not M.Collides(S.play.gridX, newY) then
+                    S.play.gridY = newY
+                end
+            end
+        else
+            S.play.climbTimer = 0
+        end
+    else
+        -- 离开梯子区域，退出攀爬
+        if S.play.isClimbing then
+            S.play.isClimbing = false
+            S.play.climbTimer = 0
+        end
+    end
+end
+
 function M.UpdateVerticalPhysics(dt)
+    if S.play.isClimbing then return end -- 攀爬中不受重力影响
     if S.play.isJumping and S.play.jumpGridsRemain > 0 then
         M.ProcessJumpTick(dt)
     else
@@ -565,7 +653,7 @@ function M.ApplyFallOneGrid()
 end
 
 function M.UpdateGroundRecovery(dt)
-    if not S.play.isOnGround then return end
+    if not S.play.isOnGround and not S.play.isClimbing then return end
     if S.playAlivePixels >= S.playTotalPixels then return end
     local recoverCount = math.floor(C.PLAY_RECOVER_PER_SEC * dt + 0.5)
     if recoverCount >= 1 then
@@ -852,6 +940,11 @@ local function ResetPlayState()
     S.play.switchState = {}
     S.play.collected = {}
     S.play.hiddenWallRevealed = {}
+    S.play.inWater = false
+    S.play.inBlackWater = false
+    S.play.waterDrainAccum = 0
+    S.play.isClimbing = false
+    S.play.climbTimer = 0
     S.prevPlayLeft = false
     S.prevPlayRight = false
     S.playMoveFirst = false
@@ -886,6 +979,8 @@ function M.Respawn()
     -- 重置物理状态
     S.play.isOnGround = false
     S.play.isJumping = false
+    S.play.isClimbing = false
+    S.play.climbTimer = 0
     S.play.jumpGridsRemain = 0
     S.play.moveTimer = 0
     S.play.fallTimer = 0
@@ -1088,6 +1183,14 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawGateTile(vg, px, py, group)
     elseif base == C.TILE.HIDDEN_WALL then
         M.DrawHiddenWallTile(vg, px, py, group)
+    elseif base == C.TILE.WATER then
+        M.DrawWaterTile(vg, px, py, row, col)
+    elseif base == C.TILE.POISON_WATER then
+        M.DrawPoisonWaterTile(vg, px, py, row, col)
+    elseif base == C.TILE.BLACK_WATER then
+        M.DrawBlackWaterTile(vg, px, py, row, col)
+    elseif base == C.TILE.LADDER then
+        M.DrawLadderTile(vg, px, py, row, col)
     end
 end
 
@@ -1210,6 +1313,181 @@ end
 function M.DrawHiddenWallTile(vg, px, py, group)
     if S.play.hiddenWallRevealed[group] then return end
     M.DrawSolidTile(vg, px, py)
+end
+
+------------------------------------------------------------
+-- 水方块渲染
+------------------------------------------------------------
+
+function M.DrawWaterTile(vg, px, py, row, col)
+    local t = S.playGameTime
+    local G = C.GRID
+    local worldX = (col - 1) * G  -- 世界坐标，用于跨格子连续波浪
+    -- 深层底色
+    nvgBeginPath(vg)
+    nvgRect(vg, px, py, G, G)
+    nvgFillColor(vg, nvgRGBA(20, 60, 160, 180))
+    nvgFill(vg)
+    -- 多层波浪（基于世界坐标，相邻格子自然衔接）
+    local freq = 0.35
+    for layer = 1, 3 do
+        local speed = 2.5 + layer * 0.8
+        local amp = 1.5 - layer * 0.3
+        local yBase = py + 2 + layer * 3.5
+        local phase = t * speed + row * 0.6 + layer * 2.1
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+        for sx = 1, 4 do
+            local localX = sx * (G / 4)
+            nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+        end
+        nvgLineTo(vg, px + G, py + G)
+        nvgLineTo(vg, px, py + G)
+        nvgClosePath(vg)
+        local a = math.floor(40 + layer * 15)
+        nvgFillColor(vg, nvgRGBA(40 + layer * 20, 100 + layer * 25, 240, a))
+        nvgFill(vg)
+    end
+    -- 荧光粒子散布（小亮点闪烁）
+    local seed = col * 7 + row * 13
+    for i = 1, 3 do
+        local phase_i = t * (3.0 + i * 0.7) + seed + i * 5.3
+        local sparkAlpha = math.sin(phase_i) * 0.5 + 0.5
+        if sparkAlpha > 0.3 then
+            local sx = px + 2 + math.fmod(seed * i * 3.7, G - 4)
+            local sy = py + 2 + math.fmod(seed * i * 2.3, G - 4)
+            nvgBeginPath(vg)
+            nvgRect(vg, sx, sy, 1, 1)
+            nvgFillColor(vg, nvgRGBA(150, 220, 255, math.floor(200 * sparkAlpha)))
+            nvgFill(vg)
+        end
+    end
+end
+
+function M.DrawPoisonWaterTile(vg, px, py, row, col)
+    local t = S.playGameTime
+    local G = C.GRID
+    local worldX = (col - 1) * G
+    -- 深层底色
+    nvgBeginPath(vg)
+    nvgRect(vg, px, py, G, G)
+    nvgFillColor(vg, nvgRGBA(10, 100, 25, 190))
+    nvgFill(vg)
+    -- 多层波浪（世界坐标连续）
+    local freq = 0.4
+    for layer = 1, 3 do
+        local speed = 2.0 + layer * 0.6
+        local amp = 1.8 - layer * 0.4
+        local yBase = py + 2 + layer * 3.5
+        local phase = t * speed + row * 0.8 + layer * 1.9
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+        for sx = 1, 4 do
+            local localX = sx * (G / 4)
+            nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+        end
+        nvgLineTo(vg, px + G, py + G)
+        nvgLineTo(vg, px, py + G)
+        nvgClosePath(vg)
+        local a = math.floor(35 + layer * 18)
+        nvgFillColor(vg, nvgRGBA(20 + layer * 10, 140 + layer * 30, 40 + layer * 10, a))
+        nvgFill(vg)
+    end
+    -- 荧光粒子（绿色亮点，更密集更亮表示危险）
+    local seed = col * 11 + row * 17
+    for i = 1, 4 do
+        local phase_i = t * (3.5 + i * 0.9) + seed + i * 4.1
+        local sparkAlpha = math.sin(phase_i) * 0.5 + 0.5
+        if sparkAlpha > 0.2 then
+            local sx = px + 1 + math.fmod(seed * i * 2.9, G - 3)
+            local sy = py + 1 + math.fmod(seed * i * 1.7, G - 3)
+            nvgBeginPath(vg)
+            nvgRect(vg, sx, sy, 1, 1)
+            nvgFillColor(vg, nvgRGBA(120, 255, 130, math.floor(230 * sparkAlpha)))
+            nvgFill(vg)
+        end
+    end
+end
+
+function M.DrawBlackWaterTile(vg, px, py, row, col)
+    local t = S.playGameTime
+    local G = C.GRID
+    local worldX = (col - 1) * G
+    -- 深层底色（很暗）
+    nvgBeginPath(vg)
+    nvgRect(vg, px, py, G, G)
+    nvgFillColor(vg, nvgRGBA(30, 30, 38, 220))
+    nvgFill(vg)
+    -- 缓慢波浪（黏稠感，世界坐标连续）
+    local freq = 0.28
+    for layer = 1, 2 do
+        local speed = 1.2 + layer * 0.4
+        local amp = 1.2 - layer * 0.3
+        local yBase = py + 3 + layer * 4.5
+        local phase = t * speed + row * 0.4 + layer * 2.5
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+        for sx = 1, 4 do
+            local localX = sx * (G / 4)
+            nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+        end
+        nvgLineTo(vg, px + G, py + G)
+        nvgLineTo(vg, px, py + G)
+        nvgClosePath(vg)
+        nvgFillColor(vg, nvgRGBA(40 + layer * 5, 40 + layer * 5, 50 + layer * 5, 80 + layer * 30))
+        nvgFill(vg)
+    end
+    -- 暗淡荧光粒子（灰白微光）
+    local seed = col * 5 + row * 9
+    for i = 1, 2 do
+        local phase_i = t * (1.8 + i * 0.5) + seed + i * 6.7
+        local sparkAlpha = math.sin(phase_i) * 0.4 + 0.4
+        if sparkAlpha > 0.35 then
+            local sx = px + 3 + math.fmod(seed * i * 3.1, G - 6)
+            local sy = py + 3 + math.fmod(seed * i * 2.7, G - 6)
+            nvgBeginPath(vg)
+            nvgRect(vg, sx, sy, 1, 1)
+            nvgFillColor(vg, nvgRGBA(140, 140, 160, math.floor(120 * sparkAlpha)))
+            nvgFill(vg)
+        end
+    end
+end
+
+function M.DrawLadderTile(vg, px, py, row, col)
+    -- 只由左半格负责绘制整个2格宽梯子
+    -- 如果左边邻格也是梯子，则当前格是右半部分，跳过
+    if col > 1 then
+        local leftVal = S.levelData[row][col - 1]
+        local leftBase = TileUtils.GetTileType(leftVal)
+        if leftBase == C.TILE.LADDER then return end
+    end
+
+    local G = C.GRID
+    local W = G * 2  -- 2格宽
+    -- 两根竖直侧柱（深棕色）
+    local railW = 2
+    local railL = px + 1
+    local railR = px + W - 3
+    nvgBeginPath(vg)
+    nvgRect(vg, railL, py, railW, G)
+    nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
+    nvgFill(vg)
+    nvgBeginPath(vg)
+    nvgRect(vg, railR, py, railW, G)
+    nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
+    nvgFill(vg)
+    -- 横档（浅棕色，2根，跨越2格宽）
+    local rungH = 2
+    local rungY1 = py + G * 0.3
+    local rungY2 = py + G * 0.7
+    nvgBeginPath(vg)
+    nvgRect(vg, railL, rungY1, railR + railW - railL, rungH)
+    nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
+    nvgFill(vg)
+    nvgBeginPath(vg)
+    nvgRect(vg, railL, rungY2, railR + railW - railL, rungH)
+    nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
+    nvgFill(vg)
 end
 
 ------------------------------------------------------------

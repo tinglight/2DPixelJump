@@ -43,6 +43,10 @@ M.TILE = {
     SWITCH      = 6,
     GATE        = 7,
     HIDDEN_WALL = 8,
+    WATER       = 9,
+    POISON_WATER = 10,
+    BLACK_WATER = 11,
+    LADDER      = 12,
 }
 
 -- ====================================================================
@@ -119,14 +123,45 @@ M.TOOLS = {
     { id = "FUEL",        tile = M.TILE.FUEL,        name = "火焰", color = {255, 100, 20, 255},  group = "pickup" },
     { id = "GOAL",        tile = M.TILE.GOAL,        name = "终点", color = {100, 255, 100, 255}, group = "pickup" },
     { id = "SPIKE",       tile = M.TILE.SPIKE,       name = "刺",   color = {255, 50, 50, 255},   group = "trap" },
+    { id = "WATER",       tile = M.TILE.WATER,       name = "水",   color = {60, 140, 255, 255},  group = "trap",
+        submenu = "water" },
+    { id = "POISON_WATER", tile = M.TILE.POISON_WATER, name = "毒水", color = {50, 220, 80, 255}, group = "trap",
+        submenu = "water" },
+    { id = "BLACK_WATER", tile = M.TILE.BLACK_WATER, name = "黑水", color = {100, 100, 110, 255}, group = "trap",
+        submenu = "water" },
     { id = "SWITCH",      tile = M.TILE.SWITCH,      name = "开关", color = {200, 200, 50, 255},  group = "puzzle" },
     { id = "GATE",        tile = M.TILE.GATE,        name = "门",   color = {150, 100, 200, 255}, group = "puzzle" },
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
+    { id = "LADDER",      tile = M.TILE.LADDER,      name = "梯子", color = {160, 110, 50, 255},  group = "terrain" },
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
 }
 
-M.LIGHT_TOOL_INDEX = 9
-M.HIDDEN_WALL_TOOL_INDEX = 8
+M.LIGHT_TOOL_INDEX = 13
+M.HIDDEN_WALL_TOOL_INDEX = 11
+
+-- ====================================================================
+-- 子菜单分组定义
+-- ====================================================================
+-- 每个子菜单组的首选工具索引（展示在工具栏上的"代表"）
+M.SUBMENU_GROUPS = {
+    water = {
+        label = "水",
+        tools = {},  -- 在初始化时自动填充
+    },
+}
+
+-- 初始化子菜单工具索引
+for i, tool in ipairs(M.TOOLS) do
+    if tool.submenu and M.SUBMENU_GROUPS[tool.submenu] then
+        table.insert(M.SUBMENU_GROUPS[tool.submenu].tools, i)
+    end
+end
+
+-- ====================================================================
+-- 水方块物理常量
+-- ====================================================================
+M.WATER_ENERGY_DRAIN_PER_SEC = 10    -- 普通水：每秒消耗能量（像素数）
+M.BLACK_WATER_SPEED_MULT = 2.5       -- 黑水：移动tick乘数（越大越慢）
 
 -- ====================================================================
 -- 难度系统
@@ -144,6 +179,7 @@ M.PLAY_FALL_ACCEL = 0.015
 M.PLAY_JUMP_TICK  = 0.07
 M.PLAY_BASE_JUMP  = 3
 M.PLAY_RECOVER_PER_SEC = 6
+M.PLAY_CLIMB_TICK = 0.09      -- 梯子攀爬每格间隔（秒）
 
 -- ====================================================================
 -- 火焰渲染配置
