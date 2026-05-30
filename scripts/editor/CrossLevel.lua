@@ -286,10 +286,11 @@ end
 -- 渲染
 ------------------------------------------------------------
 
-function M.Draw(vg, cameraX)
+function M.Draw(vg, cameraX, cameraY)
+    cameraY = cameraY or 0
     for _, proj in ipairs(S.projectiles) do
         local screenX = proj.x - cameraX
-        local screenY = proj.y
+        local screenY = proj.y - cameraY
         -- 发光核心
         nvgBeginPath(vg)
         nvgCircle(vg, screenX, screenY, C.PROJECTILE_SIZE)

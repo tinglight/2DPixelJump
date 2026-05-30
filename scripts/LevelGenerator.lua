@@ -27,6 +27,7 @@ local TILE = {
     SWITCH      = 6,
     GATE        = 7,
     HIDDEN_WALL = 8,
+    CHECKPOINT  = 9,
 }
 
 local BASE_JUMP = 3          -- 满火跳跃高度（格）

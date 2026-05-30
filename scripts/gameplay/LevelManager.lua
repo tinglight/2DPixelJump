@@ -39,6 +39,12 @@ M.collectedItems = {}
 M.coinCount = 0
 M.fuelCount = 0
 
+-- 存档点（篝火）状态
+M.checkpointActivated = {}
+M.checkpointCol = nil
+M.checkpointRow = nil
+M.checkpointFile = nil
+
 -- ====================================================================
 -- 世界地图连通
 -- ====================================================================
@@ -64,6 +70,39 @@ local recalcLayoutCallback = nil
 function M.SetCallbacks(callbacks)
     playerResetCallback = callbacks.playerReset
     recalcLayoutCallback = callbacks.recalcLayout
+end
+
+-- ====================================================================
+-- 全局玩家参数加载
+-- ====================================================================
+
+--- 从 data/player_params.json 加载全局玩家参数并应用到 Config
+function M.LoadGlobalPlayerParams()
+    local file = File("data/player_params.json", FILE_READ)
+    if file and file:IsOpen() then
+        local content = file:ReadString()
+        file:Close()
+        if content and content ~= "" then
+            local ok, params = pcall(cjson.decode, content)
+            if ok and params then
+                Config.levelPlayerParams.baseJumpGrids = params.baseJumpGrids or Config.PLAYER_CONFIG.baseJumpGrids
+                Config.levelPlayerParams.fallJumpMultiplier = params.fallJumpMultiplier or 1.0
+                Config.levelPlayerParams.maxFallGrids = params.maxFallGrids or 10
+                Config.levelPlayerParams.maxJumpGrids = params.maxJumpGrids or 8
+                Config.PLAYER_CONFIG.defaultLightDiameter = params.defaultLightDiameter or 6
+                Config.PLAYER_CONFIG.cameraZoom = params.cameraZoom or 2.0
+                print("[PlayerParams] Loaded global player_params.json")
+                return
+            end
+        end
+    end
+    -- 文件不存在或解析失败，使用默认值
+    Config.levelPlayerParams.baseJumpGrids = Config.PLAYER_CONFIG.baseJumpGrids
+    Config.levelPlayerParams.fallJumpMultiplier = 1.0
+    Config.levelPlayerParams.maxFallGrids = 10
+    Config.levelPlayerParams.maxJumpGrids = 8
+    Config.PLAYER_CONFIG.cameraZoom = 2.0
+    print("[PlayerParams] Using defaults (no player_params.json)")
 end
 
 -- ====================================================================
@@ -151,20 +190,7 @@ function M.LoadLevelFromFile(filename, player)
     M.hiddenWallRevealed = {}
     M.collectedItems = {}
 
-    -- 读取关卡玩家参数
-    if data.playerParams then
-        Config.levelPlayerParams.baseJumpGrids = data.playerParams.baseJumpGrids or 3
-        Config.levelPlayerParams.fallJumpMultiplier = data.playerParams.fallJumpMultiplier or 1.0
-        Config.levelPlayerParams.maxFallGrids = data.playerParams.maxFallGrids or 10
-        Config.levelPlayerParams.maxJumpGrids = data.playerParams.maxJumpGrids or 8
-        Config.PLAYER_CONFIG.cameraZoom = data.playerParams.cameraZoom or 1.0
-    else
-        Config.levelPlayerParams.baseJumpGrids = Config.PLAYER_CONFIG.baseJumpGrids
-        Config.levelPlayerParams.fallJumpMultiplier = 1.0
-        Config.levelPlayerParams.maxFallGrids = 10
-        Config.levelPlayerParams.maxJumpGrids = 8
-        Config.PLAYER_CONFIG.cameraZoom = 1.0
-    end
+    -- 玩家参数为全局配置（从 data/player_params.json 加载），不再从关卡数据读取
 
     if recalcLayoutCallback then recalcLayoutCallback() end
 
@@ -333,6 +359,10 @@ function M.ResetCollectibles()
     M.switchState = {}
     M.switchCollected = {}
     M.hiddenWallRevealed = {}
+    M.checkpointActivated = {}
+    M.checkpointCol = nil
+    M.checkpointRow = nil
+    M.checkpointFile = nil
 end
 
 return M

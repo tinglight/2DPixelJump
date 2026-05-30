@@ -207,12 +207,34 @@ function HandleNanoVGRender(eventType, eventData)
     nvgScale(S.vg, S.scaleF, S.scaleF)
 
     if S.editorMode == C.MODE_PLAY or S.editorMode == C.MODE_WORLDPLAY then
-        -- 试玩模式时应用 cameraZoom 额外缩放
+        -- 试玩模式：4:3 比例 letterbox 居中显示
+        local playW = S.playViewW
+        local playH = S.playViewH
+        -- 计算 4:3 视口在屏幕设计坐标内的适配缩放和偏移
+        local fitScale = math.min(S.screenDesignW / playW, S.screenDesignH / playH)
+        local scaledW = playW * fitScale
+        local scaledH = playH * fitScale
+        local offsetX = (S.screenDesignW - scaledW) * 0.5
+        local offsetY = (S.screenDesignH - scaledH) * 0.5
+
+        -- 绘制 letterbox 黑边
+        nvgBeginPath(S.vg)
+        nvgRect(S.vg, 0, 0, S.screenDesignW, S.screenDesignH)
+        nvgFillColor(S.vg, nvgRGBA(0, 0, 0, 255))
+        nvgFill(S.vg)
+
+        -- 平移到居中位置，缩放到 4:3 视口坐标系
+        nvgSave(S.vg)
+        nvgTranslate(S.vg, offsetX, offsetY)
+        nvgScale(S.vg, fitScale, fitScale)
+
+        -- 应用 cameraZoom 额外缩放
         local zoom = S.playerParams.cameraZoom or 1.0
         if zoom ~= 1.0 then
             nvgScale(S.vg, 1.0 / zoom, 1.0 / zoom)
         end
         PlayMode.Draw()
+        nvgRestore(S.vg)
     elseif S.editorMode == C.MODE_WORLDMAP then
         WorldMapEditor.Draw()
         Toolbar.DrawTopBar()
@@ -250,8 +272,9 @@ function HandleUpdate(eventType, eventData)
         if S.worldPlayCooldown > 0 then
             S.worldPlayCooldown = S.worldPlayCooldown - dt
         end
-        PlayMode.UpdateTransition(dt)
-        if not S.transition.active then
+        if S.panTransition.active then
+            PlayMode.UpdatePanTransition(dt)
+        else
             PlayMode.Update(dt)
             if S.play.alive and not S.play.won then
                 PlayMode.WorldPlayCheckBoundary()

@@ -6,6 +6,201 @@ local GAME_VERSION = require("version")
 
 local M = {}
 
+-- ====================================================================
+-- 像素字体定义 (5x7 pixel font)
+-- ====================================================================
+local PIXEL_FONT = {
+    A = {
+        {0,1,1,1,0},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,1,1,1,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+    },
+    B = {
+        {1,1,1,1,0},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,1,1,1,0},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,1,1,1,0},
+    },
+    D = {
+        {1,1,1,1,0},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,1,1,1,0},
+    },
+    E = {
+        {1,1,1,1,1},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,1,1,1,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,1,1,1,1},
+    },
+    F = {
+        {1,1,1,1,1},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,1,1,1,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+    },
+    I = {
+        {1,1,1,1,1},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {1,1,1,1,1},
+    },
+    L = {
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,0,0,0,0},
+        {1,1,1,1,1},
+    },
+    N = {
+        {1,0,0,0,1},
+        {1,1,0,0,1},
+        {1,0,1,0,1},
+        {1,0,1,0,1},
+        {1,0,0,1,1},
+        {1,0,0,1,1},
+        {1,0,0,0,1},
+    },
+    O = {
+        {0,1,1,1,0},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {0,1,1,1,0},
+    },
+    R = {
+        {1,1,1,1,0},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,1,1,1,0},
+        {1,0,1,0,0},
+        {1,0,0,1,0},
+        {1,0,0,0,1},
+    },
+    T = {
+        {1,1,1,1,1},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+    },
+    U = {
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {0,1,1,1,0},
+    },
+    Y = {
+        {1,0,0,0,1},
+        {1,0,0,0,1},
+        {0,1,0,1,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+        {0,0,1,0,0},
+    },
+    [" "] = {
+        {0,0,0,0,0},
+        {0,0,0,0,0},
+        {0,0,0,0,0},
+        {0,0,0,0,0},
+        {0,0,0,0,0},
+        {0,0,0,0,0},
+        {0,0,0,0,0},
+    },
+}
+
+--- 绘制像素风格文字（居中）
+---@param text string 要绘制的文本（大写）
+---@param centerX number 中心X
+---@param centerY number 中心Y
+---@param pixelSize number 每个像素块尺寸
+---@param r number 红色 0-255
+---@param g number 绿色 0-255
+---@param b number 蓝色 0-255
+---@param alpha number 透明度 0-255
+function M.DrawPixelText(text, centerX, centerY, pixelSize, r, g, b, alpha)
+    local vg = M.vg
+    local charW = 5   -- 每字符宽度（像素格）
+    local charH = 7   -- 每字符高度（像素格）
+    local spacing = 1 -- 字符间隔（像素格）
+
+    local totalW = #text * (charW + spacing) - spacing
+    local startX = centerX - (totalW * pixelSize) / 2
+    local startY = centerY - (charH * pixelSize) / 2
+
+    for ci = 1, #text do
+        local ch = text:sub(ci, ci)
+        local glyph = PIXEL_FONT[ch]
+        if glyph then
+            local charStartX = startX + (ci - 1) * (charW + spacing) * pixelSize
+            for row = 1, charH do
+                for col = 1, charW do
+                    if glyph[row][col] == 1 then
+                        local px = charStartX + (col - 1) * pixelSize
+                        local py = startY + (row - 1) * pixelSize
+                        nvgBeginPath(vg)
+                        nvgRect(vg, px, py, pixelSize, pixelSize)
+                        nvgFillColor(vg, nvgRGBA(r, g, b, alpha))
+                        nvgFill(vg)
+                    end
+                end
+            end
+        end
+    end
+end
+
+-- ====================================================================
+-- BONFIRE LIT 消息状态
+-- ====================================================================
+M.bonfireMessage = {
+    active = false,
+    timer = 0,
+    duration = 2.5,
+}
+
+function M.ShowBonfireMessage()
+    M.bonfireMessage.active = true
+    M.bonfireMessage.timer = 0
+end
+
+function M.UpdateBonfireMessage(dt)
+    if M.bonfireMessage.active then
+        M.bonfireMessage.timer = M.bonfireMessage.timer + dt
+        if M.bonfireMessage.timer >= M.bonfireMessage.duration then
+            M.bonfireMessage.active = false
+        end
+    end
+end
+
 -- 依赖
 local Physics = nil
 local PixelSystem = nil
@@ -263,9 +458,101 @@ function M.DrawMap()
                     nvgFillColor(vg, nvgRGBA(55, 60, 70, 255))
                     nvgFill(vg)
                 end
+
+            elseif base == TILE.CHECKPOINT then
+                M.DrawCheckpointTile(px, py, row, col)
             end
 
             ::continueTile::
+        end
+    end
+end
+
+-- ====================================================================
+-- 篝火 (CHECKPOINT) 渲染
+-- ====================================================================
+function M.DrawCheckpointTile(px, py, row, col)
+    local vg = M.vg
+    local GRID = Config.GRID
+    local key = row .. "_" .. col
+    local activated = LevelManager.checkpointActivated[key]
+    local ps = 2  -- 像素块大小
+
+    -- 石头底座
+    local stones = {
+        {3, 6}, {4, 6}, {5, 6}, {6, 6},
+        {2, 5}, {3, 5}, {6, 5}, {7, 5},
+        {4, 5}, {5, 5},
+    }
+    for _, s in ipairs(stones) do
+        local sx = px + s[1] * ps
+        local sy = py + s[2] * ps
+        nvgBeginPath(vg)
+        nvgRect(vg, sx, sy, ps, ps)
+        if s[2] == 6 then
+            nvgFillColor(vg, nvgRGBA(60, 55, 50, 255))
+        else
+            nvgFillColor(vg, nvgRGBA(80, 75, 65, 255))
+        end
+        nvgFill(vg)
+    end
+
+    -- 木头
+    local logs = {
+        {3, 4}, {4, 4}, {5, 4}, {6, 4},
+        {4, 3}, {5, 3},
+    }
+    for _, l in ipairs(logs) do
+        local lx = px + l[1] * ps
+        local ly = py + l[2] * ps
+        nvgBeginPath(vg)
+        nvgRect(vg, lx, ly, ps, ps)
+        nvgFillColor(vg, nvgRGBA(100, 60, 25, 255))
+        nvgFill(vg)
+    end
+
+    if activated then
+        -- 点燃状态：像素火焰
+        local t = M.gameTime
+        local flicker1 = math.sin(t * 8 + col * 2.1) * 0.5 + 0.5
+        local flicker2 = math.sin(t * 11 + row * 1.7) * 0.5 + 0.5
+
+        local flames = {
+            {3, 3, {255, 100, 10}}, {4, 3, {255, 130, 20}}, {5, 3, {255, 100, 10}}, {6, 3, {255, 120, 15}},
+            {4, 2, {255, 180, 30}}, {5, 2, {255, 160, 20}},
+            {3, 2, {255, 120, 10}}, {6, 2, {255, 130, 15}},
+            {4, 1, {255, 220, 80}}, {5, 1, {255, 200, 60}},
+        }
+        for _, f in ipairs(flames) do
+            local fx = px + f[1] * ps
+            local fy = py + f[2] * ps
+            local c = f[3]
+            local flick = (f[2] <= 1) and flicker1 or flicker2
+            local a = math.floor(180 + 75 * flick)
+            nvgBeginPath(vg)
+            nvgRect(vg, fx, fy, ps, ps)
+            nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], a))
+            nvgFill(vg)
+        end
+
+        -- 火焰光晕
+        local glowA = math.floor(20 + 15 * flicker1)
+        nvgBeginPath(vg)
+        nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.3, 8)
+        nvgFillColor(vg, nvgRGBA(255, 150, 30, glowA))
+        nvgFill(vg)
+    else
+        -- 未点燃：暗灰余烬
+        local embers = {
+            {4, 3}, {5, 3},
+        }
+        for _, e in ipairs(embers) do
+            local ex = px + e[1] * ps
+            local ey = py + e[2] * ps
+            nvgBeginPath(vg)
+            nvgRect(vg, ex, ey, ps, ps)
+            nvgFillColor(vg, nvgRGBA(80, 40, 20, 150))
+            nvgFill(vg)
         end
     end
 end
@@ -501,21 +788,48 @@ function M.DrawHUD()
     nvgText(vg, M.screenDesignW - 6 - versionW, 11, "R:Retry N:Next 1/2/3:Diff")
 
     if M.gameState == Config.STATE_GAMEOVER then
+        -- 半透明黑色遮罩
+        nvgBeginPath(vg)
+        nvgRect(vg, 0, 22, M.screenDesignW, M.screenDesignH - 22)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 150))
+        nvgFill(vg)
+        -- 像素风格 "YOU DIE"
+        M.DrawPixelText("YOU DIE", M.screenDesignW * 0.5, M.screenDesignH * 0.4, 4, 255, 60, 60, 255)
+        -- 提示文字
         nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-        nvgFontSize(vg, 22)
-        nvgFillColor(vg, nvgRGBA(255, 60, 60, 255))
-        nvgText(vg, M.screenDesignW * 0.5, M.screenDesignH * 0.4, "FLAME OUT!")
         nvgFontSize(vg, 11)
         nvgFillColor(vg, nvgRGBA(255, 255, 255, 200))
-        nvgText(vg, M.screenDesignW * 0.5, M.screenDesignH * 0.52, "R:Retry  N:New Level")
+        nvgText(vg, M.screenDesignW * 0.5, M.screenDesignH * 0.58, "R:Retry  N:New Level")
     elseif M.gameState == Config.STATE_WIN then
+        -- 半透明黑色遮罩
+        nvgBeginPath(vg)
+        nvgRect(vg, 0, 22, M.screenDesignW, M.screenDesignH - 22)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 120))
+        nvgFill(vg)
+        -- 像素风格 "YOU WIN"（需要添加 W 字符）
         nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFontSize(vg, 22)
         nvgFillColor(vg, nvgRGBA(255, 200, 50, 255))
         nvgText(vg, M.screenDesignW * 0.5, M.screenDesignH * 0.4, "FLAME ETERNAL!")
         nvgFontSize(vg, 11)
         nvgFillColor(vg, nvgRGBA(255, 255, 255, 200))
-        nvgText(vg, M.screenDesignW * 0.5, M.screenDesignH * 0.52, "N:Next Level  R:Replay")
+        nvgText(vg, M.screenDesignW * 0.5, M.screenDesignH * 0.55, "N:Next Level  R:Replay")
+    end
+
+    -- BONFIRE LIT 消息
+    if M.bonfireMessage.active then
+        local t = M.bonfireMessage.timer
+        local dur = M.bonfireMessage.duration
+        -- 淡入淡出
+        local alpha = 255
+        if t < 0.4 then
+            alpha = math.floor(t / 0.4 * 255)
+        elseif t > dur - 0.6 then
+            alpha = math.floor((dur - t) / 0.6 * 255)
+        end
+        alpha = math.max(0, math.min(255, alpha))
+        -- 像素风格 "BONFIRE LIT" 居中偏上
+        M.DrawPixelText("BONFIRE LIT", M.screenDesignW * 0.5, M.screenDesignH * 0.35, 3, 255, 180, 40, alpha)
     end
 end
 

@@ -22,6 +22,93 @@ local FogOfWar = {}
 -- ====================================================================
 local lightSources = {}  -- { {col, row, diameter, feather}, ... }
 
+-- ====================================================================
+-- Tween 动画系统
+-- ====================================================================
+local TWEEN_DURATION = 0.4  -- 开启/关闭动画时长（秒）
+
+-- 活跃的 tween 动画列表
+-- { light=lightRef, startDiameter, targetDiameter, elapsed, duration, onComplete? }
+local activeTweens = {}
+
+--- 内部：为光源创建渐入 tween（diameter 从 0 到 target）
+---@param light table 光源引用
+---@param targetDiameter number 目标直径
+local function TweenLightIn(light, targetDiameter)
+    -- 移除该光源已有的 tween（避免重复）
+    for i = #activeTweens, 1, -1 do
+        if activeTweens[i].light == light then
+            table.remove(activeTweens, i)
+        end
+    end
+    light.diameter = 0.1  -- 从极小开始
+    table.insert(activeTweens, {
+        light = light,
+        startDiameter = 0.1,
+        targetDiameter = targetDiameter,
+        elapsed = 0,
+        duration = TWEEN_DURATION,
+    })
+end
+
+--- 内部：为光源创建渐出 tween（diameter 从当前到 0，完成后移除）
+---@param light table 光源引用
+---@param onComplete function|nil 完成时的回调
+local function TweenLightOut(light, onComplete)
+    -- 移除该光源已有的 tween
+    for i = #activeTweens, 1, -1 do
+        if activeTweens[i].light == light then
+            table.remove(activeTweens, i)
+        end
+    end
+    table.insert(activeTweens, {
+        light = light,
+        startDiameter = light.diameter,
+        targetDiameter = 0,
+        elapsed = 0,
+        duration = TWEEN_DURATION,
+        onComplete = onComplete,
+    })
+end
+
+--- easeOutQuad 缓动函数
+local function EaseOutQuad(t)
+    return 1 - (1 - t) * (1 - t)
+end
+
+--- easeInQuad 缓动函数
+local function EaseInQuad(t)
+    return t * t
+end
+
+--- 更新所有 tween 动画（每帧调用）
+---@param dt number deltaTime（秒）
+function FogOfWar.UpdateTweens(dt)
+    for i = #activeTweens, 1, -1 do
+        local tw = activeTweens[i]
+        tw.elapsed = tw.elapsed + dt
+        local progress = math.min(1.0, tw.elapsed / tw.duration)
+
+        -- 渐入用 easeOut（快速展开），渐出用 easeIn（加速收缩）
+        local eased
+        if tw.targetDiameter > tw.startDiameter then
+            eased = EaseOutQuad(progress)
+        else
+            eased = EaseInQuad(progress)
+        end
+
+        tw.light.diameter = tw.startDiameter + (tw.targetDiameter - tw.startDiameter) * eased
+
+        if progress >= 1.0 then
+            tw.light.diameter = tw.targetDiameter
+            if tw.onComplete then
+                tw.onComplete(tw.light)
+            end
+            table.remove(activeTweens, i)
+        end
+    end
+end
+
 --- 设置光源列表（引用传递）
 ---@param sources table[]
 function FogOfWar.SetLightSources(sources)
@@ -109,7 +196,7 @@ local function IsInsidePixelCircle(dx, dy, r)
 end
 
 -- ====================================================================
--- 计算某个格子的光照强度（像素圆 + 阶梯式环形羽化）
+-- 计算某个格子的光照强度（像素圆 + 阶梯式环形羽化 + 小光源对角线柔化）
 -- ====================================================================
 local function CalcCellLightingWithNoise(cellCol, cellRow)
     if #lightSources == 0 then return 0 end
@@ -123,10 +210,10 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
         local featherAmount = light.feather  -- 0.0 ~ 1.0
         local innerRadius = radius * (1.0 - featherAmount)
 
-        -- 快速排除：超出外接正方形
+        -- 快速排除：超出外接正方形（扩大1格以容纳对角线柔化）
         local absDx = (dx >= 0) and dx or -dx
         local absDy = (dy >= 0) and dy or -dy
-        if absDx > radius + 1 or absDy > radius + 1 then
+        if absDx > radius + 2 or absDy > radius + 2 then
             goto continueLight
         end
 
@@ -166,6 +253,25 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
 
             if intensity > maxLight then
                 maxLight = intensity
+            end
+        else
+            -- ============================================================
+            -- 小光源对角线柔化：当光源半径较小（radius <= 3）时，
+            -- 像素圆只形成十字形，对角线完全没光照显得生硬。
+            -- 对不在像素圆内的格子，计算基于欧几里得距离的微弱柔化光。
+            -- ============================================================
+            if radius <= 3 and radius > 0.5 then
+                local dist = math.sqrt(dx * dx + dy * dy)
+                -- 对角线格子（距离在 radius ~ radius+1.5 之间）给予微弱光照
+                if dist <= radius + 1.5 then
+                    -- 距离越远越暗，最大强度为 0.15（远低于正式光照）
+                    local falloff = 1.0 - (dist - radius * 0.5) / (radius + 1.5)
+                    falloff = math.max(0, math.min(1.0, falloff))
+                    local softIntensity = falloff * 0.15
+                    if softIntensity > maxLight then
+                        maxLight = softIntensity
+                    end
+                end
             end
         end
 
@@ -534,13 +640,62 @@ function FogOfWar.AddLight(col, row, diameter, feather)
     return #lightSources
 end
 
---- 移除指定位置的光源（返回是否成功）
+--- 带渐入动画的光源添加（diameter 从 0 渐变到目标值，0.4 秒）
+--- 这是所有游戏内动态生成光源的推荐接口
+---@param col number
+---@param row number
+---@param diameter number 目标直径（格数），默认 6
+---@param feather number 羽化程度 0.0~1.0，默认 0.5
+---@return number index 新光源的索引
+function FogOfWar.AddLightAnimated(col, row, diameter, feather)
+    local targetDiameter = diameter or 6
+    local light = {
+        col = col,
+        row = row,
+        diameter = 0.1,  -- 初始极小，动画会渐变
+        feather = feather or 0.5,
+    }
+    table.insert(lightSources, light)
+    TweenLightIn(light, targetDiameter)
+    return #lightSources
+end
+
+--- 带渐出动画的光源移除（diameter 从当前值渐变到 0，0.4 秒后真正移除）
+--- 这是所有游戏内动态移除光源的推荐接口
+---@param col number
+---@param row number
+---@return boolean started 是否成功启动渐出动画
+function FogOfWar.RemoveLightAnimated(col, row)
+    for i, light in ipairs(lightSources) do
+        if light.col == col and light.row == row then
+            TweenLightOut(light, function(l)
+                -- 动画完成后从列表中真正移除
+                for j = #lightSources, 1, -1 do
+                    if lightSources[j] == l then
+                        table.remove(lightSources, j)
+                        break
+                    end
+                end
+            end)
+            return true
+        end
+    end
+    return false
+end
+
+--- 移除指定位置的光源（返回是否成功）- 立即移除，无动画
 ---@param col number
 ---@param row number
 ---@return boolean removed
 function FogOfWar.RemoveLight(col, row)
     for i = #lightSources, 1, -1 do
         if lightSources[i].col == col and lightSources[i].row == row then
+            -- 同时清除该光源关联的 tween
+            for j = #activeTweens, 1, -1 do
+                if activeTweens[j].light == lightSources[i] then
+                    table.remove(activeTweens, j)
+                end
+            end
             table.remove(lightSources, i)
             return true
         end
@@ -593,6 +748,7 @@ end
 --- 清空所有光源
 function FogOfWar.ClearAll()
     lightSources = {}
+    activeTweens = {}
 end
 
 --- 获取光源数量

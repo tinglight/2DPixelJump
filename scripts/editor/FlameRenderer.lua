@@ -94,7 +94,7 @@ end
 function M.Draw()
     local vg = S.vg
     local baseX = (S.play.gridX - 1) * C.GRID - S.playCameraX
-    local baseY = (S.play.gridY - 1) * C.GRID
+    local baseY = (S.play.gridY - 1) * C.GRID - S.playCameraY
     local ps = C.FLAME_CFG.pixelSize
     local N = C.FLAME_CFG.pixelGridSize
     local totalSize = N * ps
@@ -210,7 +210,7 @@ end
 
 function M.DrawOneFallParticle(vg, p, progress, alpha)
     local screenX = p.x - S.playCameraX
-    local screenY = p.y
+    local screenY = p.y - S.playCameraY
     local baseColor = C.FLAME_COLORS[p.colorRow] or C.FLAME_COLORS[7]
     local r = math.min(255, math.floor(baseColor[1] * (1.0 + (1.0 - progress) * 0.2)))
     local g = math.floor(baseColor[2] * (1.0 - progress * 0.3))

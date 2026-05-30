@@ -26,6 +26,10 @@ S.scaleF = 1.0
 S.screenDesignW = C.DESIGN_W
 S.screenDesignH = C.DESIGN_H
 
+-- 试玩模式视口（16:9 比例，基于 DESIGN_W）
+S.playViewW = C.DESIGN_W
+S.playViewH = C.DESIGN_W * 9 / 16  -- 480 * 0.5625 = 270
+
 -- ====================================================================
 -- 编辑器核心状态
 -- ====================================================================
@@ -138,10 +142,10 @@ S.playerParams = {
     maxFallGrids = 10,
     maxJumpGrids = 0,
     defaultLightDiameter = 12,
-    cameraZoom = 1.0,
+    cameraZoom = 2.0,
 }
 
-S.playerParamInputs = {"3", "1.0", "10", "0", "12", "1.0"}
+S.playerParamInputs = {"3", "1.0", "10", "0", "12", "2.0"}
 S.playerParamFocus = 1
 S.playerParamCursor = 0
 
@@ -291,6 +295,7 @@ S.prevPlayLeft = false
 S.prevPlayRight = false
 S.playMoveFirst = false
 S.playCameraX = 0
+S.playCameraY = 0
 S.playGameTime = 0
 
 -- 世界试玩
@@ -305,16 +310,54 @@ S.projectiles = {}
 -- 格式: { ["level_2.json"] = { [1] = true, [3] = true } }
 S.crossSwitchState = {}
 
--- 关卡切换过渡动画
+-- 存档点状态（世界试玩期间持久，切关卡不清空）
+-- checkpointFile: 最后一次存档的关卡文件名（nil=未存档，回到 spawn）
+-- checkpointCol/Row: 存档点在该关卡中的格子坐标
+-- checkpointActivated: 当前关卡已激活的存档点集合 {["row_col"]=true}
+S.checkpointFile = nil
+S.checkpointCol = nil
+S.checkpointRow = nil
+S.checkpointActivated = {}
+S.checkpointLightPos = nil  -- 当前点燃篝火的光源位置 {col, row}
+
+-- 死亡转场状态
+S.deathTransition = {
+    active = false,        -- 是否正在死亡转场
+    phase = "none",        -- "circleClose" | "blackout" | "waitKey" | "none"
+    timer = 0,             -- 当前 phase 内的计时
+    playerScreenX = 0,     -- 死亡时玩家在屏幕上的 X 坐标（黑圈中心）
+    playerScreenY = 0,     -- 死亡时玩家在屏幕上的 Y 坐标（黑圈中心）
+}
+
+-- 关卡切换过渡动画（旧版黑屏，已弃用）
 S.transition = {
-    active = false,       -- 是否正在过渡
-    phase = "none",       -- "fadeOut" | "fadeIn" | "none"
-    alpha = 0,            -- 当前遮罩透明度 0~1
-    speed = 5.0,          -- 淡入淡出速度（每秒 alpha 变化量）
-    pendingFile = nil,    -- 待加载的目标关卡文件名
-    pendingDir = nil,     -- 来源方向
-    pendingGx = nil,      -- 切换前的 gridX
-    pendingGy = nil,      -- 切换前的 gridY
+    active = false,
+    phase = "none",
+    alpha = 0,
+    speed = 5.0,
+    pendingFile = nil,
+    pendingDir = nil,
+    pendingGx = nil,
+    pendingGy = nil,
+}
+
+-- 关卡切换平移过渡
+S.panTransition = {
+    active = false,       -- 是否正在平移过渡
+    progress = 0,         -- 0~1 动画进度
+    duration = 0.2,       -- 过渡时长(秒)
+    direction = nil,      -- 移动方向 "left"|"right"|"up"|"down"
+    -- 旧关卡快照
+    oldLevelData = nil,   -- 旧关卡的 levelData 引用
+    oldMapCols = 0,
+    oldMapRows = 0,
+    oldCamBound = nil,    -- { left, top, right, bottom }
+    oldCameraX = 0,
+    oldCameraY = 0,
+    oldLightSources = nil,
+    oldSwitchState = nil,
+    oldCollected = nil,
+    oldHiddenWallRevealed = nil,
 }
 
 -- ====================================================================

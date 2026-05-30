@@ -553,11 +553,18 @@ end
 
 function HandlePlayModeClick(button, mx, my)
     if button ~= MOUSEB_LEFT then return end
+    -- 将 screenDesign 坐标转换到 4:3 playView 坐标
+    local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
+    local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
+    local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
+    local pmx = (mx - offsetX) / fitScale
+    local pmy = (my - offsetY) / fitScale
+
     local backBtnW, backBtnH = 50, 16
-    local backBtnX = S.screenDesignW - backBtnW - 6
+    local backBtnX = S.playViewW - backBtnW - 6
     local backBtnY = (22 - backBtnH) * 0.5
     local pad = 6
-    if mx >= backBtnX - pad and mx < backBtnX + backBtnW + pad and my >= backBtnY - pad and my < backBtnY + backBtnH + pad then
+    if pmx >= backBtnX - pad and pmx < backBtnX + backBtnW + pad and pmy >= backBtnY - pad and pmy < backBtnY + backBtnH + pad then
         S.editorMode = MODE.EDIT
         S.SetMessage("返回编辑模式", 1.5)
     end
@@ -565,11 +572,18 @@ end
 
 function HandleWorldPlayClick(button, mx, my)
     if button ~= MOUSEB_LEFT then return end
+    -- 将 screenDesign 坐标转换到 4:3 playView 坐标
+    local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
+    local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
+    local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
+    local pmx = (mx - offsetX) / fitScale
+    local pmy = (my - offsetY) / fitScale
+
     local backBtnW, backBtnH = 60, 16
-    local backBtnX = S.screenDesignW - backBtnW - 6
+    local backBtnX = S.playViewW - backBtnW - 6
     local backBtnY = (22 - backBtnH) * 0.5
     local pad = 6
-    if mx >= backBtnX - pad and mx < backBtnX + backBtnW + pad and my >= backBtnY - pad and my < backBtnY + backBtnH + pad then
+    if pmx >= backBtnX - pad and pmx < backBtnX + backBtnW + pad and pmy >= backBtnY - pad and pmy < backBtnY + backBtnH + pad then
         S.editorMode = MODE.WORLDMAP
         WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
         S.SetMessage("返回世界地图编辑", 1.5)

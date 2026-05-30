@@ -10,12 +10,14 @@ local Physics = nil
 local PixelSystem = nil
 local LevelManager = nil
 local Animation = nil  -- 用于触发动画回调
+local Renderer = nil   -- 用于触发 BONFIRE LIT 消息
 
 function M.Inject(deps)
     Physics = deps.Physics
     PixelSystem = deps.PixelSystem
     LevelManager = deps.LevelManager
     Animation = deps.Animation
+    Renderer = deps.Renderer
 end
 
 -- ====================================================================
@@ -222,6 +224,20 @@ function M.CheckItemCollection()
                 elseif base == TILE.SWITCH and not LevelManager.switchCollected[key] then
                     LevelManager.switchCollected[key] = true
                     LevelManager.switchState[group] = not LevelManager.switchState[group]
+
+                elseif base == TILE.CHECKPOINT and not LevelManager.checkpointActivated[key] then
+                    -- 熄灭其他篝火，激活当前
+                    LevelManager.checkpointActivated = {}
+                    LevelManager.checkpointActivated[key] = true
+                    LevelManager.checkpointCol = col
+                    LevelManager.checkpointRow = row
+                    LevelManager.checkpointFile = LevelManager.currentLevelFile
+                    -- 补满火焰
+                    PixelSystem.RecoverPixels(PixelSystem.totalPixels)
+                    local pixelsPerGrid = math.max(1, math.floor(PixelSystem.totalPixels / 10 + 0.5))
+                    p.fallGridCount = 0
+                    -- 显示 BONFIRE LIT
+                    if Renderer then Renderer.ShowBonfireMessage() end
                 end
             end
         end

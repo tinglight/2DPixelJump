@@ -62,14 +62,7 @@ function M.SerializeLevel()
             right = S.camBound.right,
             bottom = S.camBound.bottom,
         },
-        playerParams = {
-            baseJumpGrids = S.playerParams.baseJumpGrids,
-            fallJumpMultiplier = S.playerParams.fallJumpMultiplier,
-            maxFallGrids = S.playerParams.maxFallGrids,
-            maxJumpGrids = S.playerParams.maxJumpGrids,
-            defaultLightDiameter = S.playerParams.defaultLightDiameter,
-            cameraZoom = S.playerParams.cameraZoom,
-        },
+        -- playerParams 不再保存到单个关卡（全局配置，统一由 CloudStorage 管理）
         lightSources = FogOfWar.Serialize(),
     }
     -- 保留关卡显示名称（确保云端保存后不丢失）
@@ -200,7 +193,7 @@ function M.ApplyLevelData(data)
     end
 
     M.ApplyCamBound(data.camBound)
-    M.ApplyPlayerParams(data.playerParams)
+    -- playerParams 不再从关卡数据覆盖（全局配置，由 CloudStorage 统一管理）
 
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
@@ -232,14 +225,14 @@ function M.ApplyPlayerParams(params)
         S.playerParams.maxFallGrids = params.maxFallGrids or 10
         S.playerParams.maxJumpGrids = params.maxJumpGrids or 0
         S.playerParams.defaultLightDiameter = params.defaultLightDiameter or 12
-        S.playerParams.cameraZoom = params.cameraZoom or 1.0
+        S.playerParams.cameraZoom = params.cameraZoom or 2.0
     else
         S.playerParams.baseJumpGrids = 3
         S.playerParams.fallJumpMultiplier = 1.0
         S.playerParams.maxFallGrids = 10
         S.playerParams.maxJumpGrids = 0
         S.playerParams.defaultLightDiameter = 12
-        S.playerParams.cameraZoom = 1.0
+        S.playerParams.cameraZoom = 2.0
     end
 end
 

@@ -38,6 +38,7 @@ PlayerController.Inject({
     PixelSystem = PixelSystem,
     LevelManager = LevelManager,
     Animation = Animation,
+    Renderer = Renderer,
 })
 
 Animation.Inject({
@@ -161,6 +162,9 @@ function Start()
         return
     end
 
+    -- 加载全局玩家参数
+    LevelManager.LoadGlobalPlayerParams()
+
     -- 初始化关卡和像素
     local player = PlayerController.player
     LevelManager.InitLevel(player)
@@ -255,6 +259,9 @@ function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
 
     gameTime = gameTime + dt
+
+    -- 更新 BONFIRE LIT 消息
+    Renderer.UpdateBonfireMessage(dt)
 
     -- 世界地图切换冷却
     if LevelManager.transitionCooldown > 0 then
