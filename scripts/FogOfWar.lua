@@ -943,7 +943,6 @@ end
 ---@param row1 number 左上角行
 ---@param col2 number 右下角列
 ---@param row2 number 右下角行
----@param group number 编组号
 ---@return number index 新区域索引
 function FogOfWar.AddLightZone(col1, row1, col2, row2)
     -- 规范化：确保 col1<=col2, row1<=row2
@@ -1190,9 +1189,6 @@ function FogOfWar.GetActiveGroup()
     return zoneState.activeGroup
 end
 
---- 在编辑器中绘制光源区域矩形
----@param vg userdata NanoVG context
----@param opts table { gridSize, offsetX, offsetY, zoomLevel, mapX, mapY, selectedIndex }
 -- 区域显示颜色（按索引循环）
 local ZONE_COLORS = {
     {255, 100, 100},  -- 红
@@ -1203,6 +1199,9 @@ local ZONE_COLORS = {
     {255, 150, 80},   -- 橙
 }
 
+--- 在编辑器中绘制光源区域矩形
+---@param vg userdata NanoVG context
+---@param opts table { gridSize, offsetX, offsetY, zoomLevel, mapX, mapY, selectedIndex }
 function FogOfWar.DrawLightZones(vg, opts)
     local grid = opts.gridSize or 16
     local ox = opts.offsetX or 0

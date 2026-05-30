@@ -290,6 +290,10 @@ function M.ProcessTileAt(col, row)
         M.SyncFallGridCount()
         S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
         M.ShowBonfireMessage()
+        -- 世界试玩模式：保存玩家进度到云端（不影响编辑器数据）
+        if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile then
+            M.SavePlayerProgress()
+        end
     end
 end
 
@@ -1333,13 +1337,13 @@ function M.DrawTransition()
     nvgFill(vg)
 end
 
+local EDGE_THRESHOLD = 4
 --- 检测玩家与 camBound 边缘之间是否全部为实体方块（被墙挡住无法再靠近）
 ---@param gx number 玩家 gridX
 ---@param gy number 玩家 gridY
 ---@param direction string "left"|"right"|"up"|"down"
 ---@param ps number 玩家占据的格子数
 ---@return boolean
-local EDGE_THRESHOLD = 4
 local function IsAgainstBoundaryWall(gx, gy, direction, ps)
     if direction == "left" then
         local gap = gx - S.camBound.left
@@ -1579,6 +1583,45 @@ function M.StartPlayMode()
     S.SetMessage("试玩中! ESC返回编辑", 2.0)
 end
 
+------------------------------------------------------------
+-- 玩家进度存档（仅正式游戏进度，不涉及编辑器关卡数据）
+------------------------------------------------------------
+
+--- 保存玩家进度到云端（checkpoint位置 + 当前关卡文件）
+function M.SavePlayerProgress()
+    local progress = {
+        checkpointFile = S.checkpointFile,
+        checkpointCol = S.checkpointCol,
+        checkpointRow = S.checkpointRow,
+    }
+    clientCloud:Set("player_progress", progress, {
+        ok = function()
+            print("[PlayMode] Player progress saved: " .. tostring(S.checkpointFile))
+        end,
+        error = function(code, reason)
+            print("[PlayMode] Failed to save player progress: " .. tostring(reason))
+        end
+    })
+end
+
+--- 加载玩家进度（同步回调）
+---@param callback fun(progress: table|nil)
+function M.LoadPlayerProgress(callback)
+    clientCloud:Get("player_progress", {
+        ok = function(values)
+            local progress = values.player_progress
+            if progress and progress.checkpointFile and progress.checkpointFile ~= "" then
+                callback(progress)
+            else
+                callback(nil)
+            end
+        end,
+        err = function()
+            callback(nil)
+        end
+    })
+end
+
 function M.StartWorldPlayMode()
     S.worldPlayData = WorldMapEditor.GetMapData()
     if not S.worldPlayData or not S.worldPlayData.nodes or #S.worldPlayData.nodes == 0 then
@@ -1590,16 +1633,44 @@ function M.StartWorldPlayMode()
         S.SetMessage("首个节点无关卡文件", 3.0)
         return
     end
-    if not M.WorldPlayLoadLevel(firstNode.file, nil) then
-        S.SetMessage("加载关卡失败: " .. firstNode.file, 3.0)
-        return
-    end
-    S.worldPlayCurrentFile = firstNode.file
-    S.worldPlayCooldown = 0
-    S.editorMode = C.MODE_WORLDPLAY
-    ResetPlayState()
-    CrossLevel.Reset()
-    S.SetMessage("世界试玩中! ESC返回 | 到达边界自动切换关卡", 3.0)
+
+    -- 尝试从玩家进度恢复（继续游戏）
+    M.LoadPlayerProgress(function(progress)
+        if progress and progress.checkpointFile then
+            -- 有存档：尝试加载存档所在关卡
+            if CloudStorage.Exists(progress.checkpointFile) and M.WorldPlayLoadLevel(progress.checkpointFile, nil) then
+                S.worldPlayCurrentFile = progress.checkpointFile
+                S.worldPlayCooldown = 0
+                S.editorMode = C.MODE_WORLDPLAY
+                ResetPlayState()
+                CrossLevel.Reset()
+                -- 恢复 checkpoint 位置作为出生点
+                S.checkpointFile = progress.checkpointFile
+                S.checkpointCol = progress.checkpointCol
+                S.checkpointRow = progress.checkpointRow
+                S.spawnCol = progress.checkpointCol
+                S.spawnRow = progress.checkpointRow
+                -- 重置玩家位置到 checkpoint
+                S.play.gridX = S.spawnCol
+                S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
+                M.SnapCameraToPlayer()
+                FogOfWar.InitZoneVisibility(S.play.gridX + 1, S.play.gridY + 1)
+                S.SetMessage("从篝火继续冒险...", 2.0)
+                return
+            end
+        end
+        -- 无存档或存档关卡不存在：从第一个节点开始
+        if not M.WorldPlayLoadLevel(firstNode.file, nil) then
+            S.SetMessage("加载关卡失败: " .. firstNode.file, 3.0)
+            return
+        end
+        S.worldPlayCurrentFile = firstNode.file
+        S.worldPlayCooldown = 0
+        S.editorMode = C.MODE_WORLDPLAY
+        ResetPlayState()
+        CrossLevel.Reset()
+        S.SetMessage("世界试玩中! ESC返回 | 到达边界自动切换关卡", 3.0)
+    end)
 end
 
 ------------------------------------------------------------

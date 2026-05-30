@@ -304,7 +304,7 @@ function M.RenameLevel(oldFile, newDisplayName)
     end)
 end
 
---- 删除关卡
+--- 删除关卡（移入回收站，24小时后自动清理）
 ---@param filename string
 function M.DeleteLevel(filename)
     if not CloudStorage.Exists(filename) then
@@ -313,13 +313,39 @@ function M.DeleteLevel(filename)
     end
     CloudStorage.Delete(filename, function(ok, err)
         if ok then
-            S.SetMessage("已删除: " .. filename, 2.0)
+            S.SetMessage("已移入回收站: " .. filename .. " (24h内可还原)", 3.0)
             if S.currentLevelName == filename then
                 S.currentLevelName = ""
             end
             M.RefreshSavedLevels()
         else
             S.SetMessage("删除失败: " .. (err or "未知错误"), 3.0)
+        end
+    end)
+end
+
+--- 从回收站还原关卡
+---@param filename string
+function M.RestoreLevel(filename)
+    CloudStorage.RestoreFromTrash(filename, function(ok, err)
+        if ok then
+            S.SetMessage("已还原: " .. filename, 2.0)
+            M.RefreshSavedLevels()
+        else
+            S.SetMessage("还原失败: " .. (err or "未知错误"), 3.0)
+        end
+    end)
+end
+
+--- 从备份还原关卡（恢复到上次保存前的版本）
+---@param filename string
+function M.RestoreFromBackup(filename)
+    CloudStorage.RestoreFromBackup(filename, function(ok, err)
+        if ok then
+            S.SetMessage("已从备份还原: " .. filename, 2.0)
+            M.RefreshSavedLevels()
+        else
+            S.SetMessage("备份还原失败: " .. (err or "未知错误"), 3.0)
         end
     end)
 end

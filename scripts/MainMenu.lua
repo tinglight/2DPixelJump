@@ -66,15 +66,15 @@ local function PlayClickSound()
 end
 
 -- ====================================================================
--- 存档检测
+-- 存档检测（检测玩家正式关卡进度，不涉及编辑器数据）
 -- ====================================================================
 
 local function CheckSaveData(callback)
-    -- 使用 CloudStorage 检查是否有关卡进度
-    clientCloud:Get("editor_index", {
+    -- 使用 player_progress 检查是否有玩家游戏进度（与编辑器无关）
+    clientCloud:Get("player_progress", {
         ok = function(values)
-            local indexData = values.editor_index
-            if indexData and indexData.nextIndex and indexData.nextIndex > 1 then
+            local progress = values.player_progress
+            if progress and progress.checkpointFile then
                 hasSaveData = true
             else
                 hasSaveData = false
@@ -555,18 +555,18 @@ function MainMenu.Init(callbacks)
     end)
 end
 
---- 重置存档并开始新游戏
+--- 重置存档并开始新游戏（只重置玩家游戏进度，不影响编辑器关卡数据）
 function MainMenu.ResetSaveAndStart()
-    -- 重置云端存档索引
-    clientCloud:Set("editor_index", { nextIndex = 1 }, {
+    -- 只重置玩家进度，不碰 editor_index（编辑器关卡索引）
+    clientCloud:Set("player_progress", {}, {
         ok = function()
-            print("[MainMenu] Save data reset")
+            print("[MainMenu] Player progress reset (editor data preserved)")
             CheckWorldMapAndStart(function()
                 if onStartGame then onStartGame() end
             end)
         end,
         err = function()
-            print("[MainMenu] Failed to reset save, starting anyway")
+            print("[MainMenu] Failed to reset progress, starting anyway")
             CheckWorldMapAndStart(function()
                 if onStartGame then onStartGame() end
             end)
