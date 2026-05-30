@@ -1323,39 +1323,75 @@ function M.DrawWaterTile(vg, px, py, row, col)
     local t = S.playGameTime
     local G = C.GRID
     local worldX = (col - 1) * G  -- 世界坐标，用于跨格子连续波浪
-    -- 深层底色
-    nvgBeginPath(vg)
-    nvgRect(vg, px, py, G, G)
-    nvgFillColor(vg, nvgRGBA(20, 60, 160, 180))
-    nvgFill(vg)
-    -- 多层波浪（基于世界坐标，相邻格子自然衔接）
-    local freq = 0.35
-    for layer = 1, 3 do
-        local speed = 2.5 + layer * 0.8
-        local amp = 1.5 - layer * 0.3
-        local yBase = py + 2 + layer * 3.5
-        local phase = t * speed + row * 0.6 + layer * 2.1
-        nvgBeginPath(vg)
-        nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
-        for sx = 1, 4 do
-            local localX = sx * (G / 4)
-            nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+
+    -- 检测上方是否也是水（同类），决定是否为表面
+    local hasWaterAbove = false
+    if row > 1 and S.levelData[row - 1] then
+        local aboveVal = S.levelData[row - 1][col]
+        if aboveVal then
+            local aboveBase = TileUtils.GetTileType(aboveVal)
+            if aboveBase == C.TILE.WATER then hasWaterAbove = true end
         end
-        nvgLineTo(vg, px + G, py + G)
-        nvgLineTo(vg, px, py + G)
-        nvgClosePath(vg)
-        local a = math.floor(40 + layer * 15)
-        nvgFillColor(vg, nvgRGBA(40 + layer * 20, 100 + layer * 25, 240, a))
-        nvgFill(vg)
     end
-    -- 荧光粒子散布（小亮点闪烁）
+
+    if not hasWaterAbove then
+        -- 表面格：绘制波浪（只在最顶层水格出现）
+        local freq = 0.35
+        for layer = 1, 3 do
+            local speed = 2.5 + layer * 0.8
+            local amp = 1.5 - layer * 0.3
+            local yBase = py + 2 + layer * 3.5
+            local phase = t * speed + layer * 2.1
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+            for sx = 1, 4 do
+                local localX = sx * (G / 4)
+                nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+            end
+            nvgLineTo(vg, px + G, py + G)
+            nvgLineTo(vg, px, py + G)
+            nvgClosePath(vg)
+            local a = math.floor(40 + layer * 15)
+            nvgFillColor(vg, nvgRGBA(40 + layer * 20, 100 + layer * 25, 240, a))
+            nvgFill(vg)
+        end
+    else
+        -- 内部格：深层底色 + 缓慢水纹
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, G, G)
+        nvgFillColor(vg, nvgRGBA(20, 60, 160, 180))
+        nvgFill(vg)
+        local freq = 0.25
+        for layer = 1, 2 do
+            local speed = 1.0 + layer * 0.3
+            local amp = 0.8
+            local yBase = py + G * (0.3 + layer * 0.25)
+            local phase = t * speed + row * 1.7 + layer * 3.0
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+            for sx = 1, 4 do
+                local localX = sx * (G / 4)
+                nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+            end
+            nvgLineTo(vg, px + G, yBase + math.sin(phase + (worldX + G) * freq) * amp - 1)
+            nvgLineTo(vg, px + G, yBase + 2)
+            nvgLineTo(vg, px, yBase + 2)
+            nvgClosePath(vg)
+            nvgFillColor(vg, nvgRGBA(30 + layer * 15, 80 + layer * 20, 220, 30 + layer * 12))
+            nvgFill(vg)
+        end
+    end
+
+    -- 荧光粒子散布（小亮点闪烁，限制在水面以下）
+    local sparkTopY = hasWaterAbove and 2 or math.floor(G * 0.55)
+    local sparkRangeH = G - sparkTopY - 2
     local seed = col * 7 + row * 13
     for i = 1, 3 do
         local phase_i = t * (3.0 + i * 0.7) + seed + i * 5.3
         local sparkAlpha = math.sin(phase_i) * 0.5 + 0.5
         if sparkAlpha > 0.3 then
             local sx = px + 2 + math.fmod(seed * i * 3.7, G - 4)
-            local sy = py + 2 + math.fmod(seed * i * 2.3, G - 4)
+            local sy = py + sparkTopY + math.fmod(seed * i * 2.3, sparkRangeH)
             nvgBeginPath(vg)
             nvgRect(vg, sx, sy, 1, 1)
             nvgFillColor(vg, nvgRGBA(150, 220, 255, math.floor(200 * sparkAlpha)))
@@ -1368,39 +1404,75 @@ function M.DrawPoisonWaterTile(vg, px, py, row, col)
     local t = S.playGameTime
     local G = C.GRID
     local worldX = (col - 1) * G
-    -- 深层底色
-    nvgBeginPath(vg)
-    nvgRect(vg, px, py, G, G)
-    nvgFillColor(vg, nvgRGBA(10, 100, 25, 190))
-    nvgFill(vg)
-    -- 多层波浪（世界坐标连续）
-    local freq = 0.4
-    for layer = 1, 3 do
-        local speed = 2.0 + layer * 0.6
-        local amp = 1.8 - layer * 0.4
-        local yBase = py + 2 + layer * 3.5
-        local phase = t * speed + row * 0.8 + layer * 1.9
-        nvgBeginPath(vg)
-        nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
-        for sx = 1, 4 do
-            local localX = sx * (G / 4)
-            nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+
+    -- 检测上方是否也是毒水
+    local hasWaterAbove = false
+    if row > 1 and S.levelData[row - 1] then
+        local aboveVal = S.levelData[row - 1][col]
+        if aboveVal then
+            local aboveBase = TileUtils.GetTileType(aboveVal)
+            if aboveBase == C.TILE.POISON_WATER then hasWaterAbove = true end
         end
-        nvgLineTo(vg, px + G, py + G)
-        nvgLineTo(vg, px, py + G)
-        nvgClosePath(vg)
-        local a = math.floor(35 + layer * 18)
-        nvgFillColor(vg, nvgRGBA(20 + layer * 10, 140 + layer * 30, 40 + layer * 10, a))
-        nvgFill(vg)
     end
-    -- 荧光粒子（绿色亮点，更密集更亮表示危险）
+
+    if not hasWaterAbove then
+        -- 表面格：多层波浪（无底色，只有波浪形状）
+        local freq = 0.4
+        for layer = 1, 3 do
+            local speed = 2.0 + layer * 0.6
+            local amp = 1.8 - layer * 0.4
+            local yBase = py + 2 + layer * 3.5
+            local phase = t * speed + layer * 1.9
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+            for sx = 1, 4 do
+                local localX = sx * (G / 4)
+                nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+            end
+            nvgLineTo(vg, px + G, py + G)
+            nvgLineTo(vg, px, py + G)
+            nvgClosePath(vg)
+            local a = math.floor(35 + layer * 18)
+            nvgFillColor(vg, nvgRGBA(20 + layer * 10, 140 + layer * 30, 40 + layer * 10, a))
+            nvgFill(vg)
+        end
+    else
+        -- 内部格：深层底色 + 缓慢水纹
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, G, G)
+        nvgFillColor(vg, nvgRGBA(10, 100, 25, 190))
+        nvgFill(vg)
+        local freq = 0.3
+        for layer = 1, 2 do
+            local speed = 0.8 + layer * 0.3
+            local amp = 0.7
+            local yBase = py + G * (0.3 + layer * 0.25)
+            local phase = t * speed + row * 1.5 + layer * 2.7
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+            for sx = 1, 4 do
+                local localX = sx * (G / 4)
+                nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+            end
+            nvgLineTo(vg, px + G, yBase + math.sin(phase + (worldX + G) * freq) * amp - 1)
+            nvgLineTo(vg, px + G, yBase + 2)
+            nvgLineTo(vg, px, yBase + 2)
+            nvgClosePath(vg)
+            nvgFillColor(vg, nvgRGBA(15 + layer * 8, 120 + layer * 20, 30 + layer * 8, 30 + layer * 12))
+            nvgFill(vg)
+        end
+    end
+
+    -- 荧光粒子（绿色亮点，限制在水面以下）
+    local sparkTopY = hasWaterAbove and 1 or math.floor(G * 0.55)
+    local sparkRangeH = G - sparkTopY - 2
     local seed = col * 11 + row * 17
     for i = 1, 4 do
         local phase_i = t * (3.5 + i * 0.9) + seed + i * 4.1
         local sparkAlpha = math.sin(phase_i) * 0.5 + 0.5
         if sparkAlpha > 0.2 then
             local sx = px + 1 + math.fmod(seed * i * 2.9, G - 3)
-            local sy = py + 1 + math.fmod(seed * i * 1.7, G - 3)
+            local sy = py + sparkTopY + math.fmod(seed * i * 1.7, sparkRangeH)
             nvgBeginPath(vg)
             nvgRect(vg, sx, sy, 1, 1)
             nvgFillColor(vg, nvgRGBA(120, 255, 130, math.floor(230 * sparkAlpha)))
@@ -1413,38 +1485,72 @@ function M.DrawBlackWaterTile(vg, px, py, row, col)
     local t = S.playGameTime
     local G = C.GRID
     local worldX = (col - 1) * G
-    -- 深层底色（很暗）
-    nvgBeginPath(vg)
-    nvgRect(vg, px, py, G, G)
-    nvgFillColor(vg, nvgRGBA(30, 30, 38, 220))
-    nvgFill(vg)
-    -- 缓慢波浪（黏稠感，世界坐标连续）
-    local freq = 0.28
-    for layer = 1, 2 do
-        local speed = 1.2 + layer * 0.4
-        local amp = 1.2 - layer * 0.3
-        local yBase = py + 3 + layer * 4.5
-        local phase = t * speed + row * 0.4 + layer * 2.5
+
+    -- 检测上方是否也是黑水
+    local hasWaterAbove = false
+    if row > 1 and S.levelData[row - 1] then
+        local aboveVal = S.levelData[row - 1][col]
+        if aboveVal then
+            local aboveBase = TileUtils.GetTileType(aboveVal)
+            if aboveBase == C.TILE.BLACK_WATER then hasWaterAbove = true end
+        end
+    end
+
+    if not hasWaterAbove then
+        -- 表面格：缓慢波浪（黏稠感）
+        local freq = 0.28
+        for layer = 1, 2 do
+            local speed = 1.2 + layer * 0.4
+            local amp = 1.2 - layer * 0.3
+            local yBase = py + 3 + layer * 4.5
+            local phase = t * speed + layer * 2.5
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+            for sx = 1, 4 do
+                local localX = sx * (G / 4)
+                nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+            end
+            nvgLineTo(vg, px + G, py + G)
+            nvgLineTo(vg, px, py + G)
+            nvgClosePath(vg)
+            nvgFillColor(vg, nvgRGBA(40 + layer * 5, 40 + layer * 5, 50 + layer * 5, 80 + layer * 30))
+            nvgFill(vg)
+        end
+    else
+        -- 内部格：深层底色 + 极淡水纹
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, G, G)
+        nvgFillColor(vg, nvgRGBA(30, 30, 38, 220))
+        nvgFill(vg)
+        local freq = 0.2
+        local speed = 0.6
+        local amp = 0.5
+        local yBase = py + G * 0.5
+        local phase = t * speed + row * 1.2 + 4.0
         nvgBeginPath(vg)
         nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
         for sx = 1, 4 do
             local localX = sx * (G / 4)
             nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
         end
-        nvgLineTo(vg, px + G, py + G)
-        nvgLineTo(vg, px, py + G)
+        nvgLineTo(vg, px + G, yBase + math.sin(phase + (worldX + G) * freq) * amp - 1)
+        nvgLineTo(vg, px + G, yBase + 2)
+        nvgLineTo(vg, px, yBase + 2)
         nvgClosePath(vg)
-        nvgFillColor(vg, nvgRGBA(40 + layer * 5, 40 + layer * 5, 50 + layer * 5, 80 + layer * 30))
+        nvgFillColor(vg, nvgRGBA(38, 38, 48, 40))
         nvgFill(vg)
     end
-    -- 暗淡荧光粒子（灰白微光）
+
+    -- 暗淡荧光粒子（灰白微光，限制在水面以下）
+    local sparkTopY = hasWaterAbove and 3 or math.floor(G * 0.6)
+    local sparkRangeH = G - sparkTopY - 3
     local seed = col * 5 + row * 9
     for i = 1, 2 do
         local phase_i = t * (1.8 + i * 0.5) + seed + i * 6.7
         local sparkAlpha = math.sin(phase_i) * 0.4 + 0.4
         if sparkAlpha > 0.35 then
             local sx = px + 3 + math.fmod(seed * i * 3.1, G - 6)
-            local sy = py + 3 + math.fmod(seed * i * 2.7, G - 6)
+            local sy = py + sparkTopY + math.fmod(seed * i * 2.7, sparkRangeH)
             nvgBeginPath(vg)
             nvgRect(vg, sx, sy, 1, 1)
             nvgFillColor(vg, nvgRGBA(140, 140, 160, math.floor(120 * sparkAlpha)))
