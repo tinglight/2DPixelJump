@@ -485,6 +485,15 @@ function M.AgeFallParticles(dt)
 end
 
 function M.HandleMovementInput(dt)
+    -- 梯子上禁止左右移动，只有接触地面才能水平移动
+    if S.play.isClimbing then
+        S.play.isMoving = false
+        S.play.moveAnimTime = 0
+        S.prevPlayLeft = false
+        S.prevPlayRight = false
+        return
+    end
+
     local curLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
     local curRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
     local dir = 0
@@ -524,12 +533,10 @@ end
 
 function M.HandleJumpInput()
     if input:GetKeyPress(KEY_SPACE) then
-        local canJump = S.play.isOnGround or S.play.isClimbing
-        if canJump and not S.play.isJumping then
+        if S.play.isOnGround and not S.play.isJumping and not S.play.isClimbing then
             S.play.isJumping = true
             S.play.jumpGridsRemain = M.CalcJump()
             S.play.isOnGround = false
-            S.play.isClimbing = false
             S.play.jumpTimer = 0
         end
     end
@@ -537,9 +544,21 @@ end
 
 function M.HandleClimbInput(dt)
     local onLadder = M.IsOnLadder(S.play.gridX, S.play.gridY)
+    local onGround = M.OnGround(S.play.gridX, S.play.gridY)
+    local pressUp = input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP)
+    local pressDown = input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_DOWN)
 
     if onLadder then
-        -- 在梯子上自动进入攀爬状态（停住不下落）
+        -- 在梯子上且脚踏地面：退出攀爬（除非按上键要往上爬）
+        if onGround and not pressUp then
+            if S.play.isClimbing then
+                S.play.isClimbing = false
+                S.play.climbTimer = 0
+            end
+            return
+        end
+
+        -- 在梯子上且不在地面（或按了上键）：进入攀爬状态
         if not S.play.isClimbing then
             S.play.isClimbing = true
             S.play.isJumping = false
@@ -550,8 +569,6 @@ function M.HandleClimbInput(dt)
         end
 
         -- 只有按上/下才移动
-        local pressUp = input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP)
-        local pressDown = input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_DOWN)
         if pressUp or pressDown then
             S.play.climbTimer = S.play.climbTimer + dt
             if S.play.climbTimer >= C.PLAY_CLIMB_TICK then
