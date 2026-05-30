@@ -220,6 +220,7 @@ function HandleNanoVGRender(eventType, eventData)
     else
         GridRenderer.Draw()
         Toolbar.DrawToolbar()
+        Toolbar.DrawSubmenuPopup()
         Toolbar.DrawTopBar()
         Toolbar.DrawBottomBar()
         Sidebar.Draw()

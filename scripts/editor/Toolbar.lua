@@ -378,16 +378,60 @@ M.EDIT_BTN_H = 14       -- 编辑按钮高度
 M.EDIT_BTN_GAP = 4      -- 编辑按钮与工具区的间距
 
 -- ====================================================================
--- GetToolOrder - 获取当前工具显示顺序
+-- GetToolOrder - 获取当前工具显示顺序（隐藏子菜单中非代表工具）
 -- ====================================================================
 function M.GetToolOrder()
+    local rawOrder
+    if S.toolbarEditMode and S.toolOrderPending then
+        rawOrder = S.toolOrderPending
+    elseif S.toolOrder then
+        rawOrder = S.toolOrder
+    else
+        rawOrder = {}
+        for i = 1, #C.TOOLS do rawOrder[i] = i end
+    end
+
+    -- 子菜单折叠：每个子菜单组只保留一个代表工具（当前选中的，或首个）
+    local shownSubmenuTool = {}  -- groupId -> toolIdx（本组要展示的代表）
+    for _, groupDef in pairs(C.SUBMENU_GROUPS) do
+        -- 如果当前选中的工具属于该组，则展示它；否则展示组内第一个
+        local rep = groupDef.tools[1]
+        for _, tIdx in ipairs(groupDef.tools) do
+            if tIdx == S.currentTool then
+                rep = tIdx
+                break
+            end
+        end
+        for _, tIdx in ipairs(groupDef.tools) do
+            shownSubmenuTool[tIdx] = rep
+        end
+    end
+
+    local filtered = {}
+    for _, toolIdx in ipairs(rawOrder) do
+        local tool = C.TOOLS[toolIdx]
+        if tool and tool.submenu then
+            -- 只保留代表工具
+            if shownSubmenuTool[toolIdx] == toolIdx then
+                filtered[#filtered + 1] = toolIdx
+            end
+        else
+            filtered[#filtered + 1] = toolIdx
+        end
+    end
+    return filtered
+end
+
+-- ====================================================================
+-- GetToolOrderRaw - 获取原始（未折叠）顺序，用于编辑模式
+-- ====================================================================
+function M.GetToolOrderRaw()
     if S.toolbarEditMode and S.toolOrderPending then
         return S.toolOrderPending
     end
     if S.toolOrder then
         return S.toolOrder
     end
-    -- 默认顺序
     local order = {}
     for i = 1, #C.TOOLS do order[i] = i end
     return order
@@ -515,6 +559,19 @@ function M.DrawToolButtons(vg, barY, toolBarH)
         nvgFontSize(vg, 7)
         nvgFillColor(vg, nvgRGBA(200, 200, 200, 150))
         nvgText(vg, bx + btnW * 0.5, btnY + (btnH - 3) * 0.5 + 7, tostring(slotIdx))
+
+        -- 子菜单指示三角（右上角小三角）
+        if tool.submenu and not S.toolbarEditMode then
+            local triX = bx + btnW - 6
+            local triY = btnY + 4
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, triX - 3, triY)
+            nvgLineTo(vg, triX + 3, triY)
+            nvgLineTo(vg, triX, triY + 3)
+            nvgClosePath(vg)
+            nvgFillColor(vg, nvgRGBA(255, 255, 255, 180))
+            nvgFill(vg)
+        end
 
         ::continue::
     end
@@ -770,6 +827,166 @@ function M.HitTestToolbarArea(mx, my)
     local areaStartX = M.GetToolbarStartX()
     local visibleW = M.GetToolbarVisibleWidth()
     return mx >= areaStartX and mx < areaStartX + visibleW
+end
+
+-- ====================================================================
+-- DrawSubmenuPopup - 绘制子菜单展开弹出层
+-- ====================================================================
+function M.DrawSubmenuPopup()
+    if not S.submenuOpen or not S.submenuGroupId then return end
+    local group = C.SUBMENU_GROUPS[S.submenuGroupId]
+    if not group then return end
+
+    local vg = S.vg
+    local toolBarH = C.BOTTOMBAR_H
+    local barY = S.screenDesignH - toolBarH - 16
+
+    -- 计算弹出位置：在触发按钮的正上方
+    local btnW = M.TOOL_BTN_W
+    local btnH = M.TOOL_BTN_H
+    local btnPad = M.TOOL_BTN_PAD
+    local popupBtnW = 38
+    local popupBtnH = 24
+    local popupPad = 4
+    local numItems = #group.tools
+    local popupW = numItems * (popupBtnW + popupPad) - popupPad + 12  -- 12=padding
+    local popupH = popupBtnH + 16  -- 16=top+bottom padding
+
+    -- 锚点X：基于触发槽位在工具栏中的实际位置
+    local order = M.GetToolOrder()
+    local areaStartX = M.GetToolbarStartX()
+    local scrollX = S.toolbarScrollX
+    local anchorX = areaStartX  -- 默认
+    for slotIdx, toolIdx in ipairs(order) do
+        local tool = C.TOOLS[toolIdx]
+        if tool and tool.submenu == S.submenuGroupId then
+            anchorX = areaStartX + (slotIdx - 1) * (btnW + btnPad) + scrollX + btnW * 0.5
+            break
+        end
+    end
+
+    local popupX = anchorX - popupW * 0.5
+    -- 边界约束
+    popupX = math.max(4, math.min(S.screenDesignW - popupW - 4, popupX))
+    local popupY = barY - popupH - 4
+
+    -- 保存弹出层位置供命中检测使用
+    S.submenuPopupX = popupX
+    S.submenuPopupY = popupY
+    S.submenuPopupW = popupW
+    S.submenuPopupH = popupH
+
+    -- 绘制弹出背景
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, popupX, popupY, popupW, popupH, 6)
+    nvgFillColor(vg, nvgRGBA(25, 28, 40, 240))
+    nvgFill(vg)
+
+    -- 边框
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, popupX, popupY, popupW, popupH, 6)
+    nvgStrokeColor(vg, nvgRGBA(80, 90, 120, 200))
+    nvgStrokeWidth(vg, 1)
+    nvgStroke(vg)
+
+    -- 底部指示三角（指向工具栏）
+    local triCx = anchorX
+    triCx = math.max(popupX + 10, math.min(popupX + popupW - 10, triCx))
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, triCx - 5, popupY + popupH)
+    nvgLineTo(vg, triCx + 5, popupY + popupH)
+    nvgLineTo(vg, triCx, popupY + popupH + 4)
+    nvgClosePath(vg)
+    nvgFillColor(vg, nvgRGBA(25, 28, 40, 240))
+    nvgFill(vg)
+
+    -- 绘制子选项按钮
+    local startBtnX = popupX + 6
+    local btnStartY = popupY + 8
+    nvgFontFace(vg, "sans")
+
+    for i, toolIdx in ipairs(group.tools) do
+        local tool = C.TOOLS[toolIdx]
+        if not tool then goto continue_sub end
+        local bx = startBtnX + (i - 1) * (popupBtnW + popupPad)
+        local by = btnStartY
+        local isSelected = (toolIdx == S.currentTool)
+
+        -- 选中高亮
+        if isSelected then
+            nvgBeginPath(vg)
+            nvgRoundedRect(vg, bx - 2, by - 2, popupBtnW + 4, popupBtnH + 4, 5)
+            nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 200))
+            nvgStrokeWidth(vg, 1.5)
+            nvgStroke(vg)
+        end
+
+        -- 按钮背景
+        local c = tool.color
+        local alpha = isSelected and 255 or 180
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, bx, by, popupBtnW, popupBtnH, 4)
+        nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], alpha))
+        nvgFill(vg)
+
+        -- 工具名
+        nvgFontSize(vg, 9)
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, nvgRGBA(255, 255, 255, 240))
+        nvgText(vg, bx + popupBtnW * 0.5, by + popupBtnH * 0.5, tool.name)
+
+        ::continue_sub::
+    end
+end
+
+-- ====================================================================
+-- HitTestSubmenuPopup - 检测子菜单弹出层点击
+-- ====================================================================
+---@return number|nil 命中的工具索引（C.TOOLS 中的索引）
+function M.HitTestSubmenuPopup(mx, my)
+    if not S.submenuOpen or not S.submenuGroupId then return nil end
+    local group = C.SUBMENU_GROUPS[S.submenuGroupId]
+    if not group then return nil end
+
+    local popupX = S.submenuPopupX or 0
+    local popupY = S.submenuPopupY or 0
+    local popupW = S.submenuPopupW or 0
+    local popupH = S.submenuPopupH or 0
+
+    -- 先检查是否在弹出层区域内
+    if mx < popupX or mx > popupX + popupW or my < popupY or my > popupY + popupH then
+        return nil
+    end
+
+    -- 检测各子选项按钮
+    local popupBtnW = 38
+    local popupBtnH = 24
+    local popupPad = 4
+    local startBtnX = popupX + 6
+    local btnStartY = popupY + 8
+
+    for i, toolIdx in ipairs(group.tools) do
+        local bx = startBtnX + (i - 1) * (popupBtnW + popupPad)
+        local by = btnStartY
+        if mx >= bx and mx < bx + popupBtnW and my >= by and my < by + popupBtnH then
+            return toolIdx
+        end
+    end
+    return nil  -- 在弹出层内但未命中按钮
+end
+
+-- ====================================================================
+-- IsInsideSubmenuPopup - 检测点击是否在子菜单弹出层区域内（含三角）
+-- ====================================================================
+function M.IsInsideSubmenuPopup(mx, my)
+    if not S.submenuOpen then return false end
+    local popupX = S.submenuPopupX or 0
+    local popupY = S.submenuPopupY or 0
+    local popupW = S.submenuPopupW or 0
+    local popupH = S.submenuPopupH or 0
+    -- 扩大点区域（含三角和少量margin）
+    return mx >= popupX - 2 and mx <= popupX + popupW + 2
+       and my >= popupY - 2 and my <= popupY + popupH + 6
 end
 
 ---@return number|nil 命中的颜色分组索引

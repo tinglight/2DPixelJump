@@ -21,7 +21,7 @@ local ZOOM_FACTOR = C.ZOOM_FACTOR
 local ZOOM_MIN = C.ZOOM_MIN
 local ZOOM_MAX = C.ZOOM_MAX
 local TOOLS = C.TOOLS
-local LIGHT_TOOL_INDEX = 9
+local LIGHT_TOOL_INDEX = C.LIGHT_TOOL_INDEX
 
 local M = {}
 
@@ -476,6 +476,28 @@ function M.HandleMouseDown(button, mx, my)
     if S.editorMode == MODE.WORLDMAP then
         HandleWorldMapClick(button, mx, my)
         return
+    end
+
+    -- 子菜单弹出层处理（优先级最高）
+    if S.submenuOpen and button == MOUSEB_LEFT then
+        local hitToolIdx = Toolbar.HitTestSubmenuPopup(mx, my)
+        if hitToolIdx then
+            -- 选中子菜单中的工具
+            S.currentTool = hitToolIdx
+            S.interactMode = INTERACT.DRAW
+            S.submenuOpen = false
+            S.submenuGroupId = nil
+            S.ClearSelection()
+            return
+        end
+        -- 点击在弹出层外部 → 关闭子菜单
+        if not Toolbar.IsInsideSubmenuPopup(mx, my) then
+            S.submenuOpen = false
+            S.submenuGroupId = nil
+            -- 不 return，继续正常处理（可能点击了工具栏其他位置）
+        else
+            return  -- 在弹出层内但未命中按钮，吞掉事件
+        end
     end
 
     -- 对话框（优先，阻塞其他交互）
@@ -954,11 +976,29 @@ function HandleLeftRelease(mx, my)
             local order = Toolbar.GetToolOrder()
             local toolIdx = order[slotIdx]
             if toolIdx then
-                local prevTool = S.currentTool
-                S.currentTool = toolIdx
-                S.interactMode = INTERACT.DRAW
-                SwitchToHiddenWallTool(toolIdx, prevTool)
-                S.ClearSelection()
+                local tool = C.TOOLS[toolIdx]
+                -- 有子菜单的工具：展开子菜单
+                if tool and tool.submenu and C.SUBMENU_GROUPS[tool.submenu] then
+                    if S.submenuOpen and S.submenuGroupId == tool.submenu then
+                        -- 再次点击同一组 → 关闭
+                        S.submenuOpen = false
+                        S.submenuGroupId = nil
+                    else
+                        S.submenuOpen = true
+                        S.submenuGroupId = tool.submenu
+                        S.submenuSlotIdx = slotIdx
+                    end
+                else
+                    -- 普通工具：直接选中
+                    local prevTool = S.currentTool
+                    S.currentTool = toolIdx
+                    S.interactMode = INTERACT.DRAW
+                    SwitchToHiddenWallTool(toolIdx, prevTool)
+                    S.ClearSelection()
+                    -- 关闭子菜单
+                    S.submenuOpen = false
+                    S.submenuGroupId = nil
+                end
             end
         end
         return
