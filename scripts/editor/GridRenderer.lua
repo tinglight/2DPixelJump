@@ -288,6 +288,80 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             nvgFill(vg)
         end
         ::skipLadder::
+
+    elseif base == TILE.PIPE then
+        -- 5x5 管道：只由左上角锚点绘制整体
+        local isAnchor = true
+        if col > 1 then
+            local leftVal = S.levelData[row][col - 1]
+            if TileUtils.GetTileType(leftVal) == TILE.PIPE then isAnchor = false end
+        end
+        if isAnchor and row > 1 then
+            local topVal = S.levelData[row - 1][col]
+            if TileUtils.GetTileType(topVal) == TILE.PIPE then isAnchor = false end
+        end
+        if not isAnchor then goto skipPipe end
+        do
+            local switchGroup, waterTypeIndex = TileUtils.ParsePipeValue(S.levelData[row][col])
+            local wColor = C.PIPE_WATER_COLORS[C.PIPE_WATER_TYPES[waterTypeIndex]]
+                or C.PIPE_WATER_COLORS[TILE.WATER]
+            local PW = zGrid * C.PIPE_WIDTH
+            local PH = zGrid * C.PIPE_HEIGHT
+
+            local cx = px + PW * 0.5
+            local cy = py + PH * 0.5
+            local outerR = math.min(PW, PH) * 0.45
+
+            -- 管壁外圈（大圆形金属管，无底板背景）
+            nvgBeginPath(vg)
+            nvgCircle(vg, cx, cy, outerR)
+            nvgFillColor(vg, nvgRGBA(65, 70, 80, 255))
+            nvgFill(vg)
+
+            -- 管壁中圈（立体层次）
+            nvgBeginPath(vg)
+            nvgCircle(vg, cx, cy, outerR * 0.88)
+            nvgFillColor(vg, nvgRGBA(80, 85, 98, 255))
+            nvgFill(vg)
+
+            -- 顶部高光弧线（金属光泽）
+            nvgBeginPath(vg)
+            nvgArc(vg, cx, cy, outerR * 0.82, -2.5, -0.6, 1)
+            nvgStrokeColor(vg, nvgRGBA(140, 145, 160, 180))
+            nvgStrokeWidth(vg, 2.0 * S.zoomLevel)
+            nvgStroke(vg)
+
+            -- 管口黑洞（圆形深洞）
+            nvgBeginPath(vg)
+            nvgCircle(vg, cx, cy, outerR * 0.62)
+            nvgFillColor(vg, nvgRGBA(10, 12, 18, 255))
+            nvgFill(vg)
+
+            -- 管口内静态水面（底部积水弧）
+            local waterR = outerR * 0.55
+            nvgBeginPath(vg)
+            nvgArc(vg, cx, cy, waterR, 0.5, 2.64, 1)
+            nvgClosePath(vg)
+            nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 160))
+            nvgFill(vg)
+
+            -- 外圈轮廓
+            nvgBeginPath(vg)
+            nvgCircle(vg, cx, cy, outerR)
+            nvgStrokeColor(vg, nvgRGBA(35, 38, 45, 255))
+            nvgStrokeWidth(vg, 1.5 * S.zoomLevel)
+            nvgStroke(vg)
+
+            -- 开关组指示器
+            if switchGroup > 0 then
+                local gc = C.GROUP_COLORS[switchGroup] or C.GROUP_COLORS[1]
+                nvgBeginPath(vg)
+                nvgCircle(vg, px + PW - 5 * S.zoomLevel, py + 5 * S.zoomLevel, 3 * S.zoomLevel)
+                nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], 220))
+                nvgFill(vg)
+            end
+        end
+        ::skipPipe::
     end
 end
 

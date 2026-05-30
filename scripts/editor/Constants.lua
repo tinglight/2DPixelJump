@@ -49,6 +49,7 @@ M.TILE = {
     LADDER       = 12,
     SOLID_PILLAR = 13,
     CHECKPOINT   = 14,
+    PIPE         = 15,
 }
 
 -- ====================================================================
@@ -134,6 +135,8 @@ M.TOOLS = {
         submenu = "water" },
     { id = "BLACK_WATER", tile = M.TILE.BLACK_WATER, name = "黑水", color = {100, 100, 110, 255}, group = "trap",
         submenu = "water" },
+    { id = "PIPE", tile = M.TILE.PIPE, name = "水管", color = {62, 67, 78, 255}, group = "trap",
+        submenu = "water" },
     { id = "SWITCH",      tile = M.TILE.SWITCH,      name = "开关", color = {200, 200, 50, 255},  group = "puzzle" },
     { id = "GATE",        tile = M.TILE.GATE,        name = "门",   color = {150, 100, 200, 255}, group = "puzzle" },
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
@@ -142,8 +145,8 @@ M.TOOLS = {
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
 }
 
-M.LIGHT_TOOL_INDEX = 15
-M.HIDDEN_WALL_TOOL_INDEX = 12
+M.LIGHT_TOOL_INDEX = 16
+M.HIDDEN_WALL_TOOL_INDEX = 13
 
 -- ====================================================================
 -- 子菜单分组定义
@@ -172,6 +175,33 @@ end
 -- ====================================================================
 M.WATER_ENERGY_DRAIN_PER_SEC = 10    -- 普通水：每秒消耗能量（像素数）
 M.BLACK_WATER_SPEED_MULT = 2.5       -- 黑水：移动tick乘数（越大越慢）
+
+-- ====================================================================
+-- 管道系统常量
+-- ====================================================================
+M.PIPE_WIDTH  = 5              -- 管道宽度(格)
+M.PIPE_HEIGHT = 5              -- 管道高度(格)
+M.PIPE_EMIT_RATE    = 55       -- 粒子发射速率(个/秒)
+M.PIPE_PARTICLE_MAX = 120      -- 最大粒子数
+M.PIPE_GRAVITY      = 280      -- 粒子重力加速度(px/s²)
+M.PIPE_INITIAL_VY   = 70       -- 粒子初始下落速度(px/s)
+M.PIPE_SPLASH_COUNT = 3        -- 着水溅射粒子数
+M.PIPE_SPREAD_X     = 30       -- 水平扩散范围(px)
+M.PIPE_STREAM_WIDTH = 40       -- 水柱宽度(px)
+
+-- 管道水类型索引映射
+M.PIPE_WATER_TYPES = {
+    [1] = M.TILE.WATER,
+    [2] = M.TILE.POISON_WATER,
+    [3] = M.TILE.BLACK_WATER,
+}
+
+-- 管道水颜色表
+M.PIPE_WATER_COLORS = {
+    [M.TILE.WATER]        = { 60, 140, 255 },
+    [M.TILE.POISON_WATER] = { 50, 220, 80 },
+    [M.TILE.BLACK_WATER]  = { 100, 100, 110 },
+}
 
 -- ====================================================================
 -- 难度系统

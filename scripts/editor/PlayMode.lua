@@ -8,6 +8,7 @@ local FlameRenderer = require("editor.FlameRenderer")
 local Undo = require("editor.UndoSystem")
 local CrossLevel = require("editor.CrossLevel")
 local SolidRenderer = require("SolidRenderer")
+local PipeSystem = require("editor.PipeSystem")
 
 local M = {}
 
@@ -324,6 +325,7 @@ function M.Update(dt)
     if input:GetKeyPress(KEY_ESCAPE) then
         -- 退出试玩：清理篝火光源和存档点状态
         CleanupCheckpointLight()
+        PipeSystem.StopSound()
         if S.editorMode == C.MODE_PLAY then
             S.editorMode = C.MODE_EDIT
             S.SetMessage("返回编辑模式", 1.5)
@@ -367,6 +369,27 @@ function M.Update(dt)
         end
     else
         S.play.waterDrainAccum = 0
+    end
+
+    PipeSystem.Update(dt)
+
+    -- 管道水流碰撞玩家
+    if S.play.alive then
+        local pipeHitType = PipeSystem.CheckPlayerHit()
+        if pipeHitType then
+            local tileType = C.PIPE_WATER_TYPES[pipeHitType]
+            if tileType == C.TILE.POISON_WATER then
+                -- 毒水：立即死亡
+                S.play.alive = false
+                S.play.deathTimer = 0
+            elseif tileType == C.TILE.WATER then
+                -- 普通水：与站在水中同效果（消耗能量）
+                S.play.inWater = true
+            elseif tileType == C.TILE.BLACK_WATER then
+                -- 黑水：减速效果
+                S.play.inBlackWater = true
+            end
+        end
     end
 
     FogOfWar.UpdateTweens(dt)
@@ -537,8 +560,22 @@ function M.AgeFallParticles(dt)
 end
 
 function M.HandleMovementInput(dt)
-    -- 梯子上禁止左右移动，只有接触地面才能水平移动
+    -- 攀爬中：仅允许水平移动到有地面支撑的位置（从梯子顶部走上平台）
     if S.play.isClimbing then
+        local curLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
+        local curRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
+        local dir = 0
+        if curLeft and not curRight then dir = -1
+        elseif curRight and not curLeft then dir = 1 end
+        if dir ~= 0 then
+            local newX = S.play.gridX + dir
+            if not M.Collides(newX, S.play.gridY) and M.OnGround(newX, S.play.gridY) then
+                S.play.gridX = newX
+                S.play.isClimbing = false
+                S.play.climbTimer = 0
+                S.play.facingRight = (dir > 0)
+            end
+        end
         S.play.isMoving = false
         S.play.moveAnimTime = 0
         S.prevPlayLeft = false
@@ -585,7 +622,9 @@ end
 
 function M.HandleJumpInput()
     if input:GetKeyPress(KEY_SPACE) then
-        if S.play.isOnGround and not S.play.isJumping and not S.play.isClimbing then
+        -- 在梯子范围内一律禁止跳跃（无论是否处于攀爬状态）
+        if S.play.isOnGround and not S.play.isJumping and not S.play.isClimbing
+            and not M.IsOnLadder(S.play.gridX, S.play.gridY) then
             S.play.isJumping = true
             S.play.jumpGridsRemain = M.CalcJump()
             S.play.isOnGround = false
@@ -629,6 +668,11 @@ function M.HandleClimbInput(dt)
                 local newY = S.play.gridY + dir
                 if not M.Collides(S.play.gridX, newY) then
                     S.play.gridY = newY
+                    -- 移动后超出梯子范围：退出攀爬（走上平台）
+                    if not M.IsOnLadder(S.play.gridX, newY) then
+                        S.play.isClimbing = false
+                        S.play.climbTimer = 0
+                    end
                 end
             end
         else
@@ -672,6 +716,17 @@ end
 
 function M.ProcessFallTick(dt)
     if not M.OnGround(S.play.gridX, S.play.gridY) then
+        -- 在梯子范围内：立即进入攀爬，不掉落
+        if M.IsOnLadder(S.play.gridX, S.play.gridY) then
+            S.play.isClimbing = true
+            S.play.isJumping = false
+            S.play.fallTickCurrent = C.PLAY_FALL_BASE
+            S.play.fallGridCount = 0
+            S.play.fallTimer = 0
+            S.play.fallAnimTime = 0
+            S.play.climbTimer = 0
+            return
+        end
         S.play.isOnGround = false
         S.play.fallTimer = S.play.fallTimer + dt
         S.play.fallAnimTime = S.play.fallAnimTime + dt
@@ -705,6 +760,17 @@ function M.ApplyFallOneGrid()
     end
     if not M.Collides(S.play.gridX, newY) then
         S.play.gridY = newY
+        -- 落到梯子上：立即进入攀爬，不扣能量
+        if M.IsOnLadder(S.play.gridX, newY) then
+            S.play.isClimbing = true
+            S.play.isJumping = false
+            S.play.fallTickCurrent = C.PLAY_FALL_BASE
+            S.play.fallGridCount = 0
+            S.play.fallTimer = 0
+            S.play.fallAnimTime = 0
+            S.play.climbTimer = 0
+            return
+        end
         S.play.fallTickCurrent = math.max(C.PLAY_FALL_MIN, S.play.fallTickCurrent - C.PLAY_FALL_ACCEL)
         S.play.fallGridCount = S.play.fallGridCount + 1
         if S.play.fallGridCount >= S.playerParams.maxFallGrids then
@@ -1071,6 +1137,7 @@ local function ResetPlayState()
     local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
     S.playCameraY = math.max(boundTopPx, math.min(spawnY - viewH * 0.5, camMaxY))
     M.InitPlayPixels()
+    PipeSystem.Init()
 end
 
 ------------------------------------------------------------
@@ -1253,6 +1320,7 @@ function M.Draw()
     M.DrawBackground(vg)
     local startCol, endCol = M.DrawGrid(vg)
     M.DrawTiles(vg, startCol, endCol)
+    PipeSystem.DrawParticles(vg, S.playCameraX, S.playCameraY)
     FlameRenderer.UpdateFlameAnim()
     FlameRenderer.Draw()
     CrossLevel.Draw(vg, S.playCameraX, S.playCameraY)
@@ -1383,6 +1451,8 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawLadderTile(vg, px, py, row, col)
     elseif base == C.TILE.CHECKPOINT then
         M.DrawCheckpointTile(vg, px, py, row, col)
+    elseif base == C.TILE.PIPE then
+        M.DrawPipeTile(vg, px, py, row, col)
     end
 end
 
@@ -2241,6 +2311,26 @@ function M.DrawCheckpointTile(vg, px, py, row, col)
             nvgFill(vg)
         end
     end
+end
+
+-- ====================================================================
+-- 管道渲染（5x5 锚点检测 + PipeSystem 绘制）
+-- ====================================================================
+function M.DrawPipeTile(vg, px, py, row, col)
+    -- 只由左上角锚点绘制整体
+    if col > 1 then
+        local leftVal = S.levelData[row][col - 1]
+        if TileUtils.GetTileType(leftVal) == C.TILE.PIPE then return end
+    end
+    if row > 1 then
+        local topVal = S.levelData[row - 1][col]
+        if TileUtils.GetTileType(topVal) == C.TILE.PIPE then return end
+    end
+    -- 调用 PipeSystem 绘制管道主体
+    local val = S.levelData[row][col]
+    local switchGroup, waterTypeIndex = TileUtils.ParsePipeValue(val)
+    local pipe = { switchGroup = switchGroup, waterTypeIndex = waterTypeIndex, col = col, row = row }
+    PipeSystem.DrawPipe(vg, px, py, pipe)
 end
 
 return M
