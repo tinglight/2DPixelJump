@@ -120,4 +120,26 @@ function M.DetectBoundEdge(mx, my, camBound, cameraX, cameraY, zoomLevel, screen
     return C.BOUND_EDGE_NONE
 end
 
+--- 解析管道地块值，返回开关组和水类型索引
+--- 存储格式: (switchGroup * 10 + waterTypeIndex) * 100 + PIPE
+---@param value number
+---@return number switchGroup
+---@return number waterTypeIndex
+function M.ParsePipeValue(value)
+    if not value then return 0, 1 end
+    local encoded = math.floor(value / 100)
+    local switchGroup = math.floor(encoded / 10)
+    local waterTypeIndex = encoded % 10
+    if waterTypeIndex < 1 then waterTypeIndex = 1 end
+    return switchGroup, waterTypeIndex
+end
+
+--- 构建管道地块值
+---@param switchGroup number
+---@param waterTypeIndex number
+---@return number
+function M.MakePipeValue(switchGroup, waterTypeIndex)
+    return (switchGroup * 10 + waterTypeIndex) * 100 + TILE.PIPE
+end
+
 return M

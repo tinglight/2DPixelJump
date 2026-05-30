@@ -28,6 +28,8 @@ function M.PlaceTile(col, row)
         M.PlaceHiddenWall(col, row)
     elseif tileType == TILE.LADDER then
         M.PlaceLadder(col, row)
+    elseif tileType == TILE.PIPE then
+        M.PlacePipe(col, row)
     else
         M.PlaceSimple(col, row, tileType)
     end
@@ -115,6 +117,29 @@ function M.PlaceLadder(col, row)
             if oldVal ~= TILE.LADDER then
                 S.levelData[row][c] = TILE.LADDER
                 Undo.RecordTileChange(c, row, oldVal, TILE.LADDER)
+            end
+        end
+    end
+end
+
+--- 放置管道（5x5区域）
+---@param col number
+---@param row number
+function M.PlacePipe(col, row)
+    local pw = C.PIPE_WIDTH
+    local ph = C.PIPE_HEIGHT
+    -- 确保不超出边界
+    if col + pw - 1 > S.MAP_COLS or row + ph - 1 > S.MAP_ROWS then return end
+    -- 构建管道值（带开关组和水类型）
+    local newVal = TileUtils.MakePipeValue(S.currentGroup, 1)
+    for dy = 0, ph - 1 do
+        for dx = 0, pw - 1 do
+            local c = col + dx
+            local r = row + dy
+            local oldVal = S.levelData[r][c]
+            if oldVal ~= newVal then
+                S.levelData[r][c] = newVal
+                Undo.RecordTileChange(c, r, oldVal, newVal)
             end
         end
     end

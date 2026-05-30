@@ -8,6 +8,8 @@ local FlameRenderer = require("editor.FlameRenderer")
 local Undo = require("editor.UndoSystem")
 local CrossLevel = require("editor.CrossLevel")
 local SolidRenderer = require("SolidRenderer")
+local PipeSystem = require("editor.PipeSystem")
+local PauseMenu = require("PauseMenu")
 
 local M = {}
 
@@ -106,6 +108,7 @@ function M.IsSolid(col, row)
     if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then return true end
     if base == C.TILE.GATE and not S.play.switchState[group] then return true end
     if base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then return true end
+    if base == C.TILE.FRAGILE and not S.play.fragileGone[row .. "_" .. col] then return true end
     return false
 end
 
@@ -321,18 +324,30 @@ function M.Update(dt)
         return
     end
 
-    if input:GetKeyPress(KEY_ESCAPE) then
-        -- 退出试玩：清理篝火光源和存档点状态
-        CleanupCheckpointLight()
-        if S.editorMode == C.MODE_PLAY then
-            S.editorMode = C.MODE_EDIT
-            S.SetMessage("返回编辑模式", 1.5)
+    -- ESC 统一由 InputHandler.HandleKeyDown 处理返回主菜单
+
+    -- 暂停时跳过游戏逻辑
+    if PauseMenu.IsPaused() then
+        return
+    end
+
+    if false then -- ESC 已由 InputHandler 统一处理，此分支保留结构但不执行
+        if S.fromMainMenu then
+            PauseMenu.Toggle()
             return
-        elseif S.editorMode == C.MODE_WORLDPLAY then
-            S.editorMode = C.MODE_WORLDMAP
-            WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
-            S.SetMessage("返回世界地图编辑", 1.5)
-            return
+        else
+            CleanupCheckpointLight()
+            PipeSystem.StopSound()
+            if S.editorMode == C.MODE_PLAY then
+                S.editorMode = C.MODE_EDIT
+                S.SetMessage("返回编辑模式", 1.5)
+                return
+            elseif S.editorMode == C.MODE_WORLDPLAY then
+                S.editorMode = C.MODE_WORLDMAP
+                WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
+                S.SetMessage("返回世界地图编辑", 1.5)
+                return
+            end
         end
     end
     if S.play.won then return end
@@ -347,6 +362,7 @@ function M.Update(dt)
     M.HandleProjectileInput()
     M.UpdateVerticalPhysics(dt)
     M.UpdateGroundRecovery(dt)
+    M.UpdateFragilePlatform(dt)
     CrossLevel.Update(dt)
     M.UpdateBonfireMessage(dt)
 
@@ -355,6 +371,26 @@ function M.Update(dt)
         S.play.deathTimer = 0
     end
     M.CheckTiles()
+    PipeSystem.Update(dt)
+
+    -- 管道水流碰撞玩家（在水效果判定之前设置标志）
+    if S.play.alive then
+        local pipeHitType = PipeSystem.CheckPlayerHit()
+        if pipeHitType then
+            local tileType = C.PIPE_WATER_TYPES[pipeHitType]
+            if tileType == C.TILE.POISON_WATER then
+                -- 毒水：立即死亡
+                S.play.alive = false
+                S.play.deathTimer = 0
+            elseif tileType == C.TILE.WATER then
+                -- 普通水：与站在水中同效果（消耗能量）
+                S.play.inWater = true
+            elseif tileType == C.TILE.BLACK_WATER then
+                -- 黑水：减速效果
+                S.play.inBlackWater = true
+            end
+        end
+    end
 
     -- 普通水：持续消耗能量
     if S.play.inWater and S.play.alive then
@@ -537,8 +573,22 @@ function M.AgeFallParticles(dt)
 end
 
 function M.HandleMovementInput(dt)
-    -- 梯子上禁止左右移动，只有接触地面才能水平移动
+    -- 攀爬中：仅允许水平移动到有地面支撑的位置（从梯子顶部走上平台）
     if S.play.isClimbing then
+        local curLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
+        local curRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
+        local dir = 0
+        if curLeft and not curRight then dir = -1
+        elseif curRight and not curLeft then dir = 1 end
+        if dir ~= 0 then
+            local newX = S.play.gridX + dir
+            if not M.Collides(newX, S.play.gridY) and M.OnGround(newX, S.play.gridY) then
+                S.play.gridX = newX
+                S.play.isClimbing = false
+                S.play.climbTimer = 0
+                S.play.facingRight = (dir > 0)
+            end
+        end
         S.play.isMoving = false
         S.play.moveAnimTime = 0
         S.prevPlayLeft = false
@@ -585,7 +635,9 @@ end
 
 function M.HandleJumpInput()
     if input:GetKeyPress(KEY_SPACE) then
-        if S.play.isOnGround and not S.play.isJumping and not S.play.isClimbing then
+        -- 在梯子范围内一律禁止跳跃（无论是否处于攀爬状态）
+        if S.play.isOnGround and not S.play.isJumping and not S.play.isClimbing
+            and not M.IsOnLadder(S.play.gridX, S.play.gridY) then
             S.play.isJumping = true
             S.play.jumpGridsRemain = M.CalcJump()
             S.play.isOnGround = false
@@ -629,6 +681,11 @@ function M.HandleClimbInput(dt)
                 local newY = S.play.gridY + dir
                 if not M.Collides(S.play.gridX, newY) then
                     S.play.gridY = newY
+                    -- 移动后超出梯子范围：退出攀爬（走上平台）
+                    if not M.IsOnLadder(S.play.gridX, newY) then
+                        S.play.isClimbing = false
+                        S.play.climbTimer = 0
+                    end
                 end
             end
         else
@@ -672,6 +729,17 @@ end
 
 function M.ProcessFallTick(dt)
     if not M.OnGround(S.play.gridX, S.play.gridY) then
+        -- 在梯子范围内：立即进入攀爬，不掉落
+        if M.IsOnLadder(S.play.gridX, S.play.gridY) then
+            S.play.isClimbing = true
+            S.play.isJumping = false
+            S.play.fallTickCurrent = C.PLAY_FALL_BASE
+            S.play.fallGridCount = 0
+            S.play.fallTimer = 0
+            S.play.fallAnimTime = 0
+            S.play.climbTimer = 0
+            return
+        end
         S.play.isOnGround = false
         S.play.fallTimer = S.play.fallTimer + dt
         S.play.fallAnimTime = S.play.fallAnimTime + dt
@@ -705,6 +773,17 @@ function M.ApplyFallOneGrid()
     end
     if not M.Collides(S.play.gridX, newY) then
         S.play.gridY = newY
+        -- 落到梯子上：立即进入攀爬，不扣能量
+        if M.IsOnLadder(S.play.gridX, newY) then
+            S.play.isClimbing = true
+            S.play.isJumping = false
+            S.play.fallTickCurrent = C.PLAY_FALL_BASE
+            S.play.fallGridCount = 0
+            S.play.fallTimer = 0
+            S.play.fallAnimTime = 0
+            S.play.climbTimer = 0
+            return
+        end
         S.play.fallTickCurrent = math.max(C.PLAY_FALL_MIN, S.play.fallTickCurrent - C.PLAY_FALL_ACCEL)
         S.play.fallGridCount = S.play.fallGridCount + 1
         if S.play.fallGridCount >= S.playerParams.maxFallGrids then
@@ -728,6 +807,168 @@ function M.UpdateGroundRecovery(dt)
     if recoverCount >= 1 then
         M.RecoverPixels(recoverCount)
         M.SyncFallGridCount()
+    end
+end
+
+------------------------------------------------------------
+-- 脆弱平台系统
+------------------------------------------------------------
+
+--- 从一个格子出发，用 BFS 找到所有连通的脆弱格子
+local function FloodFillFragile(startRow, startCol)
+    local visited = {}
+    local queue = { { startRow, startCol } }
+    visited[startRow .. "_" .. startCol] = true
+    local idx = 1
+    while idx <= #queue do
+        local r, c = queue[idx][1], queue[idx][2]
+        idx = idx + 1
+        -- 检查四邻
+        local neighbors = { {r-1, c}, {r+1, c}, {r, c-1}, {r, c+1} }
+        for _, nb in ipairs(neighbors) do
+            local nr, nc = nb[1], nb[2]
+            local key = nr .. "_" .. nc
+            if nr >= 1 and nr <= S.MAP_ROWS and nc >= 1 and nc <= S.MAP_COLS
+               and not visited[key] and not S.play.fragileGone[key] then
+                local val = S.levelData[nr][nc]
+                if val and TileUtils.GetTileType(val) == C.TILE.FRAGILE then
+                    visited[key] = true
+                    queue[#queue + 1] = { nr, nc }
+                end
+            end
+        end
+    end
+    return visited  -- set of "row_col" keys
+end
+
+--- 获取玩家脚下的脆弱平台连通集合（如果站在脆弱格子上）
+local function GetFragilePlatformUnderFeet()
+    if not S.play.isOnGround then return nil end
+    local s = M.PlayerGridSize()
+    local feetRow = S.play.gridY + s
+    for dx = 0, s - 1 do
+        local col = S.play.gridX + dx
+        if col >= 1 and col <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
+            local val = S.levelData[feetRow][col]
+            if val then
+                local base = TileUtils.GetTileType(val)
+                local key = feetRow .. "_" .. col
+                if base == C.TILE.FRAGILE and not S.play.fragileGone[key] then
+                    -- 找到一个脆弱格子，flood fill 整个连通平台
+                    return FloodFillFragile(feetRow, col)
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- 碎裂音效用独立 Scene 承载
+local fragileAudioScene = nil
+
+--- 播放碎裂音效
+local function PlayFragileCrumbleSound()
+    local sound = cache:GetResource("Sound", "audio/sfx/fragile_crumble.ogg")
+    if not sound then return end
+    sound.looped = false
+    if not fragileAudioScene then
+        fragileAudioScene = Scene()
+        fragileAudioScene:CreateComponent("Octree")
+    end
+    local node = fragileAudioScene:CreateChild("FragileSfx")
+    local src = node:CreateComponent("SoundSource")
+    src.soundType = "Effect"
+    src:Play(sound)
+    src.autoRemoveMode = REMOVE_NODE
+end
+
+--- 销毁一个脆弱平台（生成碎裂粒子）
+local function DestroyFragilePlatform(platformSet)
+    PlayFragileCrumbleSound()
+    for key, _ in pairs(platformSet) do
+        S.play.fragileGone[key] = true
+        -- 解析 row_col
+        local sep = key:find("_")
+        local row = tonumber(key:sub(1, sep - 1))
+        local col = tonumber(key:sub(sep + 1))
+        -- 为每个格子生成碎裂粒子
+        local cx = (col - 1) * C.GRID + C.GRID * 0.5
+        local cy = (row - 1) * C.GRID + C.GRID * 0.5
+        for _ = 1, 6 do
+            table.insert(S.play.fragileParticles, {
+                x = cx + (math.random() - 0.5) * C.GRID * 0.6,
+                y = cy + (math.random() - 0.5) * C.GRID * 0.6,
+                vx = (math.random() - 0.5) * 80,
+                vy = -(30 + math.random() * 50),
+                size = 1.5 + math.random() * 2.0,
+                life = 0.6 + math.random() * 0.4,
+                maxLife = 1.0,
+                gravity = 200 + math.random() * 60,
+                rot = math.random() * 6.28,
+                rotSpeed = (math.random() - 0.5) * 8,
+            })
+        end
+    end
+end
+
+--- 每帧检测脆弱平台状态（站上后离开即触发销毁）
+function M.UpdateFragilePlatform(dt)
+    -- 更新粒子
+    local i = 1
+    while i <= #S.play.fragileParticles do
+        local p = S.play.fragileParticles[i]
+        p.life = p.life - dt
+        if p.life <= 0 then
+            table.remove(S.play.fragileParticles, i)
+        else
+            p.vy = p.vy + p.gravity * dt
+            p.x = p.x + p.vx * dt
+            p.y = p.y + p.vy * dt
+            p.rot = p.rot + p.rotSpeed * dt
+            i = i + 1
+        end
+    end
+
+    -- 检测玩家脚下脆弱平台
+    local currentPlatform = GetFragilePlatformUnderFeet()
+
+    if S.play.fragilePrevPlatform and not currentPlatform then
+        -- 玩家离开了之前站的脆弱平台 → 销毁它
+        DestroyFragilePlatform(S.play.fragilePrevPlatform)
+        S.play.fragilePrevPlatform = nil
+    elseif S.play.fragilePrevPlatform and currentPlatform then
+        -- 检查是否还在同一个平台上（通过判断是否有交集）
+        local sameplatform = false
+        for key, _ in pairs(currentPlatform) do
+            if S.play.fragilePrevPlatform[key] then
+                sameplatform = true
+                break
+            end
+        end
+        if not sameplatform then
+            -- 离开旧平台跳到了新平台 → 销毁旧平台
+            DestroyFragilePlatform(S.play.fragilePrevPlatform)
+        end
+        S.play.fragilePrevPlatform = currentPlatform
+    else
+        S.play.fragilePrevPlatform = currentPlatform
+    end
+end
+
+--- 绘制脆弱平台碎裂粒子
+function M.DrawFragileParticles(vg)
+    for _, p in ipairs(S.play.fragileParticles) do
+        local alpha = math.floor(255 * (p.life / p.maxLife))
+        local px = p.x - S.playCameraX
+        local py = p.y - S.playCameraY
+        nvgSave(vg)
+        nvgTranslate(vg, px, py)
+        nvgRotate(vg, p.rot)
+        nvgBeginPath(vg)
+        nvgRect(vg, -p.size * 0.5, -p.size * 0.5, p.size, p.size)
+        nvgFillColor(vg, nvgRGBA(160, 130, 80, alpha))
+        nvgFill(vg)
+        nvgRestore(vg)
     end
 end
 
@@ -969,6 +1210,9 @@ function M.UpdateTransition(dt)
                     S.play.collected = {}
                     S.play.switchState = {}
                     S.play.hiddenWallRevealed = {}
+                    S.play.fragilePrevPlatform = nil
+                    S.play.fragileGone = {}
+                    S.play.fragileParticles = {}
                     -- 在 switchState 重置后，重新应用跨关卡开关状态
                     CrossLevel.ApplyCrossSwitches(S.worldPlayCurrentFile)
                     S.SetMessage("进入: " .. t.pendingFile, 1.5)
@@ -1046,6 +1290,9 @@ local function ResetPlayState()
     S.play.switchState = {}
     S.play.collected = {}
     S.play.hiddenWallRevealed = {}
+    S.play.fragilePrevPlatform = nil
+    S.play.fragileGone = {}
+    S.play.fragileParticles = {}
     S.play.inWater = false
     S.play.inBlackWater = false
     S.play.waterDrainAccum = 0
@@ -1071,6 +1318,7 @@ local function ResetPlayState()
     local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
     S.playCameraY = math.max(boundTopPx, math.min(spawnY - viewH * 0.5, camMaxY))
     M.InitPlayPixels()
+    PipeSystem.Init()
 end
 
 ------------------------------------------------------------
@@ -1167,6 +1415,10 @@ function M.Respawn()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
+    -- 重置脆弱平台
+    S.play.fragilePrevPlatform = nil
+    S.play.fragileGone = {}
+    S.play.fragileParticles = {}
     -- 相机立即跟随到重生点
     M.SnapCameraToPlayer()
 end
@@ -1253,6 +1505,8 @@ function M.Draw()
     M.DrawBackground(vg)
     local startCol, endCol = M.DrawGrid(vg)
     M.DrawTiles(vg, startCol, endCol)
+    M.DrawFragileParticles(vg)
+    PipeSystem.DrawParticles(vg, S.playCameraX, S.playCameraY)
     FlameRenderer.UpdateFlameAnim()
     FlameRenderer.Draw()
     CrossLevel.Draw(vg, S.playCameraX, S.playCameraY)
@@ -1383,6 +1637,10 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawLadderTile(vg, px, py, row, col)
     elseif base == C.TILE.CHECKPOINT then
         M.DrawCheckpointTile(vg, px, py, row, col)
+    elseif base == C.TILE.PIPE then
+        M.DrawPipeTile(vg, px, py, row, col)
+    elseif base == C.TILE.FRAGILE then
+        M.DrawFragileTile(vg, px, py, row, col)
     end
 end
 
@@ -2240,6 +2498,75 @@ function M.DrawCheckpointTile(vg, px, py, row, col)
             nvgFillColor(vg, nvgRGBA(60, 30, 15, math.floor(120 * emberFlick)))
             nvgFill(vg)
         end
+    end
+end
+
+-- ====================================================================
+-- 管道渲染（5x5 锚点检测 + PipeSystem 绘制）
+-- ====================================================================
+function M.DrawPipeTile(vg, px, py, row, col)
+    -- 只由左上角锚点绘制整体
+    if col > 1 then
+        local leftVal = S.levelData[row][col - 1]
+        if TileUtils.GetTileType(leftVal) == C.TILE.PIPE then return end
+    end
+    if row > 1 then
+        local topVal = S.levelData[row - 1][col]
+        if TileUtils.GetTileType(topVal) == C.TILE.PIPE then return end
+    end
+    -- 调用 PipeSystem 绘制管道主体
+    local val = S.levelData[row][col]
+    local switchGroup, waterTypeIndex = TileUtils.ParsePipeValue(val)
+    local pipe = { switchGroup = switchGroup, waterTypeIndex = waterTypeIndex, col = col, row = row }
+    PipeSystem.DrawPipe(vg, px, py, pipe)
+end
+
+------------------------------------------------------------
+-- 脆弱平台绘制（试玩模式）
+------------------------------------------------------------
+
+function M.DrawFragileTile(vg, px, py, row, col)
+    local key = row .. "_" .. col
+    if S.play.fragileGone[key] then return end  -- 已消失则不绘制
+
+    local G = C.GRID
+    -- 判断玩家是否正站在此平台上（给视觉反馈）
+    local onIt = false
+    if S.play.fragilePrevPlatform and S.play.fragilePrevPlatform[key] then
+        onIt = true
+    end
+
+    -- 基底色块（站在上面时颜色微变，表示即将碎裂）
+    local r1 = onIt and 155 or 175
+    local g1 = onIt and 125 or 145
+    local b1 = onIt and 75 or 95
+    nvgBeginPath(vg)
+    nvgRect(vg, px + 0.5, py + 0.5, G - 1, G - 1)
+    nvgFillColor(vg, nvgRGBA(r1, g1, b1, 255))
+    nvgFill(vg)
+
+    -- 顶部高光
+    nvgBeginPath(vg)
+    nvgRect(vg, px + 0.5, py + 0.5, G - 1, 2)
+    nvgFillColor(vg, nvgRGBA(215, 190, 135, 255))
+    nvgFill(vg)
+
+    -- 站在上面时显示裂纹
+    if onIt then
+        local cx = px + G * 0.5
+        local cy = py + G * 0.5
+        nvgStrokeColor(vg, nvgRGBA(70, 45, 10, 210))
+        nvgStrokeWidth(vg, 1.0)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx, py + 2)
+        nvgLineTo(vg, cx - 3, cy)
+        nvgLineTo(vg, cx + 2, cy + 4)
+        nvgLineTo(vg, cx, py + G - 2)
+        nvgStroke(vg)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx - 4, cy - 1)
+        nvgLineTo(vg, cx + 4, cy + 2)
+        nvgStroke(vg)
     end
 end
 
