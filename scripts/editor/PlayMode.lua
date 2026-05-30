@@ -43,6 +43,11 @@ local function DeepCopyLightSources(sources)
     return copy
 end
 
+--- 重新进入编辑器时清理 PlayMode 模块级状态
+function M.ResetModuleState()
+    savedEditorLightSources = nil
+end
+
 ---@param deps table { FogOfWar, CloudStorage, WorldMapEditor, LevelGenerator, cjson }
 function M.Inject(deps)
     FogOfWar = deps.FogOfWar
@@ -84,6 +89,17 @@ function M.Inject(deps)
     end
     FogOfWar.SetCurtainChecker(isCurtainAt)
     SolidRenderer.SetCurtainChecker(isCurtainAt)
+
+    -- 设置水方块检测器用于水面自发光
+    local function isWaterAt(col, row)
+        if col < 1 or col > S.MAP_COLS then return false end
+        if row < 1 or row > S.MAP_ROWS then return false end
+        local val = S.levelData[row] and S.levelData[row][col]
+        if not val or val == 0 then return false end
+        local base = TileUtils.GetTileType(val)
+        return base == C.TILE.WATER or base == C.TILE.POISON_WATER or base == C.TILE.BLACK_WATER
+    end
+    FogOfWar.SetWaterChecker(isWaterAt)
 end
 
 ------------------------------------------------------------

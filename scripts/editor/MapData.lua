@@ -11,6 +11,10 @@ local M = {}
 
 --- 初始化空白地图
 function M.InitEmptyMap()
+    -- 重置关卡文件名（防止重入后误覆盖旧存档）
+    S.currentLevelName = ""
+    S.currentLevelDisplayName = ""
+
     for row = 1, S.MAP_ROWS do
         S.levelData[row] = {}
         for col = 1, S.MAP_COLS do
@@ -26,6 +30,14 @@ function M.InitEmptyMap()
     FogOfWar.ClearAll()
     S.lightSources = FogOfWar.GetLightSources()
     S.selectedLightIndex = 0
+
+    -- 清理装饰物和背景图状态
+    S.decorations = {}
+    S.selectedDecorationIndex = 0
+    S.backgroundImage = ""
+    S.bgImageHandle = nil
+    S.bgImageAlpha = 0.5
+    S.bgStretchToCanvas = false
 end
 
 --- 调整画布大小（保留已有数据）

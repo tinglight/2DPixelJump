@@ -85,6 +85,13 @@ FogOfWar.SetCurtainChecker(function(col, row)
     return CurtainRenderer.IsCurtainAt(col, row, LevelManager.levelData,
         LevelGenerator.TILE, Physics.GetTileType)
 end)
+FogOfWar.SetWaterChecker(function(col, row)
+    if row < 1 or row > Config.MAP_ROWS or col < 1 or col > Config.MAP_COLS then return false end
+    local val = LevelManager.levelData[row] and LevelManager.levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = Physics.GetTileType(val)
+    return base == LevelGenerator.TILE.WATER or base == LevelGenerator.TILE.POISON_WATER or base == LevelGenerator.TILE.BLACK_WATER
+end)
 
 -- ====================================================================
 -- 游戏运行时状态

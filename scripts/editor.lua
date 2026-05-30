@@ -83,6 +83,11 @@ CloudPanel.Inject({
 })
 
 -- ====================================================================
+-- 重入防护标记
+-- ====================================================================
+local editorEventsSubscribed = false
+
+-- ====================================================================
 -- 分辨率计算
 -- ====================================================================
 local function RecalcLayout()
@@ -96,11 +101,63 @@ local function RecalcLayout()
 end
 
 -- ====================================================================
+-- 重入时的状态清理（从主菜单再次进入编辑器时调用）
+-- ====================================================================
+local function CleanupForReentry()
+    -- 删除旧 NanoVG 上下文（如果存在），避免泄漏
+    if S.vg then
+        nvgDelete(S.vg)
+        S.vg = nil
+    end
+
+    -- 重置关卡名称（防止新空地图覆盖旧存档）
+    S.currentLevelName = ""
+    S.currentLevelDisplayName = ""
+
+    -- 清理 NanoVG 图片句柄（旧上下文已销毁，句柄失效）
+    S.bgImageHandle = nil
+    if S.decorations then
+        for _, d in ipairs(S.decorations) do
+            d.handle = nil
+        end
+    end
+
+    -- 重置 PlayMode 模块级状态
+    PlayMode.ResetModuleState()
+
+    -- 重置存档点/世界试玩状态
+    S.checkpointFile = nil
+    S.checkpointCol = nil
+    S.checkpointRow = nil
+    S.checkpointActivated = {}
+    S.checkpointLightPos = nil
+    S.crossSwitchState = {}
+    S.worldPlayData = nil
+    S.worldPlayCurrentFile = nil
+    S.projectiles = {}
+
+    -- 重置编辑器模式为编辑
+    S.editorMode = C.MODE_EDIT
+    S.editorClock = 0
+
+    -- 重置死亡转场
+    S.deathTransition.active = false
+    S.deathTransition.phase = "none"
+    S.transition.active = false
+    S.transition.phase = "none"
+    S.panTransition.active = false
+end
+
+-- ====================================================================
 -- Start / Stop
 -- ====================================================================
 
 function Start()
     print("=== Level Editor v2 (Modular) ===")
+
+    -- 重入清理：销毁旧 NanoVG 上下文、重置残留状态
+    CleanupForReentry()
+
     RecalcLayout()
 
     S.vg = nvgCreate(1)
@@ -189,17 +246,22 @@ function Start()
     -- 注意：IME 文本输入仅在对话框打开时激活，避免全局显示 I-beam 光标
     -- 见 Dialogs.lua 中 Open*Dialog / ConfirmDialog / CancelDialog
 
-    -- 事件订阅
+    -- 事件订阅（NanoVGRender 绑定到新 vg 上下文，每次重入都需要重新订阅）
     SubscribeToEvent(S.vg, "NanoVGRender", "HandleNanoVGRender")
-    SubscribeToEvent("Update", "HandleUpdate")
-    SubscribeToEvent("KeyDown", "HandleKeyDown")
-    SubscribeToEvent("KeyUp", "HandleKeyUp")
-    SubscribeToEvent("TextInput", "HandleTextInput")
-    SubscribeToEvent("TextEditing", "HandleTextEditing")
-    SubscribeToEvent("MouseButtonDown", "HandleMouseDown")
-    SubscribeToEvent("MouseButtonUp", "HandleMouseUp")
-    SubscribeToEvent("MouseWheel", "HandleMouseWheel")
-    SubscribeToEvent("ScreenMode", "HandleScreenMode")
+
+    -- 全局事件只订阅一次，防止重入后事件触发多次
+    if not editorEventsSubscribed then
+        SubscribeToEvent("Update", "HandleUpdate")
+        SubscribeToEvent("KeyDown", "HandleKeyDown")
+        SubscribeToEvent("KeyUp", "HandleKeyUp")
+        SubscribeToEvent("TextInput", "HandleTextInput")
+        SubscribeToEvent("TextEditing", "HandleTextEditing")
+        SubscribeToEvent("MouseButtonDown", "HandleMouseDown")
+        SubscribeToEvent("MouseButtonUp", "HandleMouseUp")
+        SubscribeToEvent("MouseWheel", "HandleMouseWheel")
+        SubscribeToEvent("ScreenMode", "HandleScreenMode")
+        editorEventsSubscribed = true
+    end
 
     print("Level Editor ready. P=play test, Ctrl+S=save, Ctrl+L=load")
 end

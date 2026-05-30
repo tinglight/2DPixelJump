@@ -62,7 +62,7 @@ M.player = {
     hasLanternDash = false,   -- 是否已解锁灯间位移
 }
 
---- 重置玩家状态
+--- 重置玩家状态（运动状态归零，能力从 LevelManager.playerUnlocks 恢复）
 function M.ResetPlayer()
     local p = M.player
     p.isOnGround = false
@@ -82,8 +82,10 @@ function M.ResetPlayer()
     p.isMoving = false
     p.moveAnimTime = 0
     p.fallAnimTime = 0
-    p.hasFireball = false
-    p.hasLanternDash = false
+    -- 能力从持久进度状态恢复（不再硬置 false）
+    local LM = require("gameplay.LevelManager")
+    p.hasFireball = LM.playerUnlocks.hasFireball
+    p.hasLanternDash = LM.playerUnlocks.hasLanternDash
 end
 
 -- ====================================================================
@@ -444,6 +446,7 @@ function M.CheckItemCollection()
                     LevelManager.collectedItems[key] = true
                     LevelManager.levelData[row][col] = TILE.EMPTY
                     p.hasFireball = true
+                    LevelManager.playerUnlocks.hasFireball = true
                     -- 触发吸收动画
                     if Fireball then
                         local worldX = (col - 1) * Config.GRID + Config.GRID * 0.5

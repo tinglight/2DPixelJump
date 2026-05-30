@@ -55,6 +55,12 @@ M.checkpointCol = nil
 M.checkpointRow = nil
 M.checkpointFile = nil
 
+-- 永久解锁能力（跨死亡/篝火/跨图保留，仅新游戏重置）
+M.playerUnlocks = {
+    hasFireball = false,
+    hasLanternDash = false,
+}
+
 -- ====================================================================
 -- 世界地图连通
 -- ====================================================================
