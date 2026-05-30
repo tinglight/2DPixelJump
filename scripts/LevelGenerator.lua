@@ -18,16 +18,17 @@ local LevelGenerator = {}
 -- 常量
 -- ====================================================================
 local TILE = {
-    EMPTY       = 0,
-    SOLID       = 1,
-    SPAWN       = 2,
-    FUEL        = 3,
-    GOAL        = 4,
-    SPIKE       = 5,
-    SWITCH      = 6,
-    GATE        = 7,
-    HIDDEN_WALL = 8,
-    CHECKPOINT  = 9,
+    EMPTY        = 0,
+    SOLID        = 1,
+    SPAWN        = 2,
+    FUEL         = 3,
+    GOAL         = 4,
+    SPIKE        = 5,
+    SWITCH       = 6,
+    GATE         = 7,
+    HIDDEN_WALL  = 8,
+    CHECKPOINT   = 14,
+    SOLID_PILLAR = 13,
 }
 
 local BASE_JUMP = 3          -- 满火跳跃高度（格）

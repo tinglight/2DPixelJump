@@ -3,6 +3,7 @@
 ------------------------------------------------------------
 local Config = require("gameplay.Config")
 local GAME_VERSION = require("version")
+local SolidRenderer = require("SolidRenderer")
 
 local M = {}
 
@@ -237,14 +238,43 @@ end
 -- ====================================================================
 -- 背景
 -- ====================================================================
+local bgImageHandle_ = nil
+local bgImagePath_ = ""
+
 function M.DrawBackground()
     local vg = M.vg
+
+    -- 默认渐变背景
     local bg = nvgLinearGradient(vg, 0, 0, 0, M.screenDesignH,
         nvgRGBA(10, 5, 20, 255), nvgRGBA(30, 15, 40, 255))
     nvgBeginPath(vg)
     nvgRect(vg, 0, 0, M.screenDesignW, M.screenDesignH)
     nvgFillPaint(vg, bg)
     nvgFill(vg)
+
+    -- 背景图铺满整个地图区域
+    if Config.backgroundImage ~= "" then
+        -- 路径变化时重新加载
+        if bgImagePath_ ~= Config.backgroundImage then
+            bgImageHandle_ = nvgCreateImage(vg, Config.backgroundImage, 0)
+            bgImagePath_ = Config.backgroundImage
+        end
+        if bgImageHandle_ and bgImageHandle_ > 0 then
+            local GRID = Config.GRID
+            local mapW = Config.MAP_COLS * GRID
+            local mapH = Config.MAP_ROWS * GRID
+            local drawX = -M.cameraX
+            local drawY = 0
+            local imgPaint = nvgImagePattern(vg, drawX, drawY, mapW, mapH, 0, bgImageHandle_, 1.0)
+            nvgBeginPath(vg)
+            nvgRect(vg, drawX, drawY, mapW, mapH)
+            nvgFillPaint(vg, imgPaint)
+            nvgFill(vg)
+        end
+    else
+        bgImageHandle_ = nil
+        bgImagePath_ = ""
+    end
 end
 
 -- ====================================================================
@@ -299,6 +329,18 @@ end
 -- ====================================================================
 -- 地图
 -- ====================================================================
+
+-- 检查某格是否为实体方块（用于邻居检测）
+local function IsSolidAt(row, col)
+    if row < 1 or row > Config.MAP_ROWS or col < 1 or col > Config.MAP_COLS then
+        return false
+    end
+    local val = LevelManager.levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = Physics.GetTileType(val)
+    return base == 1 or base == 13  -- SOLID or SOLID_PILLAR
+end
+
 function M.DrawMap()
     local vg = M.vg
     local GRID = Config.GRID
@@ -316,19 +358,49 @@ function M.DrawMap()
             local px = (col - 1) * GRID - M.cameraX
             local py = (row - 1) * GRID
 
-            if base == TILE.SOLID then
-                nvgBeginPath(vg)
-                nvgRect(vg, px + 0.5, py + 0.5, GRID - 1, GRID - 1)
-                nvgFillColor(vg, nvgRGBA(40, 45, 55, 255))
-                nvgFill(vg)
-                nvgBeginPath(vg)
-                nvgRect(vg, px + 0.5, py + 0.5, GRID - 1, 2)
-                nvgFillColor(vg, nvgRGBA(60, 70, 80, 255))
-                nvgFill(vg)
-                nvgBeginPath(vg)
-                nvgRect(vg, px + 0.5, py + 0.5, 2, GRID - 1)
-                nvgFillColor(vg, nvgRGBA(55, 60, 70, 255))
-                nvgFill(vg)
+            if base == TILE.SOLID or base == TILE.SOLID_PILLAR then
+                -- 计算玩家光源对该格子的光照
+                local player = PlayerController.player
+                local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
+                local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
+                local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(
+                    col, row, player.gridX, player.gridY + 1, playerLightRadius)
+
+                -- 检查激活的篝火光源
+                local bLit, bLdx, bLdy = 0, 0, 0
+                for cpKey, activated in pairs(LevelManager.checkpointActivated) do
+                    if activated then
+                        local cpRow, cpCol = cpKey:match("(%d+)_(%d+)")
+                        cpRow, cpCol = tonumber(cpRow), tonumber(cpCol)
+                        if cpRow and cpCol then
+                            local lit2, ldx2, ldy2 = SolidRenderer.CalcPlayerLightDirection(
+                                col, row, cpCol, cpRow, 4)
+                            if lit2 > bLit then
+                                bLit, bLdx, bLdy = lit2, ldx2, ldy2
+                            end
+                        end
+                    end
+                end
+
+                -- 合并所有光源
+                local totalLit = math.min(1.0, pLit + bLit)
+                local totalLdx = pLdx * pLit + bLdx * bLit
+                local totalLdy = pLdy * pLit + bLdy * bLit
+                local len = math.sqrt(totalLdx * totalLdx + totalLdy * totalLdy)
+                if len > 0.01 then
+                    totalLdx = totalLdx / len
+                    totalLdy = totalLdy / len
+                end
+
+                -- 检测四邻是否有实体方块（用于青苔边缘）
+                local neighbors = {
+                    top    = IsSolidAt(row - 1, col),
+                    bottom = IsSolidAt(row + 1, col),
+                    left   = IsSolidAt(row, col - 1),
+                    right  = IsSolidAt(row, col + 1),
+                }
+
+                SolidRenderer.DrawSolid(vg, base, px, py, GRID, totalLit, totalLdx, totalLdy, col, row, neighbors)
 
             elseif base == TILE.SPAWN then
                 nvgBeginPath(vg)
@@ -445,18 +517,19 @@ function M.DrawMap()
 
             elseif base == TILE.HIDDEN_WALL then
                 if not LevelManager.hiddenWallRevealed[group] then
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px + 0.5, py + 0.5, GRID - 1, GRID - 1)
-                    nvgFillColor(vg, nvgRGBA(40, 45, 55, 255))
-                    nvgFill(vg)
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px + 0.5, py + 0.5, GRID - 1, 2)
-                    nvgFillColor(vg, nvgRGBA(60, 70, 80, 255))
-                    nvgFill(vg)
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px + 0.5, py + 0.5, 2, GRID - 1)
-                    nvgFillColor(vg, nvgRGBA(55, 60, 70, 255))
-                    nvgFill(vg)
+                    -- 隐藏墙未揭示时渲染为砖块样式（与 SOLID 相同外观）
+                    local player = PlayerController.player
+                    local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
+                    local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
+                    local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(
+                        col, row, player.gridX, player.gridY + 1, playerLightRadius)
+                    local neighbors = {
+                        top    = IsSolidAt(row - 1, col),
+                        bottom = IsSolidAt(row + 1, col),
+                        left   = IsSolidAt(row, col - 1),
+                        right  = IsSolidAt(row, col + 1),
+                    }
+                    SolidRenderer.DrawSolid(vg, TILE.SOLID, px, py, GRID, pLit, pLdx, pLdy, col, row, neighbors)
                 end
 
             elseif base == TILE.CHECKPOINT then

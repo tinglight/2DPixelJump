@@ -7,6 +7,7 @@ local TileUtils = require("editor.TileUtils")
 local FlameRenderer = require("editor.FlameRenderer")
 local Undo = require("editor.UndoSystem")
 local CrossLevel = require("editor.CrossLevel")
+local SolidRenderer = require("SolidRenderer")
 
 local M = {}
 
@@ -102,7 +103,7 @@ function M.IsSolid(col, row)
     if row > S.MAP_ROWS then return true end
     local val = S.levelData[row][col]
     local base, group = TileUtils.GetTileType(val)
-    if base == C.TILE.SOLID then return true end
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then return true end
     if base == C.TILE.GATE and not S.play.switchState[group] then return true end
     if base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then return true end
     return false
@@ -182,6 +183,7 @@ function M.ProcessTileAt(col, row)
         S.play.collected[key] = true
         M.RecoverPixels(math.floor(S.playTotalPixels * 0.4))
         M.SyncFallGridCount()
+        M.ShowBonfireMessage()
     elseif base == C.TILE.SWITCH and not S.play.collected[key] then
         S.play.collected[key] = true
         S.play.switchState[group] = not S.play.switchState[group]
@@ -191,6 +193,32 @@ function M.ProcessTileAt(col, row)
         end
     elseif base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then
         S.play.hiddenWallRevealed[group] = true
+    elseif base == C.TILE.CHECKPOINT and not S.checkpointActivated[key] then
+        -- 移除之前篝火的光源（带渐出动画）
+        if S.checkpointLightPos then
+            FogOfWar.RemoveLightAnimated(S.checkpointLightPos.col, S.checkpointLightPos.row)
+        end
+        -- 熄灭所有其他篝火，激活当前
+        S.checkpointActivated = {}
+        S.checkpointActivated[key] = true
+        S.checkpointCol = col
+        S.checkpointRow = row
+        -- 世界试玩模式记录关卡文件名
+        if S.editorMode == C.MODE_WORLDPLAY and S.worldPlayCurrentFile then
+            S.checkpointFile = S.worldPlayCurrentFile
+        else
+            S.checkpointFile = S.currentLevelName or nil
+        end
+        -- 为篝火添加战争迷雾光源（直径35，带渐入动画，不显示提灯图片）
+        local lightIdx = FogOfWar.AddLightAnimated(col, row, 35, 0.5)
+        local light = FogOfWar.GetLight(lightIdx)
+        if light then light.noLantern = true end
+        S.checkpointLightPos = { col = col, row = row }
+        S.lightSources = FogOfWar.GetLightSources()
+        -- 补满火焰值
+        M.RecoverPixels(S.playTotalPixels)
+        M.SyncFallGridCount()
+        S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
     end
 end
 
@@ -265,11 +293,37 @@ function M.MoveOneGrid(dir)
 end
 
 ------------------------------------------------------------
+-- 篝火光源清理（所有退出试玩路径共用）
+------------------------------------------------------------
+
+--- 清理篝火光源和存档点状态
+local function CleanupCheckpointLight()
+    if S.checkpointLightPos then
+        FogOfWar.RemoveLight(S.checkpointLightPos.col, S.checkpointLightPos.row)
+        S.checkpointLightPos = nil
+    end
+    S.checkpointActivated = {}
+    S.checkpointFile = nil
+    S.checkpointCol = nil
+    S.checkpointRow = nil
+end
+
+------------------------------------------------------------
 -- 帧更新
 ------------------------------------------------------------
 
 function M.Update(dt)
+    -- 死亡中由 deathPhase 自行处理 ESC，此处跳过
+    if not S.play.alive then
+        FogOfWar.UpdateTweens(dt)
+        M.UpdateDeathRespawn(dt)
+        M.UpdateBonfireMessage(dt)
+        return
+    end
+
     if input:GetKeyPress(KEY_ESCAPE) then
+        -- 退出试玩：清理篝火光源和存档点状态
+        CleanupCheckpointLight()
         if S.editorMode == C.MODE_PLAY then
             S.editorMode = C.MODE_EDIT
             S.SetMessage("返回编辑模式", 1.5)
@@ -282,10 +336,6 @@ function M.Update(dt)
         end
     end
     if S.play.won then return end
-    if not S.play.alive then
-        M.UpdateDeathRespawn(dt)
-        return
-    end
 
     S.playGameTime = S.playGameTime + dt
     M.UpdateFlameTime(dt)
@@ -298,6 +348,7 @@ function M.Update(dt)
     M.UpdateVerticalPhysics(dt)
     M.UpdateGroundRecovery(dt)
     CrossLevel.Update(dt)
+    M.UpdateBonfireMessage(dt)
 
     if S.playAlivePixels <= 0 then
         S.play.alive = false
@@ -318,6 +369,7 @@ function M.Update(dt)
         S.play.waterDrainAccum = 0
     end
 
+    FogOfWar.UpdateTweens(dt)
     M.UpdateCamera(dt)
 end
 
@@ -680,14 +732,27 @@ function M.UpdateGroundRecovery(dt)
 end
 
 function M.UpdateCamera(dt)
+    local zoom = S.playerParams.cameraZoom or 1.0
+
+    -- 水平跟随
     local boundLeftPx = (S.camBound.left - 1) * C.GRID
     local boundRightPx = S.camBound.right * C.GRID
-    local viewW = S.screenDesignW * (S.playerParams.cameraZoom or 1.0)
+    local viewW = S.playViewW * zoom
     local camMinX = boundLeftPx
     local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
-    local targetCam = (S.play.gridX - 1) * C.GRID - viewW * 0.35
-    targetCam = math.max(camMinX, math.min(targetCam, camMaxX))
-    S.playCameraX = S.playCameraX + (targetCam - S.playCameraX) * math.min(1, dt * 8)
+    local targetCamX = (S.play.gridX - 1) * C.GRID - viewW * 0.35
+    targetCamX = math.max(camMinX, math.min(targetCamX, camMaxX))
+    S.playCameraX = S.playCameraX + (targetCamX - S.playCameraX) * math.min(1, dt * 8)
+
+    -- 垂直跟随
+    local boundTopPx = (S.camBound.top - 1) * C.GRID
+    local boundBottomPx = S.camBound.bottom * C.GRID
+    local viewH = S.playViewH * zoom
+    local camMinY = boundTopPx
+    local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
+    local targetCamY = (S.play.gridY - 1) * C.GRID - viewH * 0.5
+    targetCamY = math.max(camMinY, math.min(targetCamY, camMaxY))
+    S.playCameraY = S.playCameraY + (targetCamY - S.playCameraY) * math.min(1, dt * 8)
 end
 
 ------------------------------------------------------------
@@ -760,6 +825,11 @@ function M.ApplyWorldLevelData(data)
 
     -- 世界试玩模式下不覆盖玩家参数，保持全局配置一致
     -- （全局 playerParams 已在 StartWorldPlayMode 时从 data/player_params.json 加载）
+
+    -- 背景图
+    S.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    S.bgImageHandle = nil  -- 切换关卡时清除缓存
+
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
 end
@@ -818,13 +888,25 @@ function M.PositionPlayerOnEntry(fromDirection, prevGx, prevGy)
 end
 
 function M.SnapCameraToPlayer()
+    local zoom = S.playerParams.cameraZoom or 1.0
+
+    -- 水平
     local boundLeftPx = (S.camBound.left - 1) * C.GRID
     local boundRightPx = S.camBound.right * C.GRID
-    local viewW = S.screenDesignW * (S.playerParams.cameraZoom or 1.0)
+    local viewW = S.playViewW * zoom
     local camMinX = boundLeftPx
     local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
-    local targetCam = (S.play.gridX - 1) * C.GRID - viewW * 0.35
-    S.playCameraX = math.max(camMinX, math.min(targetCam, camMaxX))
+    local targetCamX = (S.play.gridX - 1) * C.GRID - viewW * 0.35
+    S.playCameraX = math.max(camMinX, math.min(targetCamX, camMaxX))
+
+    -- 垂直
+    local boundTopPx = (S.camBound.top - 1) * C.GRID
+    local boundBottomPx = S.camBound.bottom * C.GRID
+    local viewH = S.playViewH * zoom
+    local camMinY = boundTopPx
+    local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
+    local targetCamY = (S.play.gridY - 1) * C.GRID - viewH * 0.5
+    S.playCameraY = math.max(camMinY, math.min(targetCamY, camMaxY))
 end
 
 function M.WorldPlayFindConnection(direction)
@@ -913,9 +995,12 @@ function M.DrawTransition()
     if not S.transition.active then return end
     if S.transition.alpha <= 0 then return end
     local vg = S.vg
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local w = S.playViewW * zoom
+    local h = S.playViewH * zoom
     local a = math.floor(S.transition.alpha * 255)
     nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, S.screenDesignW, S.screenDesignH)
+    nvgRect(vg, 0, 0, w, h)
     nvgFillColor(vg, nvgRGBA(0, 0, 0, a))
     nvgFill(vg)
 end
@@ -937,6 +1022,7 @@ end
 ------------------------------------------------------------
 
 local function ResetPlayState()
+    CleanupCheckpointLight()
     S.play.gridX = S.spawnCol
     S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
     S.play.isOnGround = false
@@ -951,6 +1037,9 @@ local function ResetPlayState()
     S.play.alive = true
     S.play.won = false
     S.play.deathTimer = 0
+    M.deathPhase = nil
+    M.deathPhaseTimer = 0
+    M.bonfireMsg.active = false
     S.play.isMoving = false
     S.play.moveAnimTime = 0
     S.play.fallAnimTime = 0
@@ -972,7 +1061,15 @@ local function ResetPlayState()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
-    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - S.screenDesignW * (S.playerParams.cameraZoom or 1.0) * 0.35)
+    local zoom = S.playerParams.cameraZoom or 1.0
+    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - S.playViewW * zoom * 0.35)
+    -- 垂直初始化
+    local boundTopPx = (S.camBound.top - 1) * C.GRID
+    local boundBottomPx = S.camBound.bottom * C.GRID
+    local viewH = S.playViewH * zoom
+    local spawnY = (S.spawnRow - C.PLAYER_GRID_H) * C.GRID
+    local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
+    S.playCameraY = math.max(boundTopPx, math.min(spawnY - viewH * 0.5, camMaxY))
     M.InitPlayPixels()
 end
 
@@ -980,13 +1077,64 @@ end
 -- 死亡后自动复活（不重置已收集道具和开关状态）
 ------------------------------------------------------------
 
-local DEATH_RESPAWN_DELAY = 0.8  -- 死亡后等待时间（秒）
+local CIRCLE_CLOSE_TIME = 0.6   -- 缩圈时间
+local BLACKOUT_TIME = 0.3       -- 全黑停顿时间
 
 function M.UpdateDeathRespawn(dt)
     S.play.deathTimer = S.play.deathTimer + dt
-    if S.play.deathTimer >= DEATH_RESPAWN_DELAY then
-        M.Respawn()
+
+    -- 首帧启动 deathPhase
+    if M.deathPhase == nil then
+        M.deathPhase = "circleClose"
+        M.deathPhaseTimer = 0
     end
+
+    M.deathPhaseTimer = M.deathPhaseTimer + dt
+
+    if M.deathPhase == "circleClose" then
+        if M.deathPhaseTimer >= CIRCLE_CLOSE_TIME then
+            M.deathPhase = "blackout"
+            M.deathPhaseTimer = 0
+        end
+    elseif M.deathPhase == "blackout" then
+        if M.deathPhaseTimer >= BLACKOUT_TIME then
+            M.deathPhase = "waitKey"
+            M.deathPhaseTimer = 0
+        end
+    elseif M.deathPhase == "waitKey" then
+        -- 等待任意键按下
+        if input:GetKeyPress(KEY_ESCAPE) then
+            -- ESC 返回编辑
+            CleanupCheckpointLight()
+            M.deathPhase = nil
+            M.deathPhaseTimer = 0
+            if S.editorMode == C.MODE_WORLDPLAY then
+                S.editorMode = C.MODE_WORLDMAP
+                WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
+            else
+                S.editorMode = C.MODE_EDIT
+            end
+            return
+        end
+        -- 任意其他键 → 复活
+        if input:GetNumTouches() > 0 or M.AnyKeyPressed() then
+            M.deathPhase = nil
+            M.deathPhaseTimer = 0
+            M.Respawn()
+        end
+    end
+end
+
+--- 检测是否有任意键被按下（不含ESC，已在上面处理）
+function M.AnyKeyPressed()
+    for i = KEY_A, KEY_Z do
+        if input:GetKeyPress(i) then return true end
+    end
+    if input:GetKeyPress(KEY_SPACE) then return true end
+    if input:GetKeyPress(KEY_RETURN) then return true end
+    if input:GetMouseButtonPress(MOUSEB_LEFT) then return true end
+    if input:GetMouseButtonPress(MOUSEB_RIGHT) then return true end
+    return false
 end
 
 function M.Respawn()
@@ -1107,7 +1255,7 @@ function M.Draw()
     M.DrawTiles(vg, startCol, endCol)
     FlameRenderer.UpdateFlameAnim()
     FlameRenderer.Draw()
-    CrossLevel.Draw(vg, S.playCameraX)
+    CrossLevel.Draw(vg, S.playCameraX, S.playCameraY)
     M.DrawFogOfWar(vg, startCol, endCol)
     M.DrawHUD(vg)
     M.DrawOverlays(vg)
@@ -1116,31 +1264,52 @@ end
 
 function M.DrawBackground(vg)
     local zoom = S.playerParams.cameraZoom or 1.0
-    local bgW = S.screenDesignW * zoom
-    local bgH = S.screenDesignH * zoom
+    local bgW = S.playViewW * zoom
+    local bgH = S.playViewH * zoom
     local bg = nvgLinearGradient(vg, 0, 0, 0, bgH,
         nvgRGBA(10, 5, 20, 255), nvgRGBA(30, 15, 40, 255))
     nvgBeginPath(vg)
     nvgRect(vg, 0, 0, bgW, bgH)
     nvgFillPaint(vg, bg)
     nvgFill(vg)
+
+    -- 背景图铺满 camBound 区域
+    if S.backgroundImage ~= "" then
+        if not S.bgImageHandle then
+            S.bgImageHandle = nvgCreateImage(vg, S.backgroundImage, 0)
+        end
+        if S.bgImageHandle and S.bgImageHandle > 0 then
+            local bx = (S.camBound.left - 1) * C.GRID - S.playCameraX
+            local by = (S.camBound.top - 1) * C.GRID - (S.playCameraY or 0)
+            local bw = (S.camBound.right - S.camBound.left + 1) * C.GRID
+            local bh = (S.camBound.bottom - S.camBound.top + 1) * C.GRID
+            local imgPaint = nvgImagePattern(vg, bx, by, bw, bh, 0, S.bgImageHandle, S.bgImageAlpha or 1.0)
+            nvgBeginPath(vg)
+            nvgRect(vg, bx, by, bw, bh)
+            nvgFillPaint(vg, imgPaint)
+            nvgFill(vg)
+        end
+    end
 end
 
 function M.DrawGrid(vg)
     local zoom = S.playerParams.cameraZoom or 1.0
-    local visibleW = S.screenDesignW * zoom
+    local visibleW = S.playViewW * zoom
+    local visibleH = S.playViewH * zoom
     local startCol = math.max(1, math.floor(S.playCameraX / C.GRID) + 1)
     local endCol = math.min(S.MAP_COLS, startCol + math.ceil(visibleW / C.GRID) + 2)
+    local startRow = math.max(1, math.floor(S.playCameraY / C.GRID) + 1)
+    local endRow = math.min(S.MAP_ROWS, startRow + math.ceil(visibleH / C.GRID) + 2)
 
     -- 细线
     nvgBeginPath(vg)
     for col = startCol, endCol + 1 do
         local x = (col - 1) * C.GRID - S.playCameraX
-        nvgMoveTo(vg, x, 0)
-        nvgLineTo(vg, x, S.MAP_ROWS * C.GRID)
+        nvgMoveTo(vg, x, (startRow - 1) * C.GRID - S.playCameraY)
+        nvgLineTo(vg, x, endRow * C.GRID - S.playCameraY)
     end
-    for row = 1, S.MAP_ROWS + 1 do
-        local y = (row - 1) * C.GRID
+    for row = startRow, endRow + 1 do
+        local y = (row - 1) * C.GRID - S.playCameraY
         nvgMoveTo(vg, (startCol - 1) * C.GRID - S.playCameraX, y)
         nvgLineTo(vg, endCol * C.GRID - S.playCameraX, y)
     end
@@ -1153,13 +1322,13 @@ function M.DrawGrid(vg)
     for col = startCol, endCol + 1 do
         if (col - 1) % 5 == 0 then
             local x = (col - 1) * C.GRID - S.playCameraX
-            nvgMoveTo(vg, x, 0)
-            nvgLineTo(vg, x, S.MAP_ROWS * C.GRID)
+            nvgMoveTo(vg, x, (startRow - 1) * C.GRID - S.playCameraY)
+            nvgLineTo(vg, x, endRow * C.GRID - S.playCameraY)
         end
     end
-    for row = 1, S.MAP_ROWS + 1 do
+    for row = startRow, endRow + 1 do
         if (row - 1) % 5 == 0 then
-            local y = (row - 1) * C.GRID
+            local y = (row - 1) * C.GRID - S.playCameraY
             nvgMoveTo(vg, (startCol - 1) * C.GRID - S.playCameraX, y)
             nvgLineTo(vg, endCol * C.GRID - S.playCameraX, y)
         end
@@ -1172,12 +1341,16 @@ function M.DrawGrid(vg)
 end
 
 function M.DrawTiles(vg, startCol, endCol)
-    for row = 1, S.MAP_ROWS do
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local visibleH = S.playViewH * zoom
+    local startRow = math.max(1, math.floor(S.playCameraY / C.GRID) + 1)
+    local endRow = math.min(S.MAP_ROWS, startRow + math.ceil(visibleH / C.GRID) + 2)
+    for row = startRow, endRow do
         for col = startCol, endCol do
             local val = S.levelData[row][col]
             if val ~= C.TILE.EMPTY and val ~= C.TILE.SPAWN then
                 local px = (col - 1) * C.GRID - S.playCameraX
-                local py = (row - 1) * C.GRID
+                local py = (row - 1) * C.GRID - S.playCameraY
                 local base, group = TileUtils.GetTileType(val)
                 M.DrawOneTile(vg, px, py, base, group, row, col)
             end
@@ -1186,8 +1359,8 @@ function M.DrawTiles(vg, startCol, endCol)
 end
 
 function M.DrawOneTile(vg, px, py, base, group, row, col)
-    if base == C.TILE.SOLID then
-        M.DrawSolidTile(vg, px, py)
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then
+        M.DrawSolidTileWithLight(vg, px, py, base, row, col)
     elseif base == C.TILE.FUEL then
         M.DrawFuelTile(vg, px, py, row, col)
     elseif base == C.TILE.GOAL then
@@ -1199,7 +1372,7 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
     elseif base == C.TILE.GATE then
         M.DrawGateTile(vg, px, py, group)
     elseif base == C.TILE.HIDDEN_WALL then
-        M.DrawHiddenWallTile(vg, px, py, group)
+        M.DrawHiddenWallTile(vg, px, py, group, row, col)
     elseif base == C.TILE.WATER then
         M.DrawWaterTile(vg, px, py, row, col)
     elseif base == C.TILE.POISON_WATER then
@@ -1208,6 +1381,8 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawBlackWaterTile(vg, px, py, row, col)
     elseif base == C.TILE.LADDER then
         M.DrawLadderTile(vg, px, py, row, col)
+    elseif base == C.TILE.CHECKPOINT then
+        M.DrawCheckpointTile(vg, px, py, row, col)
     end
 end
 
@@ -1224,6 +1399,31 @@ function M.DrawSolidTile(vg, px, py)
     nvgRect(vg, px + 0.5, py + 0.5, 2, C.GRID - 1)
     nvgFillColor(vg, nvgRGBA(55, 60, 70, 255))
     nvgFill(vg)
+end
+
+--- 带光源的像素碰撞渲染（试玩模式中使用）
+function M.DrawSolidTileWithLight(vg, px, py, tileType, row, col)
+    -- 计算玩家光源
+    local playerCol = S.play.gridX
+    local playerRow = S.play.gridY + 1
+    local flameRatio = S.playAlivePixels / math.max(1, S.playTotalPixels)
+    local playerRadius = (S.playerParams and S.playerParams.defaultLightDiameter or 6) * 0.5 * flameRatio
+    local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(col, row, playerCol, playerRow, playerRadius)
+
+    -- 计算放置的光源
+    local sLit, sLdx, sLdy = SolidRenderer.CalcLightDirection(col, row, S.lightSources)
+
+    -- 合并光源
+    local totalLit = math.min(1.0, pLit + sLit)
+    local totalLdx = pLdx * pLit + sLdx * sLit
+    local totalLdy = pLdy * pLit + sLdy * sLit
+    local len = math.sqrt(totalLdx * totalLdx + totalLdy * totalLdy)
+    if len > 0.01 then
+        totalLdx = totalLdx / len
+        totalLdy = totalLdy / len
+    end
+
+    SolidRenderer.DrawSolid(vg, tileType, px + 0.5, py + 0.5, C.GRID - 1, totalLit, totalLdx, totalLdy)
 end
 
 function M.DrawFuelTile(vg, px, py, row, col)
@@ -1327,9 +1527,13 @@ function M.DrawGateTile(vg, px, py, group)
     end
 end
 
-function M.DrawHiddenWallTile(vg, px, py, group)
+function M.DrawHiddenWallTile(vg, px, py, group, row, col)
     if S.play.hiddenWallRevealed[group] then return end
-    M.DrawSolidTile(vg, px, py)
+    if row and col then
+        M.DrawSolidTileWithLight(vg, px, py, C.TILE.SOLID, row, col)
+    else
+        M.DrawSolidTile(vg, px, py)
+    end
 end
 
 ------------------------------------------------------------
@@ -1644,7 +1848,7 @@ function M.DrawFogOfWar(vg, startCol, endCol)
         startRow = 1,
         endRow = S.MAP_ROWS,
         offsetX = S.playCameraX,
-        offsetY = 0,
+        offsetY = S.playCameraY,
         zoomLevel = 1.0,
         mapX = 0,
         mapY = 0,
@@ -1659,7 +1863,7 @@ function M.DrawFogOfWar(vg, startCol, endCol)
     FogOfWar.DrawLanterns(vg, {
         gridSize = C.GRID,
         offsetX = S.playCameraX,
-        offsetY = 0,
+        offsetY = S.playCameraY,
         zoomLevel = 1.0,
         mapX = 0,
         mapY = 0,
@@ -1671,8 +1875,10 @@ end
 ------------------------------------------------------------
 
 function M.DrawHUD(vg)
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local hudW = S.playViewW * zoom
     nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, S.screenDesignW, 22)
+    nvgRect(vg, 0, 0, hudW, 22)
     nvgFillColor(vg, nvgRGBA(0, 0, 0, 200))
     nvgFill(vg)
 
@@ -1693,11 +1899,13 @@ function M.DrawHUD(vg)
 end
 
 function M.DrawBackButton(vg)
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local hudW = S.playViewW * zoom
     local isWorldPlay = (S.editorMode == C.MODE_WORLDPLAY)
     local backBtnLabel = isWorldPlay and "返回世界" or "返回编辑"
     local backBtnW = isWorldPlay and 60 or 50
     local backBtnH = 16
-    local backBtnX = S.screenDesignW - backBtnW - 6
+    local backBtnX = hudW - backBtnW - 6
     local backBtnY = (22 - backBtnH) * 0.5
     nvgBeginPath(vg)
     nvgRoundedRect(vg, backBtnX, backBtnY, backBtnW, backBtnH, 3)
@@ -1716,10 +1924,106 @@ end
 
 function M.DrawWorldPlayFileName(vg)
     if S.editorMode ~= C.MODE_WORLDPLAY or not S.worldPlayCurrentFile then return end
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local hudW = S.playViewW * zoom
     nvgFontSize(vg, 9)
     nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
     nvgFillColor(vg, nvgRGBA(180, 220, 255, 200))
-    nvgText(vg, S.screenDesignW * 0.5, 3, S.worldPlayCurrentFile)
+    nvgText(vg, hudW * 0.5, 3, S.worldPlayCurrentFile)
+end
+
+------------------------------------------------------------
+-- 像素字体系统 (5x7 bitmap)
+------------------------------------------------------------
+
+local PIXEL_FONT = {
+    A = { "01110", "10001", "10001", "11111", "10001", "10001", "10001" },
+    B = { "11110", "10001", "10001", "11110", "10001", "10001", "11110" },
+    C = { "01110", "10001", "10000", "10000", "10000", "10001", "01110" },
+    D = { "11100", "10010", "10001", "10001", "10001", "10010", "11100" },
+    E = { "11111", "10000", "10000", "11110", "10000", "10000", "11111" },
+    F = { "11111", "10000", "10000", "11110", "10000", "10000", "10000" },
+    G = { "01110", "10001", "10000", "10111", "10001", "10001", "01110" },
+    H = { "10001", "10001", "10001", "11111", "10001", "10001", "10001" },
+    I = { "11111", "00100", "00100", "00100", "00100", "00100", "11111" },
+    K = { "10001", "10010", "10100", "11000", "10100", "10010", "10001" },
+    L = { "10000", "10000", "10000", "10000", "10000", "10000", "11111" },
+    M = { "10001", "11011", "10101", "10101", "10001", "10001", "10001" },
+    N = { "10001", "11001", "10101", "10011", "10001", "10001", "10001" },
+    O = { "01110", "10001", "10001", "10001", "10001", "10001", "01110" },
+    P = { "11110", "10001", "10001", "11110", "10000", "10000", "10000" },
+    R = { "11110", "10001", "10001", "11110", "10100", "10010", "10001" },
+    S = { "01111", "10000", "10000", "01110", "00001", "00001", "11110" },
+    T = { "11111", "00100", "00100", "00100", "00100", "00100", "00100" },
+    U = { "10001", "10001", "10001", "10001", "10001", "10001", "01110" },
+    W = { "10001", "10001", "10001", "10101", "10101", "11011", "10001" },
+    X = { "10001", "01010", "00100", "00100", "00100", "01010", "10001" },
+    Y = { "10001", "10001", "01010", "00100", "00100", "00100", "00100" },
+    [" "] = { "00000", "00000", "00000", "00000", "00000", "00000", "00000" },
+    [":"] = { "00000", "00100", "00100", "00000", "00100", "00100", "00000" },
+}
+
+--- 绘制像素字体文本（居中）
+---@param vg userdata
+---@param text string 大写英文+空格
+---@param cx number 中心X
+---@param cy number 中心Y
+---@param pixSize number 每像素块大小
+---@param r number
+---@param g number
+---@param b number
+---@param a number
+function M.DrawPixelText(vg, text, cx, cy, pixSize, r, g, b, a)
+    local gap = 1  -- 字间距(像素块)
+    local charW = 5
+    local charH = 7
+    local totalW = #text * (charW + gap) - gap
+    local startX = cx - totalW * pixSize * 0.5
+    local startY = cy - charH * pixSize * 0.5
+
+    nvgFillColor(vg, nvgRGBA(r, g, b, a))
+    for ci = 1, #text do
+        local ch = text:sub(ci, ci)
+        local glyph = PIXEL_FONT[ch]
+        if glyph then
+            local ox = startX + (ci - 1) * (charW + gap) * pixSize
+            for row = 1, charH do
+                local rowStr = glyph[row]
+                for col = 1, charW do
+                    if rowStr:sub(col, col) == "1" then
+                        nvgBeginPath(vg)
+                        nvgRect(vg, ox + (col - 1) * pixSize, startY + (row - 1) * pixSize, pixSize, pixSize)
+                        nvgFill(vg)
+                    end
+                end
+            end
+        end
+    end
+end
+
+------------------------------------------------------------
+-- 死亡过渡状态
+------------------------------------------------------------
+
+-- 阶段: nil=正常, "circleClose"=缩圈, "blackout"=全黑停顿, "waitKey"=等待按键
+M.deathPhase = nil
+M.deathPhaseTimer = 0
+
+-- 篝火点亮消息
+M.bonfireMsg = { active = false, timer = 0, duration = 1.8 }
+
+function M.ShowBonfireMessage()
+    M.bonfireMsg.active = true
+    M.bonfireMsg.timer = 0
+end
+
+function M.UpdateBonfireMessage(dt)
+    if M.bonfireMsg.active then
+        M.bonfireMsg.timer = M.bonfireMsg.timer + dt
+        if M.bonfireMsg.timer >= M.bonfireMsg.duration then
+            M.bonfireMsg.active = false
+        end
+    end
 end
 
 ------------------------------------------------------------
@@ -1728,46 +2032,215 @@ end
 
 function M.DrawOverlays(vg)
     local isWorldPlay = (S.editorMode == C.MODE_WORLDPLAY)
-    local escHint = isWorldPlay and "ESC:返回世界地图" or "ESC:返回编辑"
+    local escHint = isWorldPlay and "ESC:WORLD" or "ESC:EDIT"
 
     if not S.play.alive then
         M.DrawDeathOverlay(vg, escHint)
     elseif S.play.won then
         M.DrawWinOverlay(vg, escHint)
     end
+
+    M.DrawBonfireMessage(vg)
 end
 
 function M.DrawDeathOverlay(vg, escHint)
-    -- 根据 deathTimer 计算渐入透明度
-    local progress = math.min(S.play.deathTimer / 0.3, 1.0)  -- 0.3秒内渐入
-    local overlayAlpha = math.floor(150 * progress)
-    local textAlpha = math.floor(255 * progress)
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local w = S.playViewW * zoom
+    local h = S.playViewH * zoom
+    local centerX = w * 0.5
+    local centerY = h * 0.5
+    -- 使用视口对角线作为最大半径（避免过大导致卡顿）
+    local maxRadius = math.sqrt(w * w + h * h) * 0.5
 
-    nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, S.screenDesignW, S.screenDesignH)
-    nvgFillColor(vg, nvgRGBA(0, 0, 0, overlayAlpha))
-    nvgFill(vg)
-    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgFontSize(vg, 22)
-    nvgFillColor(vg, nvgRGBA(255, 60, 60, textAlpha))
-    nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.4, "FLAME OUT!")
-    nvgFontSize(vg, 11)
-    nvgFillColor(vg, nvgRGBA(255, 255, 255, math.floor(200 * progress)))
-    nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.52, escHint)
+    local phase = M.deathPhase
+    if phase == "circleClose" then
+        -- 缩圈: 0.6秒内从 maxRadius 缩到 0
+        local progress = math.min(M.deathPhaseTimer / 0.6, 1.0)
+        local radius = maxRadius * (1.0 - progress)
+        -- 用大矩形 + 圆形减去实现遮罩
+        nvgBeginPath(vg)
+        nvgRect(vg, -100, -100, w + 200, h + 200)
+        -- 顺时针大矩形 + 逆时针圆洞 = 环形遮罩
+        nvgPathWinding(vg, NVG_SOLID)
+        nvgBeginPath(vg)
+        nvgRect(vg, -100, -100, w + 200, h + 200)
+        if radius > 0.5 then
+            nvgCircle(vg, centerX, centerY, radius)
+            nvgPathWinding(vg, NVG_HOLE)
+        end
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 255))
+        nvgFill(vg)
+
+    elseif phase == "blackout" then
+        -- 全黑停顿 0.3秒
+        nvgBeginPath(vg)
+        nvgRect(vg, -100, -100, w + 200, h + 200)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 255))
+        nvgFill(vg)
+
+    elseif phase == "waitKey" then
+        -- 全黑 + 显示文本
+        nvgBeginPath(vg)
+        nvgRect(vg, -100, -100, w + 200, h + 200)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 255))
+        nvgFill(vg)
+
+        -- "YOU DIE" 像素字体
+        local pixSize = 3.0 * zoom
+        M.DrawPixelText(vg, "YOU DIE", centerX, centerY - 10 * zoom, pixSize, 255, 60, 60, 255)
+
+        -- 闪烁 "PRESS ANY KEY"
+        local blink = math.floor(M.deathPhaseTimer * 3) % 2
+        if blink == 0 then
+            local hintPixSize = 1.5 * zoom
+            M.DrawPixelText(vg, "PRESS ANY KEY", centerX, centerY + 20 * zoom, hintPixSize, 255, 255, 255, 200)
+        end
+
+        -- ESC 提示
+        local escPixSize = 1.2 * zoom
+        M.DrawPixelText(vg, escHint, centerX, centerY + 38 * zoom, escPixSize, 180, 180, 180, 180)
+
+    else
+        -- fallback: 还没进入 deathPhase 的第一帧，画一帧渐入
+        local progress = math.min(S.play.deathTimer / 0.1, 1.0)
+        nvgBeginPath(vg)
+        nvgRect(vg, -100, -100, w + 200, h + 200)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, math.floor(255 * progress)))
+        nvgFill(vg)
+    end
+end
+
+function M.DrawBonfireMessage(vg)
+    if not M.bonfireMsg.active then return end
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local w = S.playViewW * zoom
+    local h = S.playViewH * zoom
+    local t = M.bonfireMsg.timer
+    local dur = M.bonfireMsg.duration
+    -- fade in 0.3s, hold, fade out 0.3s
+    local alpha = 255
+    if t < 0.3 then
+        alpha = math.floor(255 * t / 0.3)
+    elseif t > dur - 0.3 then
+        alpha = math.floor(255 * (dur - t) / 0.3)
+    end
+    local pixSize = 2.5 * zoom
+    M.DrawPixelText(vg, "BONFIRE LIT", w * 0.5, h * 0.4, pixSize, 255, 180, 50, alpha)
 end
 
 function M.DrawWinOverlay(vg, escHint)
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local w = S.playViewW * zoom
+    local h = S.playViewH * zoom
     nvgBeginPath(vg)
-    nvgRect(vg, 0, 0, S.screenDesignW, S.screenDesignH)
-    nvgFillColor(vg, nvgRGBA(0, 0, 0, 80))
+    nvgRect(vg, -100, -100, w + 200, h + 200)
+    nvgFillColor(vg, nvgRGBA(0, 0, 0, 120))
     nvgFill(vg)
-    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
-    nvgFontSize(vg, 22)
-    nvgFillColor(vg, nvgRGBA(255, 200, 50, 255))
-    nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.4, "FLAME ETERNAL!")
-    nvgFontSize(vg, 11)
-    nvgFillColor(vg, nvgRGBA(255, 255, 255, 200))
-    nvgText(vg, S.screenDesignW * 0.5, S.screenDesignH * 0.52, escHint)
+    -- "FLAME ETERNAL" 像素字体
+    local pixSize = 2.5 * zoom
+    M.DrawPixelText(vg, "FLAME ETERNAL", w * 0.5, h * 0.4, pixSize, 255, 200, 50, 255)
+    local escPixSize = 1.2 * zoom
+    M.DrawPixelText(vg, escHint, w * 0.5, h * 0.55, escPixSize, 255, 255, 255, 200)
+end
+
+------------------------------------------------------------
+-- 篝火 (CHECKPOINT) 渲染 — 放大版（ps=3，约2格高，匹配玩家大小）
+------------------------------------------------------------
+function M.DrawCheckpointTile(vg, px, py, row, col)
+    local key = row .. "_" .. col
+    local activated = S.checkpointActivated[key]
+    local ps = 3  -- 像素块大小（放大到与玩家相当）
+
+    -- 篝火从格子底部向上绘制，占 10 行 × 10 列 像素格
+    local drawBaseY = py + C.GRID  -- 格子底边
+    local drawTopY = drawBaseY - 10 * ps
+    local drawLeftX = px + (C.GRID - 10 * ps) * 0.5  -- 水平居中
+
+    -- 石头底座（行 8-9，从 drawTopY 算起）
+    local stones = {
+        {2,8},{3,8},{4,8},{5,8},{6,8},{7,8},
+        {1,9},{2,9},{3,9},{4,9},{5,9},{6,9},{7,9},{8,9},
+    }
+    for _, s in ipairs(stones) do
+        local sx = drawLeftX + s[1] * ps
+        local sy = drawTopY + s[2] * ps
+        nvgBeginPath(vg)
+        nvgRect(vg, sx, sy, ps, ps)
+        if s[2] == 9 then
+            nvgFillColor(vg, nvgRGBA(50, 45, 40, 255))
+        else
+            nvgFillColor(vg, nvgRGBA(75, 70, 60, 255))
+        end
+        nvgFill(vg)
+    end
+
+    -- 木柴（行 5-7）
+    local logs = {
+        {3,7},{4,7},{5,7},{6,7},
+        {2,6},{3,6},{4,6},{5,6},{6,6},{7,6},
+        {3,5},{4,5},{5,5},{6,5},
+    }
+    for _, l in ipairs(logs) do
+        local lx = drawLeftX + l[1] * ps
+        local ly = drawTopY + l[2] * ps
+        nvgBeginPath(vg)
+        nvgRect(vg, lx, ly, ps, ps)
+        nvgFillColor(vg, nvgRGBA(100, 60, 25, 255))
+        nvgFill(vg)
+    end
+
+    if activated then
+        -- 点燃状态：像素火焰（行 0-5）
+        local t = S.flameTime or 0
+        local flicker1 = math.sin(t * 8 + col * 2.1) * 0.5 + 0.5
+        local flicker2 = math.sin(t * 11 + row * 1.7) * 0.5 + 0.5
+
+        local flames = {
+            -- 外焰（橙红色）
+            {2,4,{255,80,10}}, {3,4,{255,100,15}}, {6,4,{255,90,10}}, {7,4,{255,100,15}},
+            {2,3,{255,110,20}}, {7,3,{255,100,15}},
+            -- 中焰（橙色）
+            {3,3,{255,140,30}}, {4,3,{255,160,40}}, {5,3,{255,150,35}}, {6,3,{255,140,30}},
+            {3,2,{255,170,50}}, {4,2,{255,190,60}}, {5,2,{255,180,55}}, {6,2,{255,170,50}},
+            -- 内焰（黄色）
+            {4,1,{255,220,80}}, {5,1,{255,210,70}},
+            {4,0,{255,240,120}}, {5,0,{255,230,100}},
+        }
+        for _, f in ipairs(flames) do
+            local fx = drawLeftX + f[1] * ps
+            local fy = drawTopY + f[2] * ps
+            local c = f[3]
+            local flick = (f[2] <= 2) and flicker1 or flicker2
+            local a = math.floor(180 + 75 * flick)
+            nvgBeginPath(vg)
+            nvgRect(vg, fx, fy, ps, ps)
+            nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], a))
+            nvgFill(vg)
+        end
+
+        -- 火焰光晕
+        local glowA = math.floor(25 + 20 * flicker1)
+        nvgBeginPath(vg)
+        nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 2 * ps, 12)
+        nvgFillColor(vg, nvgRGBA(255, 150, 30, glowA))
+        nvgFill(vg)
+    else
+        -- 未点燃：暗灰余烬 + 微弱闪烁
+        local t = S.flameTime or 0
+        local embers = {
+            {3,5},{4,5},{5,5},{6,5},
+            {4,4},{5,4},
+        }
+        local emberFlick = math.sin(t * 3 + col) * 0.3 + 0.7
+        for _, e in ipairs(embers) do
+            local ex = drawLeftX + e[1] * ps
+            local ey = drawTopY + e[2] * ps
+            nvgBeginPath(vg)
+            nvgRect(vg, ex, ey, ps, ps)
+            nvgFillColor(vg, nvgRGBA(60, 30, 15, math.floor(120 * emberFlick)))
+            nvgFill(vg)
+        end
+    end
 end
 
 return M

@@ -69,6 +69,13 @@ function M.SerializeLevel()
     if S.currentLevelDisplayName ~= "" then
         data.levelName = S.currentLevelDisplayName
     end
+    -- 背景图路径和明暗度
+    if S.backgroundImage ~= "" then
+        data.backgroundImage = S.backgroundImage
+    end
+    if S.bgImageAlpha and S.bgImageAlpha ~= 0.5 then
+        data.bgImageAlpha = S.bgImageAlpha
+    end
     for row = 1, S.MAP_ROWS do
         for col = 1, S.MAP_COLS do
             local v = S.levelData[row][col]
@@ -198,6 +205,11 @@ function M.ApplyLevelData(data)
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
     S.selectedLightIndex = 0
+
+    -- 背景图和明暗度
+    S.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
+    S.bgImageHandle = nil  -- 清除缓存，加载关卡时重新加载图片
 end
 
 --- 应用摄像机边界

@@ -88,7 +88,7 @@ function M.UpdateOneProjectile(proj, dt)
     if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
         local val = S.levelData[row][col]
         local base, group = TileUtils.GetTileType(val)
-        if base == C.TILE.SOLID then
+        if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then
             return true  -- 碰墙消失
         elseif base == C.TILE.GATE and not S.play.switchState[group] then
             return true  -- 碰关闭的门消失
@@ -237,7 +237,7 @@ function M.SimulateInNeighbor(proj, targetFile, direction, overflow)
         if col >= 1 and col <= targetCols and row >= 1 and row <= targetRows then
             local val = targetTiles[row][col]
             local base, group = TileUtils.GetTileType(val)
-            if base == C.TILE.SOLID then
+            if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then
                 break  -- 碰墙，道具消失
             elseif base == C.TILE.SWITCH then
                 -- 命中开关！激活跨关卡开关

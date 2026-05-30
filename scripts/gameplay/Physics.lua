@@ -50,7 +50,7 @@ function M.IsSolid(col, row)
     if row > Config.MAP_ROWS then return false end
     local val = levelData[row][col]
     local base, group = M.GetTileType(val)
-    if base == TILE.SOLID then return true end
+    if base == TILE.SOLID or base == TILE.SOLID_PILLAR then return true end
     if base == TILE.GATE then
         if not switchState[group] then return true end
     end

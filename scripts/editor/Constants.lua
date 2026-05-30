@@ -34,19 +34,21 @@ M.AUTO_SAVE_DELAY = 1.0
 -- 地块类型枚举
 -- ====================================================================
 M.TILE = {
-    EMPTY       = 0,
-    SOLID       = 1,
-    SPAWN       = 2,
-    FUEL        = 3,
-    GOAL        = 4,
-    SPIKE       = 5,
-    SWITCH      = 6,
-    GATE        = 7,
-    HIDDEN_WALL = 8,
-    WATER       = 9,
+    EMPTY        = 0,
+    SOLID        = 1,
+    SPAWN        = 2,
+    FUEL         = 3,
+    GOAL         = 4,
+    SPIKE        = 5,
+    SWITCH       = 6,
+    GATE         = 7,
+    HIDDEN_WALL  = 8,
+    WATER        = 9,
     POISON_WATER = 10,
-    BLACK_WATER = 11,
-    LADDER      = 12,
+    BLACK_WATER  = 11,
+    LADDER       = 12,
+    SOLID_PILLAR = 13,
+    CHECKPOINT   = 14,
 }
 
 -- ====================================================================
@@ -118,7 +120,10 @@ M.TOOL_GROUPS = {
 -- 工具列表
 -- ====================================================================
 M.TOOLS = {
-    { id = "SOLID",       tile = M.TILE.SOLID,       name = "碰撞", color = {80, 90, 100, 255},   group = "terrain" },
+    { id = "SOLID",       tile = M.TILE.SOLID,       name = "砖块", color = {80, 90, 100, 255},   group = "terrain",
+        submenu = "collision" },
+    { id = "SOLID_PILLAR", tile = M.TILE.SOLID_PILLAR, name = "柱子", color = {90, 80, 110, 255}, group = "terrain",
+        submenu = "collision" },
     { id = "SPAWN",       tile = M.TILE.SPAWN,       name = "主角", color = {255, 200, 50, 255},  group = "player" },
     { id = "FUEL",        tile = M.TILE.FUEL,        name = "火焰", color = {255, 100, 20, 255},  group = "pickup" },
     { id = "GOAL",        tile = M.TILE.GOAL,        name = "终点", color = {100, 255, 100, 255}, group = "pickup" },
@@ -133,11 +138,12 @@ M.TOOLS = {
     { id = "GATE",        tile = M.TILE.GATE,        name = "门",   color = {150, 100, 200, 255}, group = "puzzle" },
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
     { id = "LADDER",      tile = M.TILE.LADDER,      name = "梯子", color = {160, 110, 50, 255},  group = "terrain" },
+    { id = "CHECKPOINT",  tile = M.TILE.CHECKPOINT,   name = "篝火", color = {255, 140, 30, 255},  group = "pickup" },
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
 }
 
-M.LIGHT_TOOL_INDEX = 13
-M.HIDDEN_WALL_TOOL_INDEX = 11
+M.LIGHT_TOOL_INDEX = 15
+M.HIDDEN_WALL_TOOL_INDEX = 12
 
 -- ====================================================================
 -- 子菜单分组定义
@@ -146,6 +152,10 @@ M.HIDDEN_WALL_TOOL_INDEX = 11
 M.SUBMENU_GROUPS = {
     water = {
         label = "水",
+        tools = {},  -- 在初始化时自动填充
+    },
+    collision = {
+        label = "碰撞",
         tools = {},  -- 在初始化时自动填充
     },
 }

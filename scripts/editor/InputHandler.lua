@@ -631,6 +631,8 @@ function HandleWorldMapTopBarBtn(id)
         PlayMode.StartWorldPlayMode()
     elseif id == "save" then
         WorldMapEditor.Save()
+    elseif id == "bg" then
+        Dialogs.OpenBackgroundDialog()
     elseif id == "sidebar" then
         S.sidebarOpen = not S.sidebarOpen
     elseif id == "export" then
@@ -665,6 +667,8 @@ function DispatchTopBarBtn(id)
     elseif id == "play" then
         Persistence.AutoSaveBeforeSwitch()
         PlayMode.StartPlayMode()
+    elseif id == "bg" then
+        Dialogs.OpenBackgroundDialog()
     elseif id == "worldmap" then
         Persistence.AutoSaveBeforeSwitch()
         S.editorMode = MODE.WORLDMAP

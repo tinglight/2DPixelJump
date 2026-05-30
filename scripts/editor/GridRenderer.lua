@@ -5,6 +5,7 @@
 local C = require "editor.Constants"
 local S = require "editor.State"
 local TileUtils = require "editor.TileUtils"
+local SolidRenderer = require "SolidRenderer"
 
 local TILE = C.TILE
 
@@ -15,6 +16,18 @@ local FogOfWar = nil
 
 function M.Inject(deps)
     FogOfWar = deps.FogOfWar
+end
+
+-- 检查某格是否为实体方块（用于邻居检测）
+local function IsSolidAt(row, col)
+    if row < 1 or row > S.MAP_ROWS or col < 1 or col > S.MAP_COLS then
+        return false
+    end
+    if not S.levelData[row] then return false end
+    local val = S.levelData[row][col]
+    if not val or val == TILE.EMPTY then return false end
+    local base = TileUtils.GetTileType(val)
+    return base == TILE.SOLID or base == TILE.SOLID_PILLAR
 end
 
 -- ====================================================================
@@ -67,15 +80,17 @@ end
 -- 内部：绘制单个地块
 -- ====================================================================
 local function DrawTile(vg, base, group, px, py, zGrid, row, col)
-    if base == TILE.SOLID then
-        nvgBeginPath(vg)
-        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
-        nvgFillColor(vg, nvgRGBA(55, 60, 75, 255))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, 2)
-        nvgFillColor(vg, nvgRGBA(80, 90, 105, 255))
-        nvgFill(vg)
+    if base == TILE.SOLID or base == TILE.SOLID_PILLAR then
+        -- 像素风格碰撞方块渲染（编辑器中以中等亮度展示，带轻微光照方向）
+        local lighting = 0.7
+        local ldx, ldy = 0.3, -0.5  -- 编辑器预览：固定的左上角光源方向
+        local neighbors = {
+            top    = IsSolidAt(row - 1, col),
+            bottom = IsSolidAt(row + 1, col),
+            left   = IsSolidAt(row, col - 1),
+            right  = IsSolidAt(row, col + 1),
+        }
+        SolidRenderer.DrawSolid(vg, base, px, py, zGrid, lighting, ldx, ldy, col, row, neighbors)
 
     elseif base == TILE.SPAWN then
         nvgBeginPath(vg)
@@ -213,6 +228,30 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             nvgFill(vg)
         end
 
+    elseif base == TILE.CHECKPOINT then
+        -- 篝火（编辑器视图：简化的火焰+底座图标）
+        -- 底座石块
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, px + 2, py + zGrid - 5, zGrid - 4, 4, 1)
+        nvgFillColor(vg, nvgRGBA(100, 80, 60, 255))
+        nvgFill(vg)
+        -- 火焰（橙色三角形）
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + zGrid * 0.5, py + 2)
+        nvgLineTo(vg, px + zGrid - 4, py + zGrid - 5)
+        nvgLineTo(vg, px + 4, py + zGrid - 5)
+        nvgClosePath(vg)
+        nvgFillColor(vg, nvgRGBA(255, 140, 30, 240))
+        nvgFill(vg)
+        -- 火焰内芯（黄色）
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + zGrid * 0.5, py + 5)
+        nvgLineTo(vg, px + zGrid * 0.65, py + zGrid - 6)
+        nvgLineTo(vg, px + zGrid * 0.35, py + zGrid - 6)
+        nvgClosePath(vg)
+        nvgFillColor(vg, nvgRGBA(255, 240, 100, 220))
+        nvgFill(vg)
+
     elseif base == TILE.LADDER then
         -- 2格宽梯子：只由左半格绘制整体
         -- 如果左邻格也是梯子，则当前格是右半部分，跳过
@@ -317,6 +356,64 @@ local function DrawCameraBounds(vg, mapX, mapY, mapW, mapH)
     nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_BOTTOM)
     nvgFillColor(vg, nvgRGBA(0, 200, 255, 220))
     nvgText(vg, (bx1 + bx2) * 0.5, by1 - 3, boundW .. "x" .. boundH)
+end
+
+-- ====================================================================
+-- 内部：绘制主角相机框（试玩时的可视区域指示）
+-- ====================================================================
+local function DrawPlayerCameraFrame(vg, mapX, mapY, mapW, mapH)
+    -- 相机缩放
+    local zoom = S.playerParams.cameraZoom or 1.0
+
+    -- 试玩视口在世界中的像素尺寸
+    local viewW = S.playViewW * zoom
+    local viewH = S.playViewH * zoom
+
+    -- 边界像素
+    local boundLeftPx = (S.camBound.left - 1) * C.GRID
+    local boundRightPx = S.camBound.right * C.GRID
+    local boundTopPx = (S.camBound.top - 1) * C.GRID
+    local boundBottomPx = S.camBound.bottom * C.GRID
+
+    -- 水平：35% anchor（与 PlayMode.UpdateCamera 一致）
+    local camMinX = boundLeftPx
+    local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
+    local spawnPx = (S.spawnCol - 1) * C.GRID
+    local targetCamX = spawnPx - viewW * 0.35
+    local camX = math.max(camMinX, math.min(targetCamX, camMaxX))
+
+    -- 垂直：50% anchor（与 PlayMode.UpdateCamera 一致）
+    local camMinY = boundTopPx
+    local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
+    local spawnTopPx = (S.spawnRow - C.PLAYER_GRID_H) * C.GRID
+    local targetCamY = spawnTopPx - viewH * 0.5
+    local camY = math.max(camMinY, math.min(targetCamY, camMaxY))
+
+    -- 转换为编辑器屏幕坐标（camX/camY 是世界像素，需乘 editor zoom 再减 editor camera）
+    local frameX = camX * S.zoomLevel - S.cameraX
+    local frameY = camY * S.zoomLevel - S.cameraY + C.TOPBAR_H
+    local frameW = viewW * S.zoomLevel
+    local frameH = viewH * S.zoomLevel
+
+    -- 绘制半透明填充
+    nvgBeginPath(vg)
+    nvgRect(vg, frameX, frameY, frameW, frameH)
+    nvgFillColor(vg, nvgRGBA(255, 180, 50, 15))
+    nvgFill(vg)
+
+    -- 绘制边框（橙色虚线风格）
+    nvgBeginPath(vg)
+    nvgRect(vg, frameX, frameY, frameW, frameH)
+    nvgStrokeColor(vg, nvgRGBA(255, 180, 50, 180))
+    nvgStrokeWidth(vg, 1.5)
+    nvgStroke(vg)
+
+    -- 角标标注 "CAM"
+    nvgFontFace(vg, "sans")
+    nvgFontSize(vg, 8)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
+    nvgFillColor(vg, nvgRGBA(255, 180, 50, 200))
+    nvgText(vg, frameX + 2, frameY + 1, "CAM " .. S.playViewW .. "x" .. S.playViewH)
 end
 
 -- ====================================================================
@@ -536,11 +633,32 @@ function M.Draw()
     nvgFillColor(vg, nvgRGBA(15, 12, 25, 255))
     nvgFill(vg)
 
+    -- 背景图（铺满 camBound 区域）
+    if S.backgroundImage ~= "" then
+        -- 懒加载 NanoVG 图片句柄
+        if not S.bgImageHandle then
+            S.bgImageHandle = nvgCreateImage(vg, S.backgroundImage, 0)
+        end
+        if S.bgImageHandle and S.bgImageHandle > 0 then
+            -- 计算 camBound 在屏幕上的位置
+            local bx1 = mapX + (S.camBound.left - 1) * zGrid - S.cameraX
+            local by1 = mapY + (S.camBound.top - 1) * zGrid - S.cameraY
+            local bw = (S.camBound.right - S.camBound.left + 1) * zGrid
+            local bh = (S.camBound.bottom - S.camBound.top + 1) * zGrid
+            local imgPaint = nvgImagePattern(vg, bx1, by1, bw, bh, 0, S.bgImageHandle, S.bgImageAlpha or 1.0)
+            nvgBeginPath(vg)
+            nvgRect(vg, bx1, by1, bw, bh)
+            nvgFillPaint(vg, imgPaint)
+            nvgFill(vg)
+        end
+    end
+
     local startCol, endCol, startRow, endRow = GetVisibleRange(mapW, mapH, zGrid)
 
     DrawGridLines(vg, mapX, mapY, mapH, startCol, endCol, startRow, endRow, zGrid)
     DrawTiles(vg, mapX, mapY, startCol, endCol, startRow, endRow, zGrid)
     DrawCameraBounds(vg, mapX, mapY, mapW, mapH)
+    DrawPlayerCameraFrame(vg, mapX, mapY, mapW, mapH)
 
     -- 光源标记
     if FogOfWar then

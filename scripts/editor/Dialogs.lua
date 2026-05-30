@@ -167,6 +167,28 @@ function M.OpenDeleteDialog(lv)
     S.dialogTarget = lv
 end
 
+-- 可选的背景图列表（资源路径，相对于 assets/）
+local BG_IMAGE_OPTIONS = {
+    { path = "image/传火祭祀场背景_20260530100114.png", name = "传火祭祀场(火光)" },
+    { path = "image/edited_传火祭祀场背景_无火光_20260530100627.png", name = "传火祭祀场(无火光)" },
+}
+
+function M.OpenBackgroundDialog()
+    S.dialogMode = "background"
+    -- 找到当前选中项索引
+    S.bgDialogSelected = 0
+    for i, opt in ipairs(BG_IMAGE_OPTIONS) do
+        if opt.path == S.backgroundImage then
+            S.bgDialogSelected = i
+            break
+        end
+    end
+    -- 初始化明暗度输入
+    S.bgAlphaInput = tostring(math.floor(S.bgImageAlpha * 100 + 0.5))
+    S.bgAlphaCursor = #S.bgAlphaInput
+    S.renameBlink = 0
+end
+
 -- ====================================================================
 -- 确认逻辑
 -- ====================================================================
@@ -221,6 +243,26 @@ function M.ConfirmDialog()
             local f = tonumber(S.lightFeatherInput) or 0.5
             FogOfWar.UpdateLight(S.selectedLightIndex, d, f)
         end
+    elseif S.dialogMode == "background" then
+        local sel = S.bgDialogSelected
+        if sel >= 1 and sel <= #BG_IMAGE_OPTIONS then
+            local newPath = BG_IMAGE_OPTIONS[sel].path
+            if newPath ~= S.backgroundImage then
+                S.backgroundImage = newPath
+                S.bgImageHandle = nil  -- 清除缓存，触发重新加载
+            end
+            S.SetMessage("背景已设置", 1.5)
+        else
+            -- sel == 0 表示"无背景"
+            S.backgroundImage = ""
+            S.bgImageHandle = nil
+            S.SetMessage("背景已清除", 1.5)
+        end
+        -- 应用明暗度
+        local val = tonumber(S.bgAlphaInput)
+        if val then
+            S.bgImageAlpha = math.max(0, math.min(100, val)) / 100
+        end
     end
     S.dialogMode = nil
     S.dialogTarget = nil
@@ -250,6 +292,7 @@ local function GetDialogSize()
     elseif S.dialogMode == "canvas" then h = 100
     elseif S.dialogMode == "player" then w = 200; h = 190
     elseif S.dialogMode == "light" then h = 100
+    elseif S.dialogMode == "background" then w = 200; h = 30 + (#BG_IMAGE_OPTIONS + 1) * 18 + 24 + 32
     end
     return w, h
 end
@@ -520,6 +563,66 @@ local function DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
     DrawButtons(vg, dlgX, dlgY, dlgW, dlgH, "确认", 40, 120, 60)
 end
 
+local function DrawBackgroundDialog(vg, dlgX, dlgY, dlgW, dlgH)
+    DrawTitle(vg, dlgX, dlgW, dlgY, "选择背景图", 120, 200, 255)
+
+    local itemH = 18
+    local startY = dlgY + 28
+    local itemX = dlgX + 12
+    local itemW = dlgW - 24
+
+    -- "无背景" 选项
+    local isSelected = (S.bgDialogSelected == 0)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, itemX, startY, itemW, itemH - 2, 3)
+    if isSelected then
+        nvgFillColor(vg, nvgRGBA(60, 80, 120, 255))
+    else
+        nvgFillColor(vg, nvgRGBA(25, 25, 40, 255))
+    end
+    nvgFill(vg)
+    nvgFontSize(vg, 9)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, isSelected and nvgRGBA(255, 255, 255, 255) or nvgRGBA(180, 180, 200, 255))
+    nvgText(vg, itemX + 6, startY + itemH * 0.5 - 1, "无背景")
+
+    -- 图片选项列表
+    for i, opt in ipairs(BG_IMAGE_OPTIONS) do
+        local iy = startY + i * itemH
+        isSelected = (S.bgDialogSelected == i)
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, itemX, iy, itemW, itemH - 2, 3)
+        if isSelected then
+            nvgFillColor(vg, nvgRGBA(60, 80, 120, 255))
+        else
+            nvgFillColor(vg, nvgRGBA(25, 25, 40, 255))
+        end
+        nvgFill(vg)
+        nvgFontSize(vg, 9)
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, isSelected and nvgRGBA(255, 255, 255, 255) or nvgRGBA(180, 180, 200, 255))
+        nvgText(vg, itemX + 6, iy + itemH * 0.5 - 1, opt.name)
+    end
+
+    -- 明暗度输入（实时预览）
+    local alphaY = startY + (#BG_IMAGE_OPTIONS + 1) * itemH + 4
+    local inputW = 36
+    local inputH = 16
+    local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
+    nvgFontSize(vg, 9)
+    nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(200, 200, 210, 255))
+    nvgText(vg, inputX - 6, alphaY + inputH * 0.5, "明暗度:")
+    DrawInputBox(vg, inputX, alphaY, inputW, inputH, S.bgAlphaInput, true)
+    DrawCursorCentered(vg, inputX, alphaY, inputW, inputH, S.bgAlphaInput, S.bgAlphaCursor or 0, 120, 200, 255)
+    nvgFontSize(vg, 9)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(140, 140, 160, 180))
+    nvgText(vg, inputX + inputW + 6, alphaY + inputH * 0.5, "%")
+
+    DrawButtons(vg, dlgX, dlgY, dlgW, dlgH, "确认", 40, 100, 140)
+end
+
 -- ====================================================================
 -- 主渲染入口
 -- ====================================================================
@@ -550,6 +653,8 @@ function M.Draw()
         DrawPlayerDialog(vg, dlgX, dlgY, dlgW, dlgH)
     elseif S.dialogMode == "light" then
         DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
+    elseif S.dialogMode == "background" then
+        DrawBackgroundDialog(vg, dlgX, dlgY, dlgW, dlgH)
     end
 end
 
@@ -679,6 +784,17 @@ function M.HandleKeyDown(key)
         return true
     end
 
+    -- background 模式：处理明暗度输入框的键盘
+    if S.dialogMode == "background" then
+        S.bgAlphaInput, S.bgAlphaCursor = HandleNumericFieldKey(key, S.bgAlphaInput, S.bgAlphaCursor or 0)
+        -- 实时应用明暗度预览
+        local val = tonumber(S.bgAlphaInput)
+        if val then
+            S.bgImageAlpha = math.max(0, math.min(100, val)) / 100
+        end
+        return true
+    end
+
     if key == KEY_TAB then
         if S.dialogMode == "light" then
             if S.lightDialogFocus == 1 then
@@ -786,6 +902,22 @@ function M.HandleTextInput(text)
                 if S.lightDialogFocus == 1 then S.lightDiameterInput = cur else S.lightFeatherInput = cur end
             end
         end
+    elseif S.dialogMode == "background" then
+        local digits = text:match("%d+")
+        if digits then
+            local cur = S.bgAlphaInput
+            if #cur < 3 then
+                cur = string.sub(cur, 1, S.bgAlphaCursor or 0) .. digits .. string.sub(cur, (S.bgAlphaCursor or 0) + 1)
+                S.bgAlphaCursor = (S.bgAlphaCursor or 0) + #digits
+                S.renameBlink = 0
+                S.bgAlphaInput = cur
+                -- 实时应用明暗度预览
+                local val = tonumber(cur)
+                if val then
+                    S.bgImageAlpha = math.max(0, math.min(100, val)) / 100
+                end
+            end
+        end
     end
 
     return true
@@ -862,6 +994,27 @@ function M.HandleMouseDown(mx, my)
             local fieldY = startY + (i - 1) * rowGap
             if mx >= inputX and mx < inputX + inputW and my >= fieldY and my < fieldY + inputH then
                 S.playerParamFocus = i; S.playerParamCursor = #S.playerParamInputs[i]; S.renameBlink = 0
+                return true
+            end
+        end
+    end
+
+    -- 背景对话框：点击列表项选中
+    if S.dialogMode == "background" then
+        local itemH = 18
+        local startY = dlgY + 28
+        local itemX = dlgX + 12
+        local itemW = dlgW - 24
+        -- "无背景" 选项 (index 0)
+        if mx >= itemX and mx < itemX + itemW and my >= startY and my < startY + itemH - 2 then
+            S.bgDialogSelected = 0
+            return true
+        end
+        -- 图片选项
+        for i = 1, #BG_IMAGE_OPTIONS do
+            local iy = startY + i * itemH
+            if mx >= itemX and mx < itemX + itemW and my >= iy and my < iy + itemH - 2 then
+                S.bgDialogSelected = i
                 return true
             end
         end

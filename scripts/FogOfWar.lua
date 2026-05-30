@@ -565,6 +565,7 @@ function FogOfWar.DrawLanterns(vg, params)
     local flickerT = os.clock()
 
     for i, light in ipairs(lightSources) do
+        if light.noLantern then goto continue_lantern end
         local cx = mapX + (light.col - 1) * zGrid - offsetX
         local cy = mapY + (light.row - 1) * zGrid - offsetY
 
@@ -616,6 +617,7 @@ function FogOfWar.DrawLanterns(vg, params)
                 end
             end
         end
+        ::continue_lantern::
     end
 end
 

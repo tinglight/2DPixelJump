@@ -38,6 +38,7 @@ function M.InitTopBarButtons()
         { id = "saveNew",  label = "另存", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_FILE },
         { id = "canvas",   label = "画布", x = 0, y = 0, w = 38, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG, hasSubmenu = true },
         { id = "player",   label = "玩家", x = 0, y = 0, w = 38, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG, hasSubmenu = true },
+        { id = "bg",       label = "背景", x = 0, y = 0, w = 38, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG, hasSubmenu = true },
         { id = "fog",      label = "迷雾", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG },
         { id = "random",   label = "随机", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE },
         { id = "worldmap", label = "世界", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE, hasSubmenu = true },
@@ -84,6 +85,16 @@ local function GetButtonColors(btn)
     elseif btn.id == "player" then
         bgR, bgG, bgB = 75, 65, 50
         borderR, borderG, borderB = 130, 110, 70
+    elseif btn.id == "bg" then
+        isActive = (S.backgroundImage ~= "")
+        if isActive then
+            bgR, bgG, bgB = 50, 80, 60
+            borderR, borderG, borderB, borderA = 80, 160, 100, 220
+            textR, textG, textB = 160, 255, 180
+        else
+            bgR, bgG, bgB = 40, 50, 45
+            borderR, borderG, borderB = 70, 90, 75
+        end
     elseif btn.id == "fog" then
         isActive = S.fogShowInEditor
         if isActive then

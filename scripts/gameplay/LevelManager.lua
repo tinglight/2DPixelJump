@@ -184,6 +184,9 @@ function M.LoadLevelFromFile(filename, player)
     M.currentLevelFile = filename
     M.currentTemplateName = data.levelName or filename
 
+    -- 背景图
+    Config.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+
     -- 重置开关/门状态
     M.switchState = {}
     M.switchCollected = {}
