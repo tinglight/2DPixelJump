@@ -34,13 +34,19 @@ M.levelNumber = 1
 -- 开关/门状态
 M.switchState = {}
 M.switchCollected = {}
-M.hiddenWallRevealed = {}
+M.hiddenWallRevealed = {}  -- group => revealTime (gameTime at reveal)
 M.collectedItems = {}
 M.coinCount = 0
 M.fuelCount = 0
 
 -- 装饰物
 M.decorations = {}  -- { {col, row, typeId}, ... }
+
+-- 当前游戏时间（由 init.lua 每帧同步）
+M.gameTime = 0
+
+-- 隐藏墙渐变消失时长（秒）
+M.HIDDEN_WALL_FADE_DURATION = 0.2
 
 -- 存档点（篝火）状态
 M.checkpointActivated = {}
@@ -81,6 +87,16 @@ end
 
 --- 从 data/player_params.json 加载全局玩家参数并应用到 Config
 function M.LoadGlobalPlayerParams()
+    if not fileSystem:FileExists("data/player_params.json") then
+        -- 文件不存在，使用默认值（避免 ERROR 日志）
+        Config.levelPlayerParams.baseJumpGrids = Config.PLAYER_CONFIG.baseJumpGrids
+        Config.levelPlayerParams.fallJumpMultiplier = 1.0
+        Config.levelPlayerParams.maxFallGrids = 10
+        Config.levelPlayerParams.maxJumpGrids = 8
+        Config.PLAYER_CONFIG.cameraZoom = 2.0
+        print("[PlayerParams] Using defaults (no player_params.json)")
+        return
+    end
     local file = File("data/player_params.json", FILE_READ)
     if file and file:IsOpen() then
         local content = file:ReadString()
@@ -256,6 +272,10 @@ end
 ---@param player table
 ---@param cameraState table { x }
 function M.TransitionToLevel(targetFile, fromDirection, player, cameraState)
+    -- 保存跨关卡持久状态（跳跃能力、血量）
+    local savedFallGridCount = player.fallGridCount or 0
+    local savedAlivePixels = PixelSystem and PixelSystem.alivePixels or nil
+
     if not M.LoadLevelFromFile(targetFile, player) then return end
 
     local playerH = math.ceil(Config.PLAYER_CONFIG.pixelGridSize * Config.PLAYER_CONFIG.pixelSize / Config.GRID)
@@ -280,8 +300,25 @@ function M.TransitionToLevel(targetFile, fromDirection, player, cameraState)
     player.jumpTimer = 0
     M.transitionCooldown = 0.5
 
-    PixelSystem.Init()
-    print("[WorldMap] Transition to: " .. targetFile .. " from " .. fromDirection)
+    -- 恢复跳跃能力：保留 fallGridCount，更新 bottomHighestY 为新位置
+    player.fallGridCount = savedFallGridCount
+    local s = Physics.PlayerGridSize()
+    player.bottomHighestY = player.gridY + s - 1 - savedFallGridCount
+    player.jumpOriginBottomY = player.gridY + s - 1
+    -- 设置跨关卡保护，防止满血重置逻辑清零跳跃能力
+    player.transitionProtect = true
+
+    -- 保留血量而非满血重置（跨关卡不应回满血）
+    if savedAlivePixels then
+        -- 先初始化像素网格结构，然后恢复之前的血量
+        PixelSystem.Init()
+        PixelSystem.SetAliveCount(savedAlivePixels)
+    else
+        PixelSystem.Init()
+    end
+
+    print("[WorldMap] Transition to: " .. targetFile .. " from " .. fromDirection
+        .. " (fallGridCount=" .. savedFallGridCount .. ")")
 end
 
 --- 启动过渡动画
@@ -444,6 +481,17 @@ function M.ResetCollectibles()
     M.checkpointCol = nil
     M.checkpointRow = nil
     M.checkpointFile = nil
+end
+
+--- 重置收集品但保留篝火存档点信息
+function M.ResetCollectiblesKeepCheckpoint()
+    M.collectedItems = {}
+    M.coinCount = 0
+    M.fuelCount = 0
+    M.switchState = {}
+    M.switchCollected = {}
+    M.hiddenWallRevealed = {}
+    -- 篝火状态保留，不清除
 end
 
 return M

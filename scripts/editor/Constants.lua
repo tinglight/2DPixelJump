@@ -52,6 +52,12 @@ M.TILE = {
     PIPE         = 15,
     FRAGILE      = 16,
     SOLID_SEWER  = 17,
+    CURTAIN      = 18,  -- 柳条门帘（不阻挡玩家，略微遮光，触碰晃动）
+    -- 斜坡（45度角，4个方向）
+    SLOPE_TR     = 19,  -- 右上斜坡：左下角为直角（实体在下方）
+    SLOPE_TL     = 20,  -- 左上斜坡：右下角为直角（实体在下方）
+    SLOPE_BR     = 21,  -- 右下斜坡：左上角为直角（实体在上方）
+    SLOPE_BL     = 22,  -- 左下斜坡：右上角为直角（实体在上方）
 }
 
 -- ====================================================================
@@ -130,6 +136,14 @@ M.TOOLS = {
         submenu = "collision" },
     { id = "SOLID_SEWER", tile = M.TILE.SOLID_SEWER, name = "下水道", color = {35, 38, 44, 255}, group = "terrain",
         submenu = "collision" },
+    { id = "SLOPE_TR", tile = M.TILE.SLOPE_TR, name = "斜坡↗", color = {80, 90, 100, 255}, group = "terrain",
+        submenu = "collision" },
+    { id = "SLOPE_TL", tile = M.TILE.SLOPE_TL, name = "斜坡↖", color = {80, 90, 100, 255}, group = "terrain",
+        submenu = "collision" },
+    { id = "SLOPE_BR", tile = M.TILE.SLOPE_BR, name = "斜坡↘", color = {80, 90, 100, 255}, group = "terrain",
+        submenu = "collision" },
+    { id = "SLOPE_BL", tile = M.TILE.SLOPE_BL, name = "斜坡↙", color = {80, 90, 100, 255}, group = "terrain",
+        submenu = "collision" },
     { id = "SPAWN",       tile = M.TILE.SPAWN,       name = "主角", color = {255, 200, 50, 255},  group = "player" },
     { id = "FUEL",        tile = M.TILE.FUEL,        name = "火焰", color = {255, 100, 20, 255},  group = "pickup" },
     { id = "GOAL",        tile = M.TILE.GOAL,        name = "终点", color = {100, 255, 100, 255}, group = "pickup" },
@@ -144,6 +158,7 @@ M.TOOLS = {
         submenu = "water" },
     { id = "SWITCH",      tile = M.TILE.SWITCH,      name = "开关", color = {200, 200, 50, 255},  group = "puzzle" },
     { id = "GATE",        tile = M.TILE.GATE,        name = "门",   color = {150, 100, 200, 255}, group = "puzzle" },
+    { id = "CURTAIN",    tile = M.TILE.CURTAIN,    name = "门帘", color = {90, 120, 60, 255},   group = "puzzle" },
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
     { id = "LADDER",      tile = M.TILE.LADDER,      name = "梯子", color = {160, 110, 50, 255},  group = "terrain" },
     { id = "CHECKPOINT",  tile = M.TILE.CHECKPOINT,   name = "篝火", color = {255, 140, 30, 255},  group = "pickup" },
@@ -154,11 +169,11 @@ M.TOOLS = {
     { id = "DECORATION", tile = -3, name = "装饰", color = {160, 155, 140, 255}, group = "decoration" },
 }
 
-M.LIGHT_TOOL_INDEX = 18
-M.LIGHT_ZONE_TOOL_INDEX = 19
-M.UNLIT_LIGHT_TOOL_INDEX = 20
-M.DECORATION_TOOL_INDEX = 21
-M.HIDDEN_WALL_TOOL_INDEX = 14
+M.LIGHT_TOOL_INDEX = 23
+M.LIGHT_ZONE_TOOL_INDEX = 24
+M.UNLIT_LIGHT_TOOL_INDEX = 25
+M.DECORATION_TOOL_INDEX = 26
+M.HIDDEN_WALL_TOOL_INDEX = 19
 
 -- ====================================================================
 -- 子菜单分组定义
@@ -305,6 +320,7 @@ M.BOX_SELECT_THRESHOLD = 4
 -- 隐藏墙超时
 -- ====================================================================
 M.HIDDEN_WALL_TIMEOUT = 5.0
+M.HIDDEN_WALL_FADE_DURATION = 0.2  -- 隐藏墙渐变消失时长（秒）
 
 -- ====================================================================
 -- 飞行道具常量

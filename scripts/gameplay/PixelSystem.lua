@@ -73,4 +73,15 @@ function M.RecoverPixels(n)
     end
 end
 
+--- 设置存活像素数为指定值（用于跨关卡保持血量）
+--- 如果目标值小于当前值则剥离，大于当前值则恢复
+function M.SetAliveCount(targetCount)
+    targetCount = math.max(0, math.min(targetCount, M.totalPixels))
+    if targetCount < M.alivePixels then
+        M.StripPixels(M.alivePixels - targetCount)
+    elseif targetCount > M.alivePixels then
+        M.RecoverPixels(targetCount - M.alivePixels)
+    end
+end
+
 return M

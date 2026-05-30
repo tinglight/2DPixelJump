@@ -297,6 +297,22 @@ S.bgDialogSelected = 0        -- 背景对话框中选中的索引
 S.bgAlphaInput = "50"         -- 对话框中明暗度输入框的文本
 
 -- ====================================================================
+-- 装饰资产图片（纯视觉，战争迷雾下，无碰撞）
+-- ====================================================================
+-- 每个装饰物: { col, row, w, h, image, handle, alpha }
+-- col/row: 左上角所在网格坐标(1-based)
+-- w/h: 占据网格宽高
+-- image: 图片路径（相对资源根，如 "image/xxx.png"）
+-- handle: NanoVG 图片句柄缓存（运行时）
+-- alpha: 透明度 0.0~1.0（默认1.0）
+S.decorations = {}
+S.selectedDecorationIndex = 0  -- 当前选中的装饰物索引
+S.decoDialogSelected = 0       -- 装饰对话框中选中的图片索引
+S.decoWidthInput = "2"         -- 装饰物宽度输入（格数）
+S.decoHeightInput = "2"        -- 装饰物高度输入（格数）
+S.decoAlphaInput = "100"       -- 装饰物透明度输入（百分比）
+
+-- ====================================================================
 -- 视口缓存
 -- ====================================================================
 S.viewportCache = {}
@@ -337,7 +353,8 @@ S.play = {
     fallAnimTime = 0,
     switchState = {},
     collected = {},
-    hiddenWallRevealed = {},
+    hiddenWallRevealed = {},  -- group => revealTime
+    gameTime = 0,
     inWater = false,
     inBlackWater = false,
     waterDrainAccum = 0,

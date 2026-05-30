@@ -8,6 +8,7 @@ local FlameRenderer = require("editor.FlameRenderer")
 local Undo = require("editor.UndoSystem")
 local CrossLevel = require("editor.CrossLevel")
 local SolidRenderer = require("SolidRenderer")
+local CurtainRenderer = require("CurtainRenderer")
 local PipeSystem = require("editor.PipeSystem")
 local PauseMenu = require("PauseMenu")
 
@@ -16,6 +17,26 @@ local M = {}
 -- 依赖注入（延迟加载避免循环引用）
 local FogOfWar, CloudStorage, WorldMapEditor, LevelGenerator
 local cjson
+
+-- 试玩模式开始前保存的编辑器原始光源列表（深拷贝）
+local savedEditorLightSources = nil
+
+--- 深拷贝光源列表（每个 light 是独立副本，避免试玩时修改影响编辑器）
+local function DeepCopyLightSources(sources)
+    if not sources then return {} end
+    local copy = {}
+    for i, light in ipairs(sources) do
+        copy[i] = {
+            col = light.col,
+            row = light.row,
+            diameter = light.diameter,
+            feather = light.feather,
+            group = light.group,
+            noLantern = light.noLantern,
+        }
+    end
+    return copy
+end
 
 ---@param deps table { FogOfWar, CloudStorage, WorldMapEditor, LevelGenerator, cjson }
 function M.Inject(deps)
@@ -31,11 +52,33 @@ function M.Inject(deps)
         if row < 1 or row > S.MAP_ROWS then return false end
         local val = S.levelData[row] and S.levelData[row][col]
         if not val or val == 0 then return false end
-        local base = TileUtils.GetTileType(val)
-        return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
+        local base, group = TileUtils.GetTileType(val)
+        if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
+            or base == C.TILE.SLOPE_TR or base == C.TILE.SLOPE_TL or base == C.TILE.SLOPE_BR or base == C.TILE.SLOPE_BL then
+            return true
+        end
+        -- 隐藏墙：未揭示或正在渐变中都阻挡光线
+        if base == C.TILE.HIDDEN_WALL then
+            local revealTime = S.play.hiddenWallRevealed[group]
+            if not revealTime then return true end
+            if S.play.gameTime - revealTime < C.HIDDEN_WALL_FADE_DURATION then return true end
+        end
+        return false
     end
     FogOfWar.SetCollisionChecker(isSolidForLight)
     SolidRenderer.SetCollisionChecker(isSolidForLight)
+
+    -- 设置柳条检测器用于光照衰减
+    local function isCurtainAt(col, row)
+        if col < 1 or col > S.MAP_COLS then return false end
+        if row < 1 or row > S.MAP_ROWS then return false end
+        local val = S.levelData[row] and S.levelData[row][col]
+        if not val or val == 0 then return false end
+        local base = TileUtils.GetTileType(val)
+        return base == C.TILE.CURTAIN
+    end
+    FogOfWar.SetCurtainChecker(isCurtainAt)
+    SolidRenderer.SetCurtainChecker(isCurtainAt)
 end
 
 ------------------------------------------------------------
@@ -117,22 +160,49 @@ function M.IsSolid(col, row)
     if row > S.MAP_ROWS then return true end
     local val = S.levelData[row][col]
     local base, group = TileUtils.GetTileType(val)
-    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER then return true end
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
+        or base == C.TILE.SLOPE_TR or base == C.TILE.SLOPE_TL or base == C.TILE.SLOPE_BR or base == C.TILE.SLOPE_BL then return true end
     if base == C.TILE.GATE and not S.play.switchState[group] then return true end
-    if base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then return true end
+    if base == C.TILE.HIDDEN_WALL then
+        local revealTime = S.play.hiddenWallRevealed[group]
+        if not revealTime then return true end
+        -- 渐变中仍保持碰撞
+        if S.play.gameTime - revealTime < C.HIDDEN_WALL_FADE_DURATION then return true end
+    end
     if base == C.TILE.FRAGILE and not S.play.fragileGone[row .. "_" .. col] then return true end
     return false
 end
 
---- 检查某格是否为实体方块（用于渲染时邻居检测，边界外返回 false）
+--- 检查某格是否为实体方块（用于渲染时邻居检测，包含未完全消失的隐藏墙）
 function M.IsSolidAt(row, col)
     if row < 1 or row > S.MAP_ROWS or col < 1 or col > S.MAP_COLS then
         return false
     end
     local val = S.levelData[row][col]
     if not val or val == 0 then return false end
+    local base, group = TileUtils.GetTileType(val)
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
+        or base == C.TILE.SLOPE_TR or base == C.TILE.SLOPE_TL or base == C.TILE.SLOPE_BR or base == C.TILE.SLOPE_BL then
+        return true
+    end
+    -- 隐藏墙：未揭示或正在渐变中也算实体（用于法线计算）
+    if base == C.TILE.HIDDEN_WALL then
+        local revealTime = S.play.hiddenWallRevealed[group]
+        if not revealTime then return true end
+        if S.play.gameTime - revealTime < C.HIDDEN_WALL_FADE_DURATION then return true end
+    end
+    return false
+end
+
+--- 检测指定位置是否为柱子（用于柱子衔接渲染）
+function M.IsPillarAt(row, col)
+    if row < 1 or row > S.MAP_ROWS or col < 1 or col > S.MAP_COLS then
+        return false
+    end
+    local val = S.levelData[row][col]
+    if not val or val == 0 then return false end
     local base = TileUtils.GetTileType(val)
-    return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
+    return base == C.TILE.SOLID_PILLAR
 end
 
 --- 检测玩家是否在梯子上（任意身体格子重叠梯子）
@@ -169,6 +239,65 @@ function M.Collides(gx, gy)
         end
     end
     return false
+end
+
+--- 判断某格是否为实体（不含斜坡，用于玩家水平移动碰撞）
+function M.IsSolidNonSlope(col, row)
+    if col < 1 or col > S.MAP_COLS then return true end
+    if row < 1 then return false end
+    if row > S.MAP_ROWS then return true end
+    local val = S.levelData[row][col]
+    local base, group = TileUtils.GetTileType(val)
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER then return true end
+    if base == C.TILE.GATE and not S.play.switchState[group] then return true end
+    if base == C.TILE.HIDDEN_WALL then
+        local revealTime = S.play.hiddenWallRevealed[group]
+        if not revealTime then return true end
+        if S.play.gameTime - revealTime < C.HIDDEN_WALL_FADE_DURATION then return true end
+    end
+    if base == C.TILE.FRAGILE and not S.play.fragileGone[row .. "_" .. col] then return true end
+    return false
+end
+
+--- 碰撞检测（忽略斜坡）
+function M.CollidesIgnoreSlopes(gx, gy)
+    local s = M.PlayerGridSize()
+    for dy = 0, s - 1 do
+        for dx = 0, s - 1 do
+            if M.IsSolidNonSlope(gx + dx, gy + dy) then return true end
+        end
+    end
+    return false
+end
+
+--- 获取指定格子的斜坡类型（如果是斜坡返回 base，否则 nil）
+function M.GetSlopeAt(col, row)
+    if col < 1 or col > S.MAP_COLS or row < 1 or row > S.MAP_ROWS then return nil end
+    local val = S.levelData[row][col]
+    local base = TileUtils.GetTileType(val)
+    if base == C.TILE.SLOPE_TR or base == C.TILE.SLOPE_TL
+        or base == C.TILE.SLOPE_BR or base == C.TILE.SLOPE_BL then
+        return base
+    end
+    return nil
+end
+
+--- 判断斜坡与移动方向的关系
+local function PlaySlopeMovementType(slopeType, dir)
+    if slopeType == C.TILE.SLOPE_TR then
+        if dir == 1 then return true, false end   -- 右=上坡
+        if dir == -1 then return false, true end  -- 左=下坡
+    elseif slopeType == C.TILE.SLOPE_TL then
+        if dir == -1 then return true, false end
+        if dir == 1 then return false, true end
+    elseif slopeType == C.TILE.SLOPE_BR then
+        if dir == 1 then return false, true end
+        if dir == -1 then return true, false end
+    elseif slopeType == C.TILE.SLOPE_BL then
+        if dir == -1 then return false, true end
+        if dir == 1 then return true, false end
+    end
+    return false, false
 end
 
 ------------------------------------------------------------
@@ -262,7 +391,7 @@ function M.ProcessTileAt(col, row)
             CrossLevel.ActivateCrossSwitch(S.worldPlayCurrentFile, group)
         end
     elseif base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then
-        S.play.hiddenWallRevealed[group] = true
+        S.play.hiddenWallRevealed[group] = S.play.gameTime
     elseif base == C.TILE.CHECKPOINT and not S.checkpointActivated[key] then
         -- 移除之前篝火的光源（带渐出动画）
         if S.checkpointLightPos then
@@ -290,6 +419,7 @@ function M.ProcessTileAt(col, row)
         M.SyncFallGridCount()
         S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
         M.ShowBonfireMessage()
+        M.TriggerCampfireIgnite(key)
         -- 世界试玩模式：仅正式游戏时保存玩家进度到云端（编辑器试玩不保存）
         if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile and S.fromMainMenu then
             M.SavePlayerProgress()
@@ -317,7 +447,7 @@ function M.RevealHiddenRow(startCol, row, count, isHorizontal)
         if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
             local ab, ag = TileUtils.GetTileType(S.levelData[row][col])
             if ab == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[ag] then
-                S.play.hiddenWallRevealed[ag] = true
+                S.play.hiddenWallRevealed[ag] = S.play.gameTime
             end
         end
     end
@@ -329,7 +459,7 @@ function M.RevealHiddenCol(col, startRow, count)
         if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
             local ab, ag = TileUtils.GetTileType(S.levelData[row][col])
             if ab == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[ag] then
-                S.play.hiddenWallRevealed[ag] = true
+                S.play.hiddenWallRevealed[ag] = S.play.gameTime
             end
         end
     end
@@ -361,9 +491,93 @@ end
 
 function M.MoveOneGrid(dir)
     local newX = S.play.gridX + dir
-    if not M.Collides(newX, S.play.gridY) then
+    local gy = S.play.gridY
+
+    -- 用忽略斜坡的碰撞检测（斜坡不阻挡玩家水平移动）
+    if not M.CollidesIgnoreSlopes(newX, gy) then
+        -- 平移成功
         S.play.gridX = newX
+
+        -- 下坡贴合：移动后检查脚下是否有下坡方向的斜坡
+        local s = M.PlayerGridSize()
+        local feetRow = gy + s
+        local shouldSnapDown = false
+        for dx = 0, s - 1 do
+            local slope = M.GetSlopeAt(S.play.gridX + dx, feetRow)
+            if slope then
+                local _, isDown = PlaySlopeMovementType(slope, dir)
+                if isDown then shouldSnapDown = true; break end
+            end
+            -- 也检查玩家底行（正在斜坡内部）
+            slope = M.GetSlopeAt(S.play.gridX + dx, gy + s - 1)
+            if slope then
+                local _, isDown = PlaySlopeMovementType(slope, dir)
+                if isDown then shouldSnapDown = true; break end
+            end
+        end
+
+        if shouldSnapDown then
+            local downY = gy + 1
+            if not M.CollidesIgnoreSlopes(S.play.gridX, downY) then
+                S.play.gridY = downY
+                -- 斜坡下降时减小火焰（与普通下落一致：下滑一格降低一格）
+                local stripCount = math.max(1, math.floor(S.playTotalPixels / 10 + 0.5))
+                M.StripPixels(stripCount)
+                S.play.fallGridCount = S.play.fallGridCount + 1
+                if S.play.fallGridCount >= S.playerParams.maxFallGrids then
+                    S.play.alive = false
+                    S.play.deathTimer = 0
+                    return
+                end
+            end
+        end
+
+        S.play.facingRight = (dir > 0)
+        return
     end
+
+    -- 平移被实体阻挡 → 检查是否有斜坡暗示上坡
+    local s = M.PlayerGridSize()
+    local hasUp = false
+    -- 检查目标位置区域
+    for dy = 0, s - 1 do
+        for dx = 0, s - 1 do
+            local slope = M.GetSlopeAt(newX + dx, gy + dy)
+            if slope then
+                local u, _ = PlaySlopeMovementType(slope, dir)
+                if u then hasUp = true; break end
+            end
+        end
+        if hasUp then break end
+    end
+    -- 检查当前位置脚下
+    if not hasUp then
+        local feetRow = gy + s
+        for dx = 0, s - 1 do
+            local slope = M.GetSlopeAt(S.play.gridX + dx, feetRow)
+            if slope then
+                local u, _ = PlaySlopeMovementType(slope, dir)
+                if u then hasUp = true; break end
+            end
+            slope = M.GetSlopeAt(S.play.gridX + dx, gy + s - 1)
+            if slope then
+                local u, _ = PlaySlopeMovementType(slope, dir)
+                if u then hasUp = true; break end
+            end
+        end
+    end
+
+    if hasUp then
+        local upY = gy - 1
+        if not M.CollidesIgnoreSlopes(newX, upY) then
+            S.play.gridX = newX
+            S.play.gridY = upY
+            S.play.facingRight = (dir > 0)
+            return
+        end
+    end
+
+    -- 都失败，玩家被阻挡
     S.play.facingRight = (dir > 0)
 end
 
@@ -390,11 +604,14 @@ end
 ------------------------------------------------------------
 
 function M.Update(dt)
+    S.play.gameTime = S.play.gameTime + dt
+
     -- 死亡中由 deathPhase 自行处理 ESC，此处跳过
     if not S.play.alive then
         FogOfWar.UpdateTweens(dt)
         M.UpdateDeathRespawn(dt)
         M.UpdateBonfireMessage(dt)
+        M.UpdateCampfireParticles(dt)
         M.UpdateFuelBurst(dt)
         return
     end
@@ -437,10 +654,11 @@ function M.Update(dt)
     M.HandleJumpInput()
     M.HandleProjectileInput()
     M.UpdateVerticalPhysics(dt)
-    M.UpdateGroundRecovery(dt)
+    -- M.UpdateGroundRecovery(dt) -- BUG FIX: 移除被动恢复，火焰只通过燃料球/篝火恢复
     M.UpdateFragilePlatform(dt)
     CrossLevel.Update(dt)
     M.UpdateBonfireMessage(dt)
+    M.UpdateCampfireParticles(dt)
     M.UpdateFuelBurst(dt)
     M.UpdatePixelRecoverAnim(dt)
 
@@ -482,6 +700,8 @@ function M.Update(dt)
     else
         S.play.waterDrainAccum = 0
     end
+
+    CurtainRenderer.UpdateSway(dt)
 
     FogOfWar.UpdateTweens(dt)
     FogOfWar.UpdatePlayerZone(S.play.gridX + 1, S.play.gridY + 1, dt)
@@ -1288,12 +1508,19 @@ function M.UpdateTransition(dt)
             t.alpha = 1.0
             -- 全黑时执行实际关卡加载
             if t.pendingFile then
+                -- 保存跨关卡持久状态（跳跃能力）
+                local savedFallGridCount = S.play.fallGridCount or 0
                 if M.WorldPlayLoadLevel(t.pendingFile, t.pendingDir, t.pendingGx, t.pendingGy) then
+                    -- 切换关卡后更新光源快照（新关卡的光源数据）
+                    savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
                     CrossLevel.Clear()
                     S.tipPixels = {}
                     S.tipSpawnTimer = 0
                     S.playFallParticles = {}
-                    S.play.fallGridCount = 0
+                    M.campfireParticles = {}
+                    M.campfireIgniteEffect = {}
+                    -- 保留跳跃能力（跨关卡不清零）
+                    S.play.fallGridCount = savedFallGridCount
                     S.play.fallTickCurrent = C.PLAY_FALL_BASE
                     S.play.collected = {}
                     S.play.switchState = {}
@@ -1418,6 +1645,15 @@ end
 
 local function ResetPlayState()
     CleanupCheckpointLight()
+
+    -- 将 FogOfWar 内部光源替换为克隆副本，避免试玩修改影响编辑器
+    -- （savedEditorLightSources 在 StartPlayMode/StartWorldPlayMode 入口处已保存）
+    if savedEditorLightSources then
+        local clonedLights = DeepCopyLightSources(savedEditorLightSources)
+        FogOfWar.SetLightSources(clonedLights)
+        S.lightSources = FogOfWar.GetLightSources()
+    end
+
     S.play.gridX = S.spawnCol
     S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
     S.play.isOnGround = false
@@ -1459,6 +1695,8 @@ local function ResetPlayState()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
+    M.campfireParticles = {}
+    M.campfireIgniteEffect = {}
     local zoom = S.playerParams.cameraZoom or 1.0
     S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - S.playViewW * zoom * 0.35)
     -- 垂直初始化
@@ -1506,10 +1744,10 @@ function M.UpdateDeathRespawn(dt)
     elseif M.deathPhase == "waitKey" then
         -- 等待任意键按下
         if input:GetKeyPress(KEY_ESCAPE) then
-            -- ESC 返回编辑
-            CleanupCheckpointLight()
+            -- ESC 返回编辑（恢复光源）
             M.deathPhase = nil
             M.deathPhaseTimer = 0
+            M.ExitPlayMode()
             if S.editorMode == C.MODE_WORLDPLAY then
                 S.editorMode = C.MODE_WORLDMAP
                 WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, C.TOPBAR_H, 0, S.sidebarOpen and C.SIDEBAR_W or 0)
@@ -1540,9 +1778,26 @@ function M.AnyKeyPressed()
 end
 
 function M.Respawn()
-    -- 重置位置到重生点
-    S.play.gridX = S.spawnCol
-    S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
+    -- 检查是否有篝火存档点（世界试玩模式）
+    local useBonfire = false
+    if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile and S.checkpointCol and S.checkpointRow then
+        -- 如果篝火在其他关卡，先加载该关卡
+        if S.checkpointFile ~= S.worldPlayCurrentFile then
+            if M.WorldPlayLoadLevel(S.checkpointFile, nil) then
+                savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
+                CrossLevel.Clear()
+            end
+        end
+        -- 从篝火位置复活
+        S.play.gridX = S.checkpointCol
+        S.play.gridY = S.checkpointRow - (C.PLAYER_GRID_H - 1)
+        useBonfire = true
+    else
+        -- 没有篝火存档点，从关卡出生点复活
+        S.play.gridX = S.spawnCol
+        S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
+    end
+
     -- 重置物理状态
     S.play.isOnGround = false
     S.play.isJumping = false
@@ -1553,6 +1808,7 @@ function M.Respawn()
     S.play.fallTimer = 0
     S.play.fallTickCurrent = C.PLAY_FALL_BASE
     S.play.jumpTimer = 0
+    -- 死亡复活恢复满血，跳跃力归零（游戏机制：生命损失=跳跃力）
     S.play.fallGridCount = 0
     S.play.isMoving = false
     S.play.moveAnimTime = 0
@@ -1569,18 +1825,43 @@ function M.Respawn()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
+    M.campfireParticles = {}
+    M.campfireIgniteEffect = {}
     -- 重置脆弱平台
     S.play.fragilePrevPlatform = nil
     S.play.fragileGone = {}
     S.play.fragileParticles = {}
+
+    -- 如果从篝火复活，重新激活篝火状态（视觉上保持点亮）
+    if useBonfire then
+        local key = S.checkpointRow .. "_" .. S.checkpointCol
+        S.checkpointActivated = {}
+        S.checkpointActivated[key] = true
+    end
+
     -- 相机立即跟随到重生点
     M.SnapCameraToPlayer()
 end
 
 function M.StartPlayMode()
+    -- 进入试玩前保存编辑器当前光源快照（深拷贝）
+    savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
     S.editorMode = C.MODE_PLAY
     ResetPlayState()
     S.SetMessage("试玩中! ESC返回编辑", 2.0)
+end
+
+--- 退出试玩模式时恢复编辑器原始光源（所有退出路径必须调用）
+function M.ExitPlayMode()
+    CleanupCheckpointLight()
+    PipeSystem.StopSound()
+    -- 恢复编辑器原始光源
+    if savedEditorLightSources then
+        FogOfWar.SetLightSources(DeepCopyLightSources(savedEditorLightSources))
+        S.lightSources = FogOfWar.GetLightSources()
+        savedEditorLightSources = nil
+    end
+    FogOfWar.ResetZoneState()
 end
 
 ------------------------------------------------------------
@@ -1642,6 +1923,8 @@ function M.StartWorldPlayMode()
                 S.worldPlayCurrentFile = progress.checkpointFile
                 S.worldPlayCooldown = 0
                 S.editorMode = C.MODE_WORLDPLAY
+                -- 保存加载后的关卡光源快照（在 ResetPlayState 之前）
+                savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
                 ResetPlayState()
                 CrossLevel.Reset()
                 -- 恢复 checkpoint 位置作为出生点
@@ -1667,6 +1950,8 @@ function M.StartWorldPlayMode()
         S.worldPlayCurrentFile = firstNode.file
         S.worldPlayCooldown = 0
         S.editorMode = C.MODE_WORLDPLAY
+        -- 保存加载后的关卡光源快照（在 ResetPlayState 之前）
+        savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
         ResetPlayState()
         CrossLevel.Reset()
         S.SetMessage("世界试玩中! ESC返回 | 到达边界自动切换关卡", 3.0)
@@ -1727,6 +2012,26 @@ function M.Draw()
     SolidRenderer.SetTime(S.editorClock)
     M.DrawBackground(vg)
     local startCol, endCol = M.DrawGrid(vg)
+    -- 装饰资产图片（背景上方，地块下方，被迷雾覆盖）
+    if #S.decorations > 0 then
+        for _, deco in ipairs(S.decorations) do
+            if not deco.handle and deco.image and deco.image ~= "" then
+                deco.handle = nvgCreateImage(vg, deco.image, 0)
+            end
+            if deco.handle and deco.handle > 0 then
+                local dx = (deco.col - 1) * C.GRID - S.playCameraX
+                local dy = (deco.row - 1) * C.GRID - S.playCameraY
+                local dw = (deco.w or 2) * C.GRID
+                local dh = (deco.h or 2) * C.GRID
+                local alpha = deco.alpha or 1.0
+                local imgPaint = nvgImagePattern(vg, dx, dy, dw, dh, 0, deco.handle, alpha)
+                nvgBeginPath(vg)
+                nvgRect(vg, dx, dy, dw, dh)
+                nvgFillPaint(vg, imgPaint)
+                nvgFill(vg)
+            end
+        end
+    end
     M.DrawTiles(vg, startCol, endCol)
     M.DrawDecorations(vg, startCol, endCol)
     M.DrawFragileParticles(vg)
@@ -1862,7 +2167,8 @@ function M.DrawTiles(vg, startCol, endCol)
 end
 
 function M.DrawOneTile(vg, px, py, base, group, row, col)
-    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER then
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
+        or base == C.TILE.SLOPE_TR or base == C.TILE.SLOPE_TL or base == C.TILE.SLOPE_BR or base == C.TILE.SLOPE_BL then
         M.DrawSolidTileWithLight(vg, px, py, base, row, col)
     elseif base == C.TILE.FUEL then
         M.DrawFuelTile(vg, px, py, row, col)
@@ -1890,6 +2196,8 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawPipeTile(vg, px, py, row, col)
     elseif base == C.TILE.FRAGILE then
         M.DrawFragileTile(vg, px, py, row, col)
+    elseif base == C.TILE.CURTAIN then
+        M.DrawCurtainTile(vg, px, py, row, col)
     end
 end
 
@@ -1936,9 +2244,53 @@ function M.DrawSolidTileWithLight(vg, px, py, tileType, row, col)
         bottom = M.IsSolidAt(row + 1, col),
         left   = M.IsSolidAt(row, col - 1),
         right  = M.IsSolidAt(row, col + 1),
+        -- 柱子衔接检测
+        pillarTop    = M.IsPillarAt(row - 1, col),
+        pillarBottom = M.IsPillarAt(row + 1, col),
+        pillarLeft   = M.IsPillarAt(row, col - 1),
+        pillarRight  = M.IsPillarAt(row, col + 1),
     }
 
     SolidRenderer.DrawSolid(vg, tileType, px, py, C.GRID, totalLit, totalLdx, totalLdy, col, row, neighbors)
+end
+
+function M.DrawCurtainTile(vg, px, py, row, col)
+    -- 计算玩家光源
+    local playerCol = S.play.gridX
+    local playerRow = S.play.gridY + 1
+    local flameRatio = S.playAlivePixels / math.max(1, S.playTotalPixels)
+    local playerRadius = (S.playerParams and S.playerParams.defaultLightDiameter or 6) * 0.5 * flameRatio
+    local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(col, row, playerCol, playerRow, playerRadius)
+
+    -- 计算放置的光源
+    local sLit, sLdx, sLdy = SolidRenderer.CalcLightDirection(col, row, S.lightSources)
+
+    -- 合并光源
+    local totalLit = math.min(1.0, pLit + sLit)
+    local totalLdx = pLdx * pLit + sLdx * sLit
+    local totalLdy = pLdy * pLit + sLdy * sLit
+    local len = math.sqrt(totalLdx * totalLdx + totalLdy * totalLdy)
+    if len > 0.01 then
+        totalLdx = totalLdx / len
+        totalLdy = totalLdy / len
+    end
+
+    -- 检查上下是否有相邻柳条（用于自动拼接）
+    local hasAbove = (row > 1) and (TileUtils.GetTileType(S.levelData[row - 1][col]) == C.TILE.CURTAIN)
+    local hasBelow = (row < S.MAP_ROWS) and (TileUtils.GetTileType(S.levelData[row + 1][col]) == C.TILE.CURTAIN)
+
+    CurtainRenderer.DrawCurtain(vg, px, py, C.GRID, totalLit, totalLdx, totalLdy,
+        col, row, S.playGameTime or 0, hasAbove, hasBelow)
+
+    -- 玩家触碰检测
+    local gx = S.play.gridX
+    local gy = S.play.gridY
+    local ps = M.PlayerGridSize()
+    if col >= gx and col < gx + ps and row >= gy and row < gy + ps then
+        CurtainRenderer.TriggerSway(col, row, 1.2)
+        CurtainRenderer.PropagateSwayToNeighbors(col, row, 1.0,
+            S.levelData, C.TILE, TileUtils.GetTileType)
+    end
 end
 
 function M.DrawFuelTile(vg, px, py, row, col)
@@ -2113,11 +2465,25 @@ function M.DrawGateTile(vg, px, py, group)
 end
 
 function M.DrawHiddenWallTile(vg, px, py, group, row, col)
-    if S.play.hiddenWallRevealed[group] then return end
+    local revealTime = S.play.hiddenWallRevealed[group]
+    local alpha = 1.0
+    if revealTime then
+        local elapsed = S.play.gameTime - revealTime
+        if elapsed >= C.HIDDEN_WALL_FADE_DURATION then
+            return  -- 完全消失，不绘制
+        end
+        alpha = 1.0 - (elapsed / C.HIDDEN_WALL_FADE_DURATION)
+    end
+    if alpha < 1.0 then
+        nvgGlobalAlpha(vg, alpha)
+    end
     if row and col then
         M.DrawSolidTileWithLight(vg, px, py, C.TILE.SOLID, row, col)
     else
         M.DrawSolidTile(vg, px, py)
+    end
+    if alpha < 1.0 then
+        nvgGlobalAlpha(vg, 1.0)
     end
 end
 
@@ -2686,9 +3052,105 @@ M.deathPhaseTimer = 0
 -- 篝火点亮消息
 M.bonfireMsg = { active = false, timer = 0, duration = 1.8 }
 
+-- 篝火粒子系统 (key -> particle list)
+M.campfireParticles = {}
+-- 篝火点燃特效状态 (key -> {timer, duration})
+M.campfireIgniteEffect = {}
+
 function M.ShowBonfireMessage()
     M.bonfireMsg.active = true
     M.bonfireMsg.timer = 0
+end
+
+--- 触发篝火点燃爆发特效
+function M.TriggerCampfireIgnite(key)
+    M.campfireIgniteEffect[key] = { timer = 0, duration = 1.2 }
+    -- 初始爆发粒子
+    if not M.campfireParticles[key] then M.campfireParticles[key] = {} end
+    for i = 1, 24 do
+        table.insert(M.campfireParticles[key], {
+            x = (math.random() - 0.5) * 12,
+            y = -math.random() * 8,
+            vx = (math.random() - 0.5) * 40,
+            vy = -math.random() * 60 - 20,
+            life = 0.6 + math.random() * 0.6,
+            maxLife = 0.6 + math.random() * 0.6,
+            size = math.random(2, 4),
+            r = math.random(200, 255),
+            g = math.random(80, 180),
+            b = math.random(0, 40),
+        })
+    end
+end
+
+--- 更新篝火粒子系统
+function M.UpdateCampfireParticles(dt)
+    for key, particles in pairs(M.campfireParticles) do
+        local i = 1
+        while i <= #particles do
+            local p = particles[i]
+            p.life = p.life - dt
+            if p.life <= 0 then
+                table.remove(particles, i)
+            else
+                p.x = p.x + p.vx * dt
+                p.y = p.y + p.vy * dt
+                p.vy = p.vy - 30 * dt  -- 向上减速（重力轻微）
+                i = i + 1
+            end
+        end
+    end
+    -- 更新点燃特效计时器
+    for key, eff in pairs(M.campfireIgniteEffect) do
+        eff.timer = eff.timer + dt
+        if eff.timer >= eff.duration then
+            M.campfireIgniteEffect[key] = nil
+        end
+    end
+end
+
+--- 为未点燃的篝火产生缓慢上升的余烬粒子
+function M.SpawnEmberParticles(key)
+    if not M.campfireParticles[key] then M.campfireParticles[key] = {} end
+    local particles = M.campfireParticles[key]
+    if #particles < 6 then
+        if math.random() < 0.03 then
+            table.insert(particles, {
+                x = (math.random() - 0.5) * 10,
+                y = 0,
+                vx = (math.random() - 0.5) * 6,
+                vy = -math.random() * 15 - 5,
+                life = 1.0 + math.random() * 1.0,
+                maxLife = 1.0 + math.random() * 1.0,
+                size = math.random(1, 2),
+                r = math.random(180, 255),
+                g = math.random(40, 80),
+                b = 0,
+            })
+        end
+    end
+end
+
+--- 为已点燃的篝火产生上升火花粒子
+function M.SpawnFlameParticles(key)
+    if not M.campfireParticles[key] then M.campfireParticles[key] = {} end
+    local particles = M.campfireParticles[key]
+    if #particles < 14 then
+        if math.random() < 0.12 then
+            table.insert(particles, {
+                x = (math.random() - 0.5) * 14,
+                y = -math.random() * 6,
+                vx = (math.random() - 0.5) * 12,
+                vy = -math.random() * 35 - 15,
+                life = 0.5 + math.random() * 0.8,
+                maxLife = 0.5 + math.random() * 0.8,
+                size = math.random(1, 3),
+                r = 255,
+                g = math.random(120, 220),
+                b = math.random(0, 50),
+            })
+        end
+    end
 end
 
 function M.UpdateBonfireMessage(dt)
@@ -2936,17 +3398,18 @@ end
 function M.DrawCheckpointTile(vg, px, py, row, col)
     local key = row .. "_" .. col
     local activated = S.checkpointActivated[key]
-    local ps = 3  -- 像素块大小（放大到与玩家相当）
+    local ps = 5  -- 像素块大小（原3 × 1.7 ≈ 5，放大1.7倍）
 
     -- 篝火从格子底部向上绘制，占 10 行 × 10 列 像素格
     local drawBaseY = py + C.GRID  -- 格子底边
     local drawTopY = drawBaseY - 10 * ps
     local drawLeftX = px + (C.GRID - 10 * ps) * 0.5  -- 水平居中
+    local t = S.flameTime or 0
 
-    -- 石头底座（行 8-9，从 drawTopY 算起）
+    -- 石头底座（行 8-9）
     local stones = {
-        {2,8},{3,8},{4,8},{5,8},{6,8},{7,8},
-        {1,9},{2,9},{3,9},{4,9},{5,9},{6,9},{7,9},{8,9},
+        {1,8},{2,8},{3,8},{4,8},{5,8},{6,8},{7,8},{8,8},
+        {0,9},{1,9},{2,9},{3,9},{4,9},{5,9},{6,9},{7,9},{8,9},{9,9},
     }
     for _, s in ipairs(stones) do
         local sx = drawLeftX + s[1] * ps
@@ -2954,77 +3417,182 @@ function M.DrawCheckpointTile(vg, px, py, row, col)
         nvgBeginPath(vg)
         nvgRect(vg, sx, sy, ps, ps)
         if s[2] == 9 then
-            nvgFillColor(vg, nvgRGBA(50, 45, 40, 255))
+            nvgFillColor(vg, nvgRGBA(40, 38, 35, 255))
         else
-            nvgFillColor(vg, nvgRGBA(75, 70, 60, 255))
+            nvgFillColor(vg, nvgRGBA(65, 60, 52, 255))
         end
         nvgFill(vg)
     end
 
-    -- 木柴（行 5-7）
+    -- 木柴堆（行 5-7，更多像素，发红光效果）
     local logs = {
-        {3,7},{4,7},{5,7},{6,7},
-        {2,6},{3,6},{4,6},{5,6},{6,6},{7,6},
-        {3,5},{4,5},{5,5},{6,5},
+        -- 底层木柴（行7）- 粗壮
+        {2,7},{3,7},{4,7},{5,7},{6,7},{7,7},
+        -- 中层木柴（行6）- 交叉堆叠
+        {1,6},{2,6},{3,6},{4,6},{5,6},{6,6},{7,6},{8,6},
+        -- 上层木柴（行5）
+        {2,5},{3,5},{4,5},{5,5},{6,5},{7,5},
     }
+
+    local emberFlick = math.sin(t * 3.5 + col * 1.3) * 0.3 + 0.7
     for _, l in ipairs(logs) do
         local lx = drawLeftX + l[1] * ps
         local ly = drawTopY + l[2] * ps
         nvgBeginPath(vg)
         nvgRect(vg, lx, ly, ps, ps)
-        nvgFillColor(vg, nvgRGBA(100, 60, 25, 255))
+        -- 木柴基础色（深棕）
+        local baseR, baseG, baseB = 80, 45, 18
+        -- 根据位置添加红色发光（越靠中心越红）
+        local cx = math.abs(l[1] - 4.5)
+        local cy = math.abs(l[2] - 6)
+        local redIntensity = math.max(0, 1.0 - (cx + cy) * 0.3) * emberFlick
+        local r = math.floor(baseR + 120 * redIntensity)
+        local g = math.floor(baseG + 20 * redIntensity)
+        local b = math.floor(baseB + 5 * redIntensity)
+        nvgFillColor(vg, nvgRGBA(r, g, b, 255))
         nvgFill(vg)
     end
 
+    -- 木柴缝隙中的红色发光像素
+    local glowPixels = {
+        {3,6},{5,6},{7,6},
+        {4,5},{6,5},
+        {3,7},{6,7},
+    }
+    local glowFlick = math.sin(t * 4.5 + col * 2.7) * 0.4 + 0.6
+    for _, g in ipairs(glowPixels) do
+        local gx = drawLeftX + g[1] * ps
+        local gy = drawTopY + g[2] * ps
+        nvgBeginPath(vg)
+        nvgRect(vg, gx, gy, ps, ps)
+        local ga = math.floor(140 * glowFlick)
+        nvgFillColor(vg, nvgRGBA(255, 60, 10, ga))
+        nvgFill(vg)
+    end
+
+    -- 篝火中心区域底部红色光晕
+    nvgBeginPath(vg)
+    nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 6 * ps, 8 * ps * 0.4)
+    local baseGlowA = math.floor(20 + 15 * glowFlick)
+    nvgFillColor(vg, nvgRGBA(200, 50, 10, baseGlowA))
+    nvgFill(vg)
+
     if activated then
-        -- 点燃状态：像素火焰（行 0-5）
-        local t = S.flameTime or 0
+        -- 点燃状态：增强像素火焰（行 0-4，更多像素更密集）
         local flicker1 = math.sin(t * 8 + col * 2.1) * 0.5 + 0.5
         local flicker2 = math.sin(t * 11 + row * 1.7) * 0.5 + 0.5
+        local flicker3 = math.sin(t * 6.5 + col * 3.3) * 0.5 + 0.5
 
         local flames = {
-            -- 外焰（橙红色）
-            {2,4,{255,80,10}}, {3,4,{255,100,15}}, {6,4,{255,90,10}}, {7,4,{255,100,15}},
-            {2,3,{255,110,20}}, {7,3,{255,100,15}},
-            -- 中焰（橙色）
-            {3,3,{255,140,30}}, {4,3,{255,160,40}}, {5,3,{255,150,35}}, {6,3,{255,140,30}},
-            {3,2,{255,170,50}}, {4,2,{255,190,60}}, {5,2,{255,180,55}}, {6,2,{255,170,50}},
-            -- 内焰（黄色）
-            {4,1,{255,220,80}}, {5,1,{255,210,70}},
-            {4,0,{255,240,120}}, {5,0,{255,230,100}},
+            -- 外焰底部（深红，行4）
+            {1,4,{220,50,5}}, {2,4,{255,70,10}}, {3,4,{255,90,15}},
+            {6,4,{255,80,10}}, {7,4,{255,70,10}}, {8,4,{220,50,5}},
+            -- 外焰中段（橙红，行3）
+            {1,3,{255,80,10}}, {2,3,{255,110,20}}, {3,3,{255,130,25}},
+            {6,3,{255,120,20}}, {7,3,{255,100,15}}, {8,3,{255,70,10}},
+            -- 中焰（橙色，行2-3）
+            {4,3,{255,160,40}}, {5,3,{255,150,35}},
+            {3,2,{255,170,50}}, {4,2,{255,200,60}}, {5,2,{255,190,55}}, {6,2,{255,170,50}},
+            {2,2,{255,130,25}}, {7,2,{255,130,25}},
+            -- 内焰（黄橙，行1）
+            {3,1,{255,200,60}}, {4,1,{255,230,90}}, {5,1,{255,220,80}}, {6,1,{255,200,60}},
+            -- 火焰尖端（亮黄，行0）
+            {4,0,{255,245,130}}, {5,0,{255,240,110}},
+            {3,0,{255,200,60}}, {6,0,{255,200,60}},
         }
         for _, f in ipairs(flames) do
             local fx = drawLeftX + f[1] * ps
             local fy = drawTopY + f[2] * ps
             local c = f[3]
-            local flick = (f[2] <= 2) and flicker1 or flicker2
-            local a = math.floor(180 + 75 * flick)
+            local flick
+            if f[2] <= 1 then flick = flicker1
+            elseif f[2] <= 2 then flick = flicker2
+            else flick = flicker3 end
+            local a = math.floor(200 + 55 * flick)
             nvgBeginPath(vg)
             nvgRect(vg, fx, fy, ps, ps)
             nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], a))
             nvgFill(vg)
         end
 
-        -- 火焰光晕
-        local glowA = math.floor(25 + 20 * flicker1)
+        -- 增强火焰光晕（多层）
+        local glowA1 = math.floor(35 + 25 * flicker1)
         nvgBeginPath(vg)
-        nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 2 * ps, 12)
-        nvgFillColor(vg, nvgRGBA(255, 150, 30, glowA))
+        nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 2 * ps, 18)
+        nvgFillColor(vg, nvgRGBA(255, 150, 30, glowA1))
         nvgFill(vg)
+        local glowA2 = math.floor(15 + 10 * flicker2)
+        nvgBeginPath(vg)
+        nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 2 * ps, 28)
+        nvgFillColor(vg, nvgRGBA(255, 100, 10, glowA2))
+        nvgFill(vg)
+
+        -- 产生上升火花粒子
+        M.SpawnFlameParticles(key)
     else
-        -- 未点燃：暗灰余烬 + 微弱闪烁
-        local t = S.flameTime or 0
+        -- 未点燃：发红光的余烬 + 微弱闪烁
         local embers = {
-            {3,5},{4,5},{5,5},{6,5},
-            {4,4},{5,4},
+            {3,4},{4,4},{5,4},{6,4},
+            {4,3},{5,3},
         }
-        local emberFlick = math.sin(t * 3 + col) * 0.3 + 0.7
+        local eFlick = math.sin(t * 3 + col) * 0.3 + 0.7
         for _, e in ipairs(embers) do
             local ex = drawLeftX + e[1] * ps
             local ey = drawTopY + e[2] * ps
             nvgBeginPath(vg)
             nvgRect(vg, ex, ey, ps, ps)
-            nvgFillColor(vg, nvgRGBA(60, 30, 15, math.floor(120 * emberFlick)))
+            local ea = math.floor(100 + 55 * eFlick)
+            nvgFillColor(vg, nvgRGBA(160, 50, 10, ea))
+            nvgFill(vg)
+        end
+
+        -- 产生缓慢上升的余烬粒子（未点燃独有）
+        M.SpawnEmberParticles(key)
+    end
+
+    -- 绘制篝火粒子
+    local particles = M.campfireParticles[key]
+    if particles and #particles > 0 then
+        local centerX = drawLeftX + 5 * ps
+        local centerY = drawTopY + 4 * ps
+        for _, p in ipairs(particles) do
+            local alpha = math.floor(255 * (p.life / p.maxLife))
+            nvgBeginPath(vg)
+            nvgRect(vg, centerX + p.x, centerY + p.y, p.size, p.size)
+            nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, alpha))
+            nvgFill(vg)
+        end
+    end
+
+    -- 点燃触发特效（火焰爆发闪光）
+    local ignite = M.campfireIgniteEffect[key]
+    if ignite then
+        local progress = ignite.timer / ignite.duration
+        -- 阶段1: 快速闪白（0~0.15）
+        if progress < 0.15 then
+            local flashA = math.floor(180 * (1.0 - progress / 0.15))
+            nvgBeginPath(vg)
+            nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 4 * ps, 30 + 20 * (progress / 0.15))
+            nvgFillColor(vg, nvgRGBA(255, 220, 100, flashA))
+            nvgFill(vg)
+        end
+        -- 阶段2: 扩散火圈（0.05~0.6）
+        if progress > 0.05 and progress < 0.6 then
+            local ringProgress = (progress - 0.05) / 0.55
+            local ringR = 10 + 35 * ringProgress
+            local ringA = math.floor(200 * (1.0 - ringProgress))
+            nvgBeginPath(vg)
+            nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 4 * ps, ringR)
+            nvgStrokeColor(vg, nvgRGBA(255, 100, 20, ringA))
+            nvgStrokeWidth(vg, 3.0 - 2.0 * ringProgress)
+            nvgStroke(vg)
+        end
+        -- 阶段3: 整体橙色脉冲光晕（0~0.4）
+        if progress < 0.4 then
+            local pulseA = math.floor(120 * (1.0 - progress / 0.4))
+            nvgBeginPath(vg)
+            nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 5 * ps, 25)
+            nvgFillColor(vg, nvgRGBA(255, 120, 20, pulseA))
             nvgFill(vg)
         end
     end

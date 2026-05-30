@@ -71,7 +71,8 @@ function M.PlaceHiddenWall(col, row)
     local oldVal = S.levelData[row][col]
     local oldBase, oldGroup = TileUtils.GetTileType(oldVal)
 
-    if oldBase == TILE.SOLID or oldBase == TILE.SOLID_PILLAR or oldBase == TILE.SOLID_SEWER then return end
+    if oldBase == TILE.SOLID or oldBase == TILE.SOLID_PILLAR or oldBase == TILE.SOLID_SEWER
+        or oldBase == TILE.SLOPE_TR or oldBase == TILE.SLOPE_TL or oldBase == TILE.SLOPE_BR or oldBase == TILE.SLOPE_BL then return end
 
     if oldBase == TILE.HIDDEN_WALL then
         S.hiddenWall.group = oldGroup
@@ -98,7 +99,8 @@ end
 ---@param tileType number
 function M.PlaceSimple(col, row, tileType)
     local oldVal = S.levelData[row][col]
-    if tileType == TILE.SOLID or tileType == TILE.SOLID_PILLAR or tileType == TILE.SOLID_SEWER then
+    if tileType == TILE.SOLID or tileType == TILE.SOLID_PILLAR or tileType == TILE.SOLID_SEWER
+        or tileType == TILE.SLOPE_TR or tileType == TILE.SLOPE_TL or tileType == TILE.SLOPE_BR or tileType == TILE.SLOPE_BL then
         local oldBase = TileUtils.GetTileType(oldVal)
         if oldBase == TILE.HIDDEN_WALL then return end
     end

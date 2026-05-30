@@ -5,6 +5,7 @@ local Config = require("gameplay.Config")
 local GAME_VERSION = require("version")
 local SolidRenderer = require("SolidRenderer")
 local EditorConstants = require("editor.Constants")
+local CurtainRenderer = require("CurtainRenderer")
 
 local M = {}
 
@@ -194,11 +195,105 @@ function M.ShowBonfireMessage()
     M.bonfireMessage.timer = 0
 end
 
+-- 篝火粒子系统 (key -> particle list)
+M.campfireParticles = {}
+-- 篝火点燃特效状态 (key -> {timer, duration})
+M.campfireIgniteEffect = {}
+
+--- 触发篝火点燃爆发特效
+function M.TriggerCampfireIgnite(key)
+    M.campfireIgniteEffect[key] = { timer = 0, duration = 1.2 }
+    if not M.campfireParticles[key] then M.campfireParticles[key] = {} end
+    for i = 1, 18 do
+        table.insert(M.campfireParticles[key], {
+            x = (math.random() - 0.5) * 8,
+            y = -math.random() * 5,
+            vx = (math.random() - 0.5) * 30,
+            vy = -math.random() * 45 - 15,
+            life = 0.5 + math.random() * 0.5,
+            maxLife = 0.5 + math.random() * 0.5,
+            size = math.random(1, 3),
+            r = math.random(200, 255),
+            g = math.random(80, 180),
+            b = math.random(0, 40),
+        })
+    end
+end
+
 function M.UpdateBonfireMessage(dt)
     if M.bonfireMessage.active then
         M.bonfireMessage.timer = M.bonfireMessage.timer + dt
         if M.bonfireMessage.timer >= M.bonfireMessage.duration then
             M.bonfireMessage.active = false
+        end
+    end
+end
+
+--- 更新篝火粒子系统
+function M.UpdateCampfireParticles(dt)
+    for key, particles in pairs(M.campfireParticles) do
+        local i = 1
+        while i <= #particles do
+            local p = particles[i]
+            p.life = p.life - dt
+            if p.life <= 0 then
+                table.remove(particles, i)
+            else
+                p.x = p.x + p.vx * dt
+                p.y = p.y + p.vy * dt
+                p.vy = p.vy - 20 * dt
+                i = i + 1
+            end
+        end
+    end
+    for key, eff in pairs(M.campfireIgniteEffect) do
+        eff.timer = eff.timer + dt
+        if eff.timer >= eff.duration then
+            M.campfireIgniteEffect[key] = nil
+        end
+    end
+end
+
+--- 为未点燃篝火产生余烬粒子
+function M.SpawnEmberParticles(key)
+    if not M.campfireParticles[key] then M.campfireParticles[key] = {} end
+    local particles = M.campfireParticles[key]
+    if #particles < 4 then
+        if math.random() < 0.025 then
+            table.insert(particles, {
+                x = (math.random() - 0.5) * 6,
+                y = 0,
+                vx = (math.random() - 0.5) * 4,
+                vy = -math.random() * 10 - 3,
+                life = 0.8 + math.random() * 0.8,
+                maxLife = 0.8 + math.random() * 0.8,
+                size = 1,
+                r = math.random(180, 255),
+                g = math.random(40, 80),
+                b = 0,
+            })
+        end
+    end
+end
+
+--- 为已点燃篝火产生火花粒子
+function M.SpawnFlameParticles(key)
+    if not M.campfireParticles[key] then M.campfireParticles[key] = {} end
+    local particles = M.campfireParticles[key]
+    if #particles < 10 then
+        if math.random() < 0.10 then
+            table.insert(particles, {
+                x = (math.random() - 0.5) * 10,
+                y = -math.random() * 4,
+                vx = (math.random() - 0.5) * 8,
+                vy = -math.random() * 25 - 10,
+                life = 0.4 + math.random() * 0.6,
+                maxLife = 0.4 + math.random() * 0.6,
+                size = math.random(1, 2),
+                r = 255,
+                g = math.random(120, 220),
+                b = math.random(0, 50),
+            })
         end
     end
 end
@@ -362,6 +457,12 @@ function M.Inject(deps)
     SolidRenderer.SetCollisionChecker(function(col, row)
         return Physics.IsSolidForLight(col, row)
     end)
+
+    -- 设置柳条检测器用于光照衰减
+    SolidRenderer.SetCurtainChecker(function(col, row)
+        return CurtainRenderer.IsCurtainAt(col, row, LevelManager.levelData,
+            require("LevelGenerator").TILE, Physics.GetTileType)
+    end)
 end
 
 -- 外部引用
@@ -477,15 +578,32 @@ end
 -- 地图
 -- ====================================================================
 
--- 检查某格是否为实体方块（用于邻居检测）
+-- 检查某格是否为实体方块（用于邻居检测，包含未完全消失的隐藏墙）
 local function IsSolidAt(row, col)
     if row < 1 or row > Config.MAP_ROWS or col < 1 or col > Config.MAP_COLS then
         return false
     end
     local val = LevelManager.levelData[row][col]
     if not val or val == 0 then return false end
-    local base = Physics.GetTileType(val)
-    return base == 1 or base == 13 or base == 17  -- SOLID or SOLID_PILLAR or SOLID_SEWER
+    local base, group = Physics.GetTileType(val)
+    if base == 1 or base == 13 or base == 17 then  -- SOLID or SOLID_PILLAR or SOLID_SEWER
+        return true
+    end
+    if base >= 19 and base <= 22 then  -- SLOPE_TR/TL/BR/BL
+        return true
+    end
+    -- 隐藏墙：未揭示或正在渐变中也算实体（用于法线计算）
+    if base == 8 then  -- HIDDEN_WALL
+        local revealTime = LevelManager.hiddenWallRevealed[group]
+        if not revealTime then
+            return true  -- 未揭示
+        end
+        local elapsed = M.gameTime - revealTime
+        if elapsed < LevelManager.HIDDEN_WALL_FADE_DURATION then
+            return true  -- 渐变中
+        end
+    end
+    return false
 end
 
 -- 检查某格是否为柱子（专门用于柱子拼接检测）
@@ -510,6 +628,47 @@ local function IsWaterAt(row, col)
     return base == 9 or base == 10 or base == 11  -- WATER, POISON_WATER, BLACK_WATER
 end
 
+-- 帧级光照缓存（每帧仅计算一次可见区域的瓦片光照）
+local frameLightCache = {}     -- [row*10000+col] = {lit, ldx, ldy}
+local frameLightCacheFrame = -1 -- 帧编号，用于检测是否需要重算
+local cachedCampfires = {}     -- 预解析的篝火位置列表 {row, col}
+local frameCounter = 0
+
+--- 计算单个瓦片的合并光照（玩家 + 篝火），结果缓存
+local function CalcTileLighting(col, row, playerGridX, playerGridY, playerLightRadius)
+    local key = row * 10000 + col
+    local cached = frameLightCache[key]
+    if cached then return cached[1], cached[2], cached[3] end
+
+    -- 玩家光源
+    local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(
+        col, row, playerGridX, playerGridY, playerLightRadius)
+
+    -- 篝火光源（使用预解析列表，避免每瓦片 string:match）
+    local bLit, bLdx, bLdy = 0, 0, 0
+    for i = 1, #cachedCampfires do
+        local cp = cachedCampfires[i]
+        local lit2, ldx2, ldy2 = SolidRenderer.CalcPlayerLightDirection(
+            col, row, cp[2], cp[1], 4)
+        if lit2 > bLit then
+            bLit, bLdx, bLdy = lit2, ldx2, ldy2
+        end
+    end
+
+    -- 合并
+    local totalLit = math.min(1.0, pLit + bLit)
+    local totalLdx = pLdx * pLit + bLdx * bLit
+    local totalLdy = pLdy * pLit + bLdy * bLit
+    local len = math.sqrt(totalLdx * totalLdx + totalLdy * totalLdy)
+    if len > 0.01 then
+        totalLdx = totalLdx / len
+        totalLdy = totalLdy / len
+    end
+
+    frameLightCache[key] = {totalLit, totalLdx, totalLdy}
+    return totalLit, totalLdx, totalLdy
+end
+
 function M.DrawMap()
     local vg = M.vg
     local GRID = Config.GRID
@@ -520,6 +679,31 @@ function M.DrawMap()
     local visW = Config.DESIGN_W * (Config.PLAYER_CONFIG.cameraZoom or 1.0)
     local endCol = math.min(Config.MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
 
+    -- 每帧重置光照缓存并预解析篝火位置
+    frameCounter = frameCounter + 1
+    if frameLightCacheFrame ~= frameCounter then
+        frameLightCacheFrame = frameCounter
+        frameLightCache = {}
+        -- 预解析已激活篝火坐标（避免在每个瓦片内 string:match）
+        cachedCampfires = {}
+        for cpKey, activated in pairs(LevelManager.checkpointActivated) do
+            if activated then
+                local cpRow, cpCol = cpKey:match("(%d+)_(%d+)")
+                cpRow, cpCol = tonumber(cpRow), tonumber(cpCol)
+                if cpRow and cpCol then
+                    cachedCampfires[#cachedCampfires + 1] = {cpRow, cpCol}
+                end
+            end
+        end
+    end
+
+    -- 预算玩家光照参数（一帧内不变）
+    local player = PlayerController.player
+    local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
+    local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
+    local playerGridX = player.gridX
+    local playerGridY = player.gridY + 1
+
     for row = 1, Config.MAP_ROWS do
         for col = startCol, endCol do
             local val = LevelManager.levelData[row][col]
@@ -529,39 +713,11 @@ function M.DrawMap()
             local px = (col - 1) * GRID - M.cameraX
             local py = (row - 1) * GRID
 
-            if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER then
-                -- 计算玩家光源对该格子的光照
-                local player = PlayerController.player
-                local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
-                local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
-                local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(
-                    col, row, player.gridX, player.gridY + 1, playerLightRadius)
-
-                -- 检查激活的篝火光源
-                local bLit, bLdx, bLdy = 0, 0, 0
-                for cpKey, activated in pairs(LevelManager.checkpointActivated) do
-                    if activated then
-                        local cpRow, cpCol = cpKey:match("(%d+)_(%d+)")
-                        cpRow, cpCol = tonumber(cpRow), tonumber(cpCol)
-                        if cpRow and cpCol then
-                            local lit2, ldx2, ldy2 = SolidRenderer.CalcPlayerLightDirection(
-                                col, row, cpCol, cpRow, 4)
-                            if lit2 > bLit then
-                                bLit, bLdx, bLdy = lit2, ldx2, ldy2
-                            end
-                        end
-                    end
-                end
-
-                -- 合并所有光源
-                local totalLit = math.min(1.0, pLit + bLit)
-                local totalLdx = pLdx * pLit + bLdx * bLit
-                local totalLdy = pLdy * pLit + bLdy * bLit
-                local len = math.sqrt(totalLdx * totalLdx + totalLdy * totalLdy)
-                if len > 0.01 then
-                    totalLdx = totalLdx / len
-                    totalLdy = totalLdy / len
-                end
+            if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER
+                or (base >= 19 and base <= 22) then  -- includes slopes
+                -- 使用帧级缓存计算光照（避免重复 Bresenham）
+                local totalLit, totalLdx, totalLdy = CalcTileLighting(
+                    col, row, playerGridX, playerGridY, playerLightRadius)
 
                 -- 检测四邻是否有实体方块（用于青苔边缘）
                 local neighbors = {
@@ -686,24 +842,69 @@ function M.DrawMap()
                 end
 
             elseif base == TILE.HIDDEN_WALL then
-                if not LevelManager.hiddenWallRevealed[group] then
-                    -- 隐藏墙未揭示时渲染为砖块样式（与 SOLID 相同外观）
-                    local player = PlayerController.player
-                    local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
-                    local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
-                    local pLit, pLdx, pLdy = SolidRenderer.CalcPlayerLightDirection(
-                        col, row, player.gridX, player.gridY + 1, playerLightRadius)
+                local revealTime = LevelManager.hiddenWallRevealed[group]
+                local shouldDraw = false
+                local alpha = 1.0
+                if not revealTime then
+                    -- 未揭示，完全不透明渲染
+                    shouldDraw = true
+                    alpha = 1.0
+                else
+                    -- 已揭示，计算渐变 alpha
+                    local elapsed = M.gameTime - revealTime
+                    local fadeDuration = LevelManager.HIDDEN_WALL_FADE_DURATION
+                    if elapsed < fadeDuration then
+                        shouldDraw = true
+                        alpha = 1.0 - (elapsed / fadeDuration)
+                    end
+                end
+                if shouldDraw then
+                    -- 渲染为砖块样式（与 SOLID 相同外观），带 alpha 渐变
+                    local pLit, pLdx, pLdy = CalcTileLighting(
+                        col, row, playerGridX, playerGridY, playerLightRadius)
                     local neighbors = {
                         top    = IsSolidAt(row - 1, col),
                         bottom = IsSolidAt(row + 1, col),
                         left   = IsSolidAt(row, col - 1),
                         right  = IsSolidAt(row, col + 1),
                     }
+                    if alpha < 1.0 then
+                        nvgGlobalAlpha(vg, alpha)
+                    end
                     SolidRenderer.DrawSolid(vg, TILE.SOLID, px, py, GRID, pLit, pLdx, pLdy, col, row, neighbors)
+                    if alpha < 1.0 then
+                        nvgGlobalAlpha(vg, 1.0)
+                    end
                 end
 
             elseif base == TILE.CHECKPOINT then
                 M.DrawCheckpointTile(px, py, row, col)
+
+            elseif base == TILE.CURTAIN then
+                -- 计算光照（使用帧级缓存）
+                local totalLit, totalLdx, totalLdy = CalcTileLighting(
+                    col, row, playerGridX, playerGridY, playerLightRadius)
+
+                -- 检查上下相邻是否也是柳条
+                local hasAbove = false
+                local hasBelow = false
+                if row > 1 then
+                    local aboveVal = LevelManager.levelData[row - 1][col]
+                    if aboveVal and aboveVal ~= 0 then
+                        local aboveBase = Physics.GetTileType(aboveVal)
+                        hasAbove = (aboveBase == TILE.CURTAIN)
+                    end
+                end
+                if row < Config.MAP_ROWS then
+                    local belowVal = LevelManager.levelData[row + 1][col]
+                    if belowVal and belowVal ~= 0 then
+                        local belowBase = Physics.GetTileType(belowVal)
+                        hasBelow = (belowBase == TILE.CURTAIN)
+                    end
+                end
+
+                CurtainRenderer.DrawCurtain(vg, px, py, GRID, totalLit, totalLdx, totalLdy,
+                    col, row, M.gameTime, hasAbove, hasBelow)
             end
 
             ::continueTile::
@@ -719,82 +920,188 @@ function M.DrawCheckpointTile(px, py, row, col)
     local GRID = Config.GRID
     local key = row .. "_" .. col
     local activated = LevelManager.checkpointActivated[key]
-    local ps = 2  -- 像素块大小
+    local ps = 3  -- 像素块大小（原2 × 1.7 ≈ 3，放大1.7倍）
+    local t = M.gameTime
 
-    -- 石头底座
+    -- 篝火从格子底部向上绘制，占 10 行 × 10 列 像素格
+    local drawBaseY = py + GRID
+    local drawTopY = drawBaseY - 10 * ps
+    local drawLeftX = px + (GRID - 10 * ps) * 0.5
+
+    -- 石头底座（行 8-9）
     local stones = {
-        {3, 6}, {4, 6}, {5, 6}, {6, 6},
-        {2, 5}, {3, 5}, {6, 5}, {7, 5},
-        {4, 5}, {5, 5},
+        {1,8},{2,8},{3,8},{4,8},{5,8},{6,8},{7,8},{8,8},
+        {0,9},{1,9},{2,9},{3,9},{4,9},{5,9},{6,9},{7,9},{8,9},{9,9},
     }
     for _, s in ipairs(stones) do
-        local sx = px + s[1] * ps
-        local sy = py + s[2] * ps
+        local sx = drawLeftX + s[1] * ps
+        local sy = drawTopY + s[2] * ps
         nvgBeginPath(vg)
         nvgRect(vg, sx, sy, ps, ps)
-        if s[2] == 6 then
-            nvgFillColor(vg, nvgRGBA(60, 55, 50, 255))
+        if s[2] == 9 then
+            nvgFillColor(vg, nvgRGBA(40, 38, 35, 255))
         else
-            nvgFillColor(vg, nvgRGBA(80, 75, 65, 255))
+            nvgFillColor(vg, nvgRGBA(65, 60, 52, 255))
         end
         nvgFill(vg)
     end
 
-    -- 木头
+    -- 木柴堆（行 5-7，发红光效果）
     local logs = {
-        {3, 4}, {4, 4}, {5, 4}, {6, 4},
-        {4, 3}, {5, 3},
+        {2,7},{3,7},{4,7},{5,7},{6,7},{7,7},
+        {1,6},{2,6},{3,6},{4,6},{5,6},{6,6},{7,6},{8,6},
+        {2,5},{3,5},{4,5},{5,5},{6,5},{7,5},
     }
+
+    local emberFlick = math.sin(t * 3.5 + col * 1.3) * 0.3 + 0.7
     for _, l in ipairs(logs) do
-        local lx = px + l[1] * ps
-        local ly = py + l[2] * ps
+        local lx = drawLeftX + l[1] * ps
+        local ly = drawTopY + l[2] * ps
         nvgBeginPath(vg)
         nvgRect(vg, lx, ly, ps, ps)
-        nvgFillColor(vg, nvgRGBA(100, 60, 25, 255))
+        local baseR, baseG, baseB = 80, 45, 18
+        local cx = math.abs(l[1] - 4.5)
+        local cy = math.abs(l[2] - 6)
+        local redIntensity = math.max(0, 1.0 - (cx + cy) * 0.3) * emberFlick
+        local r = math.floor(baseR + 120 * redIntensity)
+        local g = math.floor(baseG + 20 * redIntensity)
+        local b = math.floor(baseB + 5 * redIntensity)
+        nvgFillColor(vg, nvgRGBA(r, g, b, 255))
         nvgFill(vg)
     end
 
+    -- 木柴缝隙中的红色发光像素
+    local glowPixels = {
+        {3,6},{5,6},{7,6},
+        {4,5},{6,5},
+        {3,7},{6,7},
+    }
+    local glowFlick = math.sin(t * 4.5 + col * 2.7) * 0.4 + 0.6
+    for _, gp in ipairs(glowPixels) do
+        local gx = drawLeftX + gp[1] * ps
+        local gy = drawTopY + gp[2] * ps
+        nvgBeginPath(vg)
+        nvgRect(vg, gx, gy, ps, ps)
+        local ga = math.floor(140 * glowFlick)
+        nvgFillColor(vg, nvgRGBA(255, 60, 10, ga))
+        nvgFill(vg)
+    end
+
+    -- 篝火底部红色光晕
+    nvgBeginPath(vg)
+    nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 6 * ps, 6 * ps * 0.4)
+    local baseGlowA = math.floor(18 + 12 * glowFlick)
+    nvgFillColor(vg, nvgRGBA(200, 50, 10, baseGlowA))
+    nvgFill(vg)
+
     if activated then
-        -- 点燃状态：像素火焰
-        local t = M.gameTime
+        -- 点燃状态：增强像素火焰
         local flicker1 = math.sin(t * 8 + col * 2.1) * 0.5 + 0.5
         local flicker2 = math.sin(t * 11 + row * 1.7) * 0.5 + 0.5
+        local flicker3 = math.sin(t * 6.5 + col * 3.3) * 0.5 + 0.5
 
         local flames = {
-            {3, 3, {255, 100, 10}}, {4, 3, {255, 130, 20}}, {5, 3, {255, 100, 10}}, {6, 3, {255, 120, 15}},
-            {4, 2, {255, 180, 30}}, {5, 2, {255, 160, 20}},
-            {3, 2, {255, 120, 10}}, {6, 2, {255, 130, 15}},
-            {4, 1, {255, 220, 80}}, {5, 1, {255, 200, 60}},
+            {1,4,{220,50,5}}, {2,4,{255,70,10}}, {3,4,{255,90,15}},
+            {6,4,{255,80,10}}, {7,4,{255,70,10}}, {8,4,{220,50,5}},
+            {1,3,{255,80,10}}, {2,3,{255,110,20}}, {3,3,{255,130,25}},
+            {6,3,{255,120,20}}, {7,3,{255,100,15}}, {8,3,{255,70,10}},
+            {4,3,{255,160,40}}, {5,3,{255,150,35}},
+            {3,2,{255,170,50}}, {4,2,{255,200,60}}, {5,2,{255,190,55}}, {6,2,{255,170,50}},
+            {2,2,{255,130,25}}, {7,2,{255,130,25}},
+            {3,1,{255,200,60}}, {4,1,{255,230,90}}, {5,1,{255,220,80}}, {6,1,{255,200,60}},
+            {4,0,{255,245,130}}, {5,0,{255,240,110}},
+            {3,0,{255,200,60}}, {6,0,{255,200,60}},
         }
         for _, f in ipairs(flames) do
-            local fx = px + f[1] * ps
-            local fy = py + f[2] * ps
+            local fx = drawLeftX + f[1] * ps
+            local fy = drawTopY + f[2] * ps
             local c = f[3]
-            local flick = (f[2] <= 1) and flicker1 or flicker2
-            local a = math.floor(180 + 75 * flick)
+            local flick
+            if f[2] <= 1 then flick = flicker1
+            elseif f[2] <= 2 then flick = flicker2
+            else flick = flicker3 end
+            local a = math.floor(200 + 55 * flick)
             nvgBeginPath(vg)
             nvgRect(vg, fx, fy, ps, ps)
             nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], a))
             nvgFill(vg)
         end
 
-        -- 火焰光晕
-        local glowA = math.floor(20 + 15 * flicker1)
+        -- 增强火焰光晕（多层）
+        local glowA1 = math.floor(30 + 20 * flicker1)
         nvgBeginPath(vg)
-        nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.3, 8)
-        nvgFillColor(vg, nvgRGBA(255, 150, 30, glowA))
+        nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 2 * ps, 12)
+        nvgFillColor(vg, nvgRGBA(255, 150, 30, glowA1))
         nvgFill(vg)
+        local glowA2 = math.floor(12 + 8 * flicker2)
+        nvgBeginPath(vg)
+        nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 2 * ps, 20)
+        nvgFillColor(vg, nvgRGBA(255, 100, 10, glowA2))
+        nvgFill(vg)
+
+        -- 产生上升火花粒子
+        M.SpawnFlameParticles(key)
     else
-        -- 未点燃：暗灰余烬
+        -- 未点燃：发红光的余烬
         local embers = {
-            {4, 3}, {5, 3},
+            {3,4},{4,4},{5,4},{6,4},
+            {4,3},{5,3},
         }
+        local eFlick = math.sin(t * 3 + col) * 0.3 + 0.7
         for _, e in ipairs(embers) do
-            local ex = px + e[1] * ps
-            local ey = py + e[2] * ps
+            local ex = drawLeftX + e[1] * ps
+            local ey = drawTopY + e[2] * ps
             nvgBeginPath(vg)
             nvgRect(vg, ex, ey, ps, ps)
-            nvgFillColor(vg, nvgRGBA(80, 40, 20, 150))
+            local ea = math.floor(100 + 55 * eFlick)
+            nvgFillColor(vg, nvgRGBA(160, 50, 10, ea))
+            nvgFill(vg)
+        end
+
+        -- 产生缓慢上升的余烬粒子
+        M.SpawnEmberParticles(key)
+    end
+
+    -- 绘制篝火粒子
+    local particles = M.campfireParticles[key]
+    if particles and #particles > 0 then
+        local centerX = drawLeftX + 5 * ps
+        local centerY = drawTopY + 4 * ps
+        for _, p in ipairs(particles) do
+            local alpha = math.floor(255 * (p.life / p.maxLife))
+            nvgBeginPath(vg)
+            nvgRect(vg, centerX + p.x, centerY + p.y, p.size, p.size)
+            nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, alpha))
+            nvgFill(vg)
+        end
+    end
+
+    -- 点燃触发特效
+    local ignite = M.campfireIgniteEffect[key]
+    if ignite then
+        local progress = ignite.timer / ignite.duration
+        if progress < 0.15 then
+            local flashA = math.floor(160 * (1.0 - progress / 0.15))
+            nvgBeginPath(vg)
+            nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 4 * ps, 20 + 14 * (progress / 0.15))
+            nvgFillColor(vg, nvgRGBA(255, 220, 100, flashA))
+            nvgFill(vg)
+        end
+        if progress > 0.05 and progress < 0.6 then
+            local ringProgress = (progress - 0.05) / 0.55
+            local ringR = 7 + 24 * ringProgress
+            local ringA = math.floor(180 * (1.0 - ringProgress))
+            nvgBeginPath(vg)
+            nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 4 * ps, ringR)
+            nvgStrokeColor(vg, nvgRGBA(255, 100, 20, ringA))
+            nvgStrokeWidth(vg, 2.5 - 1.5 * ringProgress)
+            nvgStroke(vg)
+        end
+        if progress < 0.4 then
+            local pulseA = math.floor(100 * (1.0 - progress / 0.4))
+            nvgBeginPath(vg)
+            nvgCircle(vg, drawLeftX + 5 * ps, drawTopY + 5 * ps, 18)
+            nvgFillColor(vg, nvgRGBA(255, 120, 20, pulseA))
             nvgFill(vg)
         end
     end

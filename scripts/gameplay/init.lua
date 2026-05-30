@@ -14,6 +14,7 @@ local LevelManager = require("gameplay.LevelManager")
 local PlayerController = require("gameplay.PlayerController")
 local Animation = require("gameplay.Animation")
 local Renderer = require("gameplay.Renderer")
+local CurtainRenderer = require("CurtainRenderer")
 
 -- ====================================================================
 -- 注入依赖
@@ -23,6 +24,7 @@ Physics.Inject({
     switchState = {},
     hiddenWallRevealed = {},
     TILE = LevelGenerator.TILE,
+    LevelManager = LevelManager,
 })
 
 LevelManager.Inject({
@@ -39,6 +41,7 @@ PlayerController.Inject({
     LevelManager = LevelManager,
     Animation = Animation,
     Renderer = Renderer,
+    CurtainRenderer = CurtainRenderer,
 })
 
 Animation.Inject({
@@ -104,23 +107,55 @@ LevelManager.SetCallbacks({
 -- 游戏流程
 -- ====================================================================
 
---- 重置游戏
+--- 重置游戏（从篝火存档点复活，或重新开始）
 local function ResetGame()
     local player = PlayerController.player
     PlayerController.ResetPlayer()
     cameraX = 0
-    LevelManager.ResetCollectibles()
     gameState = Config.STATE_PLAYING
     gameTime = 0
+    LevelManager.gameTime = 0
 
     Animation.Reset()
+    CurtainRenderer.ClearSway()
 
-    -- 重新初始化关卡
-    if LevelManager.currentLevelFile then
-        LevelManager.LoadLevelFromFile(LevelManager.currentLevelFile, player)
+    -- 如果有篝火存档点，从存档点复活
+    if LevelManager.checkpointCol and LevelManager.checkpointRow and LevelManager.checkpointFile then
+        local cpFile = LevelManager.checkpointFile
+        local cpCol = LevelManager.checkpointCol
+        local cpRow = LevelManager.checkpointRow
+
+        -- 重置收集品但保留篝火存档信息
+        LevelManager.ResetCollectiblesKeepCheckpoint()
+
+        -- 加载存档点所在关卡（可能跨关卡）
+        if cpFile ~= LevelManager.currentLevelFile then
+            LevelManager.LoadLevelFromFile(cpFile, player)
+        else
+            LevelManager.LoadLevelFromFile(LevelManager.currentLevelFile, player)
+        end
+
+        -- 将玩家放置在篝火位置
+        local playerH = math.ceil(Config.PLAYER_CONFIG.pixelGridSize * Config.PLAYER_CONFIG.pixelSize / Config.GRID)
+        player.gridX = cpCol
+        player.gridY = cpRow - (playerH - 1)
+
+        -- 恢复篝火激活状态
+        local key = cpRow .. "_" .. cpCol
+        LevelManager.checkpointActivated[key] = true
+        LevelManager.checkpointCol = cpCol
+        LevelManager.checkpointRow = cpRow
+        LevelManager.checkpointFile = cpFile
     else
-        LevelManager.InitLevel(player)
+        -- 没有存档点，正常重置
+        LevelManager.ResetCollectibles()
+        if LevelManager.currentLevelFile then
+            LevelManager.LoadLevelFromFile(LevelManager.currentLevelFile, player)
+        else
+            LevelManager.InitLevel(player)
+        end
     end
+
     PixelSystem.Init()
 end
 
@@ -261,13 +296,18 @@ function HandleUpdate(eventType, eventData)
     local dt = eventData["TimeStep"]:GetFloat()
 
     gameTime = gameTime + dt
+    LevelManager.gameTime = gameTime
 
     -- 更新 BONFIRE LIT 消息
     Renderer.UpdateBonfireMessage(dt)
+    Renderer.UpdateCampfireParticles(dt)
 
     -- 更新火苗爆裂粒子和像素恢复动画
     Renderer.UpdateFuelBurst(dt)
     Renderer.UpdatePixelRecoverAnim(dt)
+
+    -- 更新柳条门帘晃动动画
+    CurtainRenderer.UpdateSway(dt)
 
     -- 世界地图切换冷却
     if LevelManager.transitionCooldown > 0 then

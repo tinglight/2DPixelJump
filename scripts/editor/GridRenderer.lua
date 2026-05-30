@@ -28,6 +28,7 @@ local function IsSolidAt(row, col)
     if not val or val == TILE.EMPTY then return false end
     local base = TileUtils.GetTileType(val)
     return base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER
+        or base == TILE.SLOPE_TR or base == TILE.SLOPE_TL or base == TILE.SLOPE_BR or base == TILE.SLOPE_BL
 end
 
 -- 检查某格是否为柱子（专门用于柱子拼接检测）
@@ -104,7 +105,8 @@ end
 -- 内部：绘制单个地块
 -- ====================================================================
 local function DrawTile(vg, base, group, px, py, zGrid, row, col)
-    if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER then
+    if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER
+        or base == TILE.SLOPE_TR or base == TILE.SLOPE_TL or base == TILE.SLOPE_BR or base == TILE.SLOPE_BL then
         -- 像素风格碰撞方块渲染（编辑器中以中等亮度展示，带轻微光照方向）
         local lighting = 0.7
         local ldx, ldy = 0.3, -0.5  -- 编辑器预览：固定的左上角光源方向
@@ -526,6 +528,44 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
         nvgClosePath(vg)
         nvgFillColor(vg, nvgRGBA(30, 22, 15, 200))
         nvgFill(vg)
+
+    elseif base == TILE.CURTAIN then
+        -- 编辑器预览：柳条门帘（像素风竖条）
+        -- 检查上方是否也是柳条（决定是否画顶部横梁）
+        local hasAbove = (row > 1) and S.levelData[row - 1] and (TileUtils.GetTileType(S.levelData[row - 1][col]) == TILE.CURTAIN)
+        -- 顶部横梁
+        if not hasAbove then
+            nvgBeginPath(vg)
+            nvgRect(vg, px, py, zGrid, 2)
+            nvgFillColor(vg, nvgRGBA(70, 55, 40, 240))
+            nvgFill(vg)
+        end
+        -- 柳条竖条（5根，棕绿色，有随机间隙感）
+        local strandW = math.max(1, math.floor(zGrid / 8))
+        local colors = {
+            {88, 105, 65, 220}, {95, 112, 70, 210}, {82, 98, 60, 230},
+            {100, 115, 72, 200}, {78, 92, 55, 225}
+        }
+        local seed = col * 374761
+        for i = 1, 5 do
+            local baseX = (i - 1) * (zGrid / 5) + zGrid / 10
+            local jitter = ((seed + i * 982451) % 7 - 3) * 0.3
+            local sx = px + baseX + jitter
+            local sy = hasAbove and py or (py + 2)
+            local sh = hasAbove and zGrid or (zGrid - 2)
+            local c = colors[((i - 1 + col) % 5) + 1]
+            -- 用多个小矩形画条纹（模拟像素断裂感）
+            local segH = math.max(2, math.floor(sh / 4))
+            for seg = 0, 3 do
+                local gapHash = (seed + i * 123 + seg * 456 + row * 789) % 100
+                if gapHash < 85 then  -- 85%概率画，15%间隙
+                    nvgBeginPath(vg)
+                    nvgRect(vg, sx, sy + seg * segH, strandW, segH - 1)
+                    nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], c[4]))
+                    nvgFill(vg)
+                end
+            end
+        end
     end
 end
 
@@ -989,6 +1029,35 @@ function M.Draw()
         end
     end
 
+    -- 装饰资产图片（背景层上方，地块层下方）
+    if #S.decorations > 0 then
+        for i, deco in ipairs(S.decorations) do
+            if not deco.handle and deco.image and deco.image ~= "" then
+                deco.handle = nvgCreateImage(vg, deco.image, 0)
+            end
+            if deco.handle and deco.handle > 0 then
+                local dx = mapX + (deco.col - 1) * zGrid - S.cameraX
+                local dy = mapY + (deco.row - 1) * zGrid - S.cameraY
+                local dw = (deco.w or 2) * zGrid
+                local dh = (deco.h or 2) * zGrid
+                local alpha = deco.alpha or 1.0
+                local imgPaint = nvgImagePattern(vg, dx, dy, dw, dh, 0, deco.handle, alpha)
+                nvgBeginPath(vg)
+                nvgRect(vg, dx, dy, dw, dh)
+                nvgFillPaint(vg, imgPaint)
+                nvgFill(vg)
+                -- 选中装饰物高亮边框
+                if S.selectedDecorationIndex == i then
+                    nvgBeginPath(vg)
+                    nvgRect(vg, dx, dy, dw, dh)
+                    nvgStrokeColor(vg, nvgRGBA(180, 140, 220, 200))
+                    nvgStrokeWidth(vg, 1.5)
+                    nvgStroke(vg)
+                end
+            end
+        end
+    end
+
     local startCol, endCol, startRow, endRow = GetVisibleRange(mapW, mapH, zGrid)
 
     DrawGridLines(vg, mapX, mapY, mapH, startCol, endCol, startRow, endRow, zGrid)
@@ -1039,7 +1108,6 @@ function M.Draw()
 
     -- 光源标记
     if FogOfWar and S.showGizmos then
-        FogOfWar.SetLightSources(FogOfWar.GetLightSources())
         FogOfWar.DrawLightMarkers(vg, {
             gridSize = C.GRID,
             offsetX = S.cameraX,
@@ -1047,6 +1115,8 @@ function M.Draw()
             zoomLevel = S.zoomLevel,
             mapX = mapX,
             mapY = mapY,
+            mapW = mapW,
+            mapH = mapH,
             selectedIndex = S.selectedLightIndex,
         })
     end
@@ -1056,7 +1126,6 @@ function M.Draw()
 
     -- 战争迷雾（独立于 gizmos 开关）
     if FogOfWar and S.fogShowInEditor then
-        FogOfWar.SetLightSources(FogOfWar.GetLightSources())
         FogOfWar.Draw(vg, {
             gridSize = C.GRID,
             startCol = startCol,

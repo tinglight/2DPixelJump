@@ -394,9 +394,8 @@ function HandlePlayModeKey(key)
             print("[InputHandler] → calling PauseMenu.Toggle()")
             PauseMenuMod.Toggle()
         else
-            -- 编辑器试玩：ESC 返回编辑模式
-            local okPipe, PipeSystem = pcall(require, "editor.PipeSystem")
-            if okPipe and PipeSystem then PipeSystem.StopSound() end
+            -- 编辑器试玩：ESC 返回编辑模式（恢复光源）
+            PlayMode.ExitPlayMode()
             S.editorMode = MODE.EDIT
             print("[InputHandler] → returning to MODE_EDIT")
             S.SetMessage("返回编辑模式", 1.5)
@@ -415,9 +414,8 @@ function HandleWorldPlayModeKey(key)
             print("[InputHandler] → calling PauseMenu.Toggle()")
             PauseMenuMod.Toggle()
         else
-            -- 世界地图试玩：ESC 返回世界地图编辑
-            local okPipe, PipeSystem = pcall(require, "editor.PipeSystem")
-            if okPipe and PipeSystem then PipeSystem.StopSound() end
+            -- 世界地图试玩：ESC 返回世界地图编辑（恢复光源）
+            PlayMode.ExitPlayMode()
             S.editorMode = MODE.WORLDMAP
             WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
             print("[InputHandler] → returning to MODE_WORLDMAP")
@@ -662,6 +660,7 @@ function HandlePlayModeClick(button, mx, my)
     local backBtnY = (22 - backBtnH) * 0.5
     local pad = 6
     if pmx >= backBtnX - pad and pmx < backBtnX + backBtnW + pad and pmy >= backBtnY - pad and pmy < backBtnY + backBtnH + pad then
+        PlayMode.ExitPlayMode()
         S.editorMode = MODE.EDIT
         S.SetMessage("返回编辑模式", 1.5)
     end
@@ -681,6 +680,7 @@ function HandleWorldPlayClick(button, mx, my)
     local backBtnY = (22 - backBtnH) * 0.5
     local pad = 6
     if pmx >= backBtnX - pad and pmx < backBtnX + backBtnW + pad and pmy >= backBtnY - pad and pmy < backBtnY + backBtnH + pad then
+        PlayMode.ExitPlayMode()
         S.editorMode = MODE.WORLDMAP
         WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
         S.SetMessage("返回世界地图编辑", 1.5)

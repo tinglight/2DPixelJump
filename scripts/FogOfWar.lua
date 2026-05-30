@@ -23,17 +23,95 @@ local FogOfWar = {}
 local lightSources = {}  -- { {col, row, diameter, feather}, ... }
 
 -- ====================================================================
+-- 光照缓存系统（性能优化核心）
+-- ====================================================================
+-- 缓存每个格子的光照值，只在光源变化时重算
+local lightCache = {}          -- [row][col] = lighting (0~1)
+local lightCacheDirty = true   -- 标记缓存是否需要重算
+local lastLightFingerprint = "" -- 用于检测光源是否变化
+local lastCacheRange = -1      -- 用于检测可见范围是否变化
+
+--- 计算光源指纹（用于快速检测变化）
+local function CalcLightFingerprint()
+    -- 简化：用光源数量 + 所有光源位置/直径的校验和
+    local sum = #lightSources
+    for _, light in ipairs(lightSources) do
+        sum = sum + light.col * 1000 + light.row * 100 + math.floor(light.diameter * 10)
+    end
+    return sum
+end
+
+--- 标记光照缓存为脏（需要重算）
+function FogOfWar.InvalidateCache()
+    lightCacheDirty = true
+end
+
+-- ====================================================================
 -- 碰撞检测回调（用于阴影遮挡）
 -- ====================================================================
 -- 签名: function(col, row) -> boolean
 -- 返回 true 表示该格子是实体碰撞（阻挡光线）
 local collisionChecker = nil
 
+-- 柳条检测回调（部分遮光）
+-- 签名: function(col, row) -> boolean
+-- 返回 true 表示该格子是柳条（衰减光线但不完全阻挡）
+local curtainChecker = nil
+local CURTAIN_ATTENUATION = 0.3  -- 每层柳条衰减30%光照
+local THIN_WALL_ATTENUATION = 0.6  -- 每层薄墙衰减60%光照（比柳条更强）
+
 --- 设置碰撞检测函数（用于阴影计算）
 --- 签名: function(col, row) -> boolean
 ---@param checker function|nil
 function FogOfWar.SetCollisionChecker(checker)
     collisionChecker = checker
+end
+
+--- 设置柳条检测函数（用于部分遮光）
+--- 签名: function(col, row) -> boolean
+---@param checker function|nil
+function FogOfWar.SetCurtainChecker(checker)
+    curtainChecker = checker
+end
+
+-- ====================================================================
+-- 薄墙判定（一层厚度的墙壁/柱子）
+-- ====================================================================
+-- 判断 (col, row) 处的碰撞格子是否为"薄墙"：
+-- 在某个方向上只有一层厚度（两侧邻居均不是碰撞）
+-- 用于光照穿透效果：薄墙减弱光线但不完全阻挡
+-- 判定标准：
+--   水平薄墙：左右邻居均非碰撞（竖直方向一层厚度的墙/柱子）
+--   垂直薄墙：上下邻居均非碰撞（水平方向一层厚度的平台/顶板）
+-- 只要满足其中一个方向为"薄"即视为可穿透
+local function IsThinWall(col, row, sx, sy)
+    if not collisionChecker then return false end
+    -- 柳条不算薄墙（柳条有自己的衰减逻辑）
+    if curtainChecker and curtainChecker(col, row) then return false end
+
+    -- 检查水平方向（左右）是否为薄墙
+    local leftSolid = collisionChecker(col - 1, row)
+    local rightSolid = collisionChecker(col + 1, row)
+    local horizontalThin = (not leftSolid) and (not rightSolid)
+
+    -- 检查垂直方向（上下）是否为薄墙
+    local topSolid = collisionChecker(col, row - 1)
+    local bottomSolid = collisionChecker(col, row + 1)
+    local verticalThin = (not topSolid) and (not bottomSolid)
+
+    -- 根据射线方向决定判定条件：
+    -- 如果射线主要在水平方向（sx != 0），检查水平方向是否薄（左右无碰撞）
+    -- 如果射线主要在垂直方向（sy != 0），检查垂直方向是否薄（上下无碰撞）
+    if sx ~= 0 and sy == 0 then
+        -- 纯水平射线：墙在水平方向薄则可穿透
+        return horizontalThin
+    elseif sy ~= 0 and sx == 0 then
+        -- 纯垂直射线：墙在垂直方向薄则可穿透
+        return verticalThin
+    else
+        -- 对角线射线：任一方向薄即可穿透
+        return horizontalThin or verticalThin
+    end
 end
 
 -- ====================================================================
@@ -44,6 +122,7 @@ end
 -- 规则：光线照亮碰撞本身，但不照亮碰撞背后的格子
 -- 即：如果射线路径上(不含起点和终点)遇到碰撞格子 → 目标被遮挡
 --     如果目标本身是碰撞 → 不被遮挡（光照亮碰撞方块）
+-- 新增：薄墙（一层厚度）不完全阻挡光线，允许减弱穿透
 local function IsOccluded(srcCol, srcRow, dstCol, dstRow)
     if not collisionChecker then return false end
     -- 相同位置不遮挡
@@ -82,7 +161,12 @@ local function IsOccluded(srcCol, srcRow, dstCol, dstRow)
                 elseif x == dstCol and srcCol ~= dstCol then
                     -- 同列表面，光源来自不同列 → 不遮挡
                 else
-                    return true
+                    -- 薄墙：允许光线穿透（衰减由 CalcThinWallAttenuation 计算）
+                    if IsThinWall(x, y, sx, sy) then
+                        -- 不阻挡，继续射线
+                    else
+                        return true
+                    end
                 end
             end
         end
@@ -108,13 +192,124 @@ local function IsOccluded(srcCol, srcRow, dstCol, dstRow)
                 elseif x == dstCol and srcCol ~= dstCol then
                     -- 同列表面，光源来自不同列 → 不遮挡
                 else
-                    return true
+                    -- 薄墙：允许光线穿透（衰减由 CalcThinWallAttenuation 计算）
+                    if IsThinWall(x, y, sx, sy) then
+                        -- 不阻挡，继续射线
+                    else
+                        return true
+                    end
                 end
             end
         end
     end
 
     return false
+end
+
+-- ====================================================================
+-- 薄墙射线衰减计算（Bresenham 路径上统计薄墙数量）
+-- ====================================================================
+-- 从光源到目标射线经过多少层薄墙，返回衰减因子 (0~1, 1=无衰减)
+local function CalcThinWallAttenuation(srcCol, srcRow, dstCol, dstRow)
+    if not collisionChecker then return 1.0 end
+    if srcCol == dstCol and srcRow == dstRow then return 1.0 end
+
+    local thinWallCount = 0
+    local dx = dstCol - srcCol
+    local dy = dstRow - srcRow
+    local absDx = (dx >= 0) and dx or -dx
+    local absDy = (dy >= 0) and dy or -dy
+    local sx = (dx > 0) and 1 or (dx < 0 and -1 or 0)
+    local sy = (dy > 0) and 1 or (dy < 0 and -1 or 0)
+
+    local x = srcCol
+    local y = srcRow
+
+    if absDx >= absDy then
+        local err = absDx // 2
+        for _ = 1, absDx do
+            x = x + sx
+            err = err - absDy
+            if err < 0 then
+                y = y + sy
+                err = err + absDx
+            end
+            if x == dstCol and y == dstRow then break end
+            if collisionChecker(x, y) and IsThinWall(x, y, sx, sy) then
+                thinWallCount = thinWallCount + 1
+            end
+        end
+    else
+        local err = absDy // 2
+        for _ = 1, absDy do
+            y = y + sy
+            err = err - absDx
+            if err < 0 then
+                x = x + sx
+                err = err + absDy
+            end
+            if x == dstCol and y == dstRow then break end
+            if collisionChecker(x, y) and IsThinWall(x, y, sx, sy) then
+                thinWallCount = thinWallCount + 1
+            end
+        end
+    end
+
+    if thinWallCount == 0 then return 1.0 end
+    return math.max(0.02, (1.0 - THIN_WALL_ATTENUATION) ^ thinWallCount)
+end
+
+-- ====================================================================
+-- 柳条射线衰减计算（Bresenham 路径上统计柳条数量）
+-- ====================================================================
+-- 从光源到目标射线经过多少层柳条，返回衰减因子 (0~1, 1=无衰减)
+local function CalcCurtainAttenuation(srcCol, srcRow, dstCol, dstRow)
+    if not curtainChecker then return 1.0 end
+    if srcCol == dstCol and srcRow == dstRow then return 1.0 end
+
+    local curtainCount = 0
+    local dx = dstCol - srcCol
+    local dy = dstRow - srcRow
+    local absDx = (dx >= 0) and dx or -dx
+    local absDy = (dy >= 0) and dy or -dy
+    local sx = (dx > 0) and 1 or (dx < 0 and -1 or 0)
+    local sy = (dy > 0) and 1 or (dy < 0 and -1 or 0)
+
+    local x = srcCol
+    local y = srcRow
+
+    if absDx >= absDy then
+        local err = absDx // 2
+        for _ = 1, absDx do
+            x = x + sx
+            err = err - absDy
+            if err < 0 then
+                y = y + sy
+                err = err + absDx
+            end
+            if x == dstCol and y == dstRow then break end
+            if curtainChecker(x, y) then
+                curtainCount = curtainCount + 1
+            end
+        end
+    else
+        local err = absDy // 2
+        for _ = 1, absDy do
+            y = y + sy
+            err = err - absDx
+            if err < 0 then
+                x = x + sx
+                err = err + absDy
+            end
+            if x == dstCol and y == dstRow then break end
+            if curtainChecker(x, y) then
+                curtainCount = curtainCount + 1
+            end
+        end
+    end
+
+    if curtainCount == 0 then return 1.0 end
+    return math.max(0.05, (1.0 - CURTAIN_ATTENUATION) ^ curtainCount)
 end
 
 -- ====================================================================
@@ -179,6 +374,8 @@ end
 --- 更新所有 tween 动画（每帧调用）
 ---@param dt number deltaTime（秒）
 function FogOfWar.UpdateTweens(dt)
+    if #activeTweens == 0 then return end
+    lightCacheDirty = true  -- tween 改变光源尺寸，标记缓存脏
     for i = #activeTweens, 1, -1 do
         local tw = activeTweens[i]
         tw.elapsed = tw.elapsed + dt
@@ -319,10 +516,21 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
             goto continueLight
         end
 
+        -- 柳条衰减：光线穿过柳条时强度降低
+        local curtainFactor = CalcCurtainAttenuation(light.col, light.row, cellCol, cellRow)
+        -- 薄墙衰减：光线穿过一层厚度的墙壁/柱子时强度降低
+        local thinWallFactor = CalcThinWallAttenuation(light.col, light.row, cellCol, cellRow)
+        -- 合并衰减因子
+        local combinedFactor = curtainFactor * thinWallFactor
+
         -- 判断是否在完整内圈像素圆内（全亮区域）
         if innerRadius >= 1 and IsInsidePixelCircle(dx, dy, innerRadius) then
-            maxLight = 1.0
-            return 1.0
+            local attenuatedLight = 1.0 * combinedFactor
+            if attenuatedLight > maxLight then
+                maxLight = attenuatedLight
+            end
+            if combinedFactor >= 1.0 then return 1.0 end
+            goto continueLight
         end
 
         -- 判断是否在外圈像素圆内（羽化区域）
@@ -353,6 +561,9 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
                 end
             end
 
+            -- 应用柳条+薄墙衰减
+            intensity = intensity * combinedFactor
+
             if intensity > maxLight then
                 maxLight = intensity
             end
@@ -369,7 +580,7 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
                     -- 距离越远越暗，最大强度为 0.15（远低于正式光照）
                     local falloff = 1.0 - (dist - radius * 0.5) / (radius + 1.5)
                     falloff = math.max(0, math.min(1.0, falloff))
-                    local softIntensity = falloff * 0.15
+                    local softIntensity = falloff * 0.15 * combinedFactor
                     if softIntensity > maxLight then
                         maxLight = softIntensity
                     end
@@ -386,6 +597,18 @@ end
 -- ====================================================================
 -- 绘制迷雾遮罩
 -- ====================================================================
+
+--- 重建光照缓存（仅在脏标记时调用）
+--- 只计算 startCol~endCol, startRow~endRow 范围内的光照
+local function RebuildLightCache(startCol, endCol, startRow, endRow)
+    for row = startRow, endRow do
+        if not lightCache[row] then lightCache[row] = {} end
+        for col = startCol, endCol do
+            lightCache[row][col] = CalcCellLightingWithNoise(col, row)
+        end
+    end
+end
+
 --- 绘制战争迷雾
 ---@param vg userdata NanoVG context
 ---@param params table { gridSize, startCol, endCol, startRow, endRow, offsetX, offsetY, zoomLevel?, mapX?, mapY? }
@@ -403,29 +626,50 @@ function FogOfWar.Draw(vg, params)
 
     local zGrid = gridSize * zoomLevel
 
-    -- 逐格渲染迷雾
+    -- 检测光源是否变化或可见范围变化，只在变化时重算
+    local fp = CalcLightFingerprint()
+    local rangeKey = startCol * 1000000 + endCol * 10000 + startRow * 100 + endRow
+    if lightCacheDirty or fp ~= lastLightFingerprint or rangeKey ~= lastCacheRange then
+        RebuildLightCache(startCol, endCol, startRow, endRow)
+        lastLightFingerprint = fp
+        lastCacheRange = rangeKey
+        lightCacheDirty = false
+    end
+
+    -- 行合并渲染迷雾（RLE：相邻同 alpha 的格子合为一个大矩形）
+    -- alpha 量化为 16 级（240/16=15 步），使相邻格子更容易合并
+    local QUANT = 16
     for row = startRow, endRow do
-        for col = startCol, endCol do
-            -- 计算该格子的光照强度（像素圆环形判定）
-            local lighting = CalcCellLightingWithNoise(col, row)
+        local cacheRow = lightCache[row]
+        local py = mapY + (row - 1) * zGrid - offsetY
+        local runStart = startCol
+        local runAlpha = -1
 
-            -- 计算迷雾不透明度（1 - 光照 = 黑暗度）
-            local fogAlpha = 1.0 - lighting
+        for col = startCol, endCol + 1 do
+            local alpha = 0
+            if col <= endCol then
+                local lighting = (cacheRow and cacheRow[col]) or 0
+                local fogAlpha = 1.0 - lighting
+                if fogAlpha > 0 then
+                    -- 量化到 QUANT 级
+                    alpha = math.floor(fogAlpha * 240 / QUANT + 0.5) * QUANT
+                    if alpha > 240 then alpha = 240 end
+                end
+            end
 
-            if fogAlpha <= 0 then goto continueFog end
-
-            -- 将 fogAlpha 映射到 0~240（不完全 255，保留一点可见度感）
-            local alpha = math.floor(fogAlpha * 240)
-
-            local px = mapX + (col - 1) * zGrid - offsetX
-            local py = mapY + (row - 1) * zGrid - offsetY
-
-            nvgBeginPath(vg)
-            nvgRect(vg, px, py, zGrid + 0.5, zGrid + 0.5)
-            nvgFillColor(vg, nvgRGBA(0, 0, 0, alpha))
-            nvgFill(vg)
-
-            ::continueFog::
+            if alpha ~= runAlpha then
+                -- 输出上一段 run
+                if runAlpha > 0 then
+                    local px = mapX + (runStart - 1) * zGrid - offsetX
+                    local w = (col - runStart) * zGrid + 0.5
+                    nvgBeginPath(vg)
+                    nvgRect(vg, px, py, w, zGrid + 0.5)
+                    nvgFillColor(vg, nvgRGBA(0, 0, 0, runAlpha))
+                    nvgFill(vg)
+                end
+                runStart = col
+                runAlpha = alpha
+            end
         end
     end
 end
@@ -506,6 +750,12 @@ function FogOfWar.DrawLightMarkers(vg, params)
     local zGrid = gridSize * zoomLevel
     local flickerT = os.clock()
 
+    -- 视口边界（用于裁剪屏幕外的光源）
+    local vpLeft = offsetX / zGrid + 1
+    local vpRight = vpLeft + (params.mapW or 1000) / zGrid
+    local vpTop = offsetY / zGrid + 1
+    local vpBottom = vpTop + (params.mapH or 600) / zGrid
+
     for i, light in ipairs(lightSources) do
         local isSelected = (i == selectedIndex)
         local isExtinguished = light.extinguished == true
@@ -513,6 +763,12 @@ function FogOfWar.DrawLightMarkers(vg, params)
         -- 熄灭灯用 targetDiameter 显示预期范围（虚线风格）
         local displayDiameter = isExtinguished and (light.targetDiameter or 6) or light.diameter
         local radius = displayDiameter * 0.5
+
+        -- 视口裁剪：光源圆完全在屏幕外则跳过
+        if light.col + radius < vpLeft or light.col - radius > vpRight
+            or light.row + radius < vpTop or light.row - radius > vpBottom then
+            goto continueLight
+        end
         local innerRadius = radius * (1.0 - light.feather)
         local ri = math.floor(radius + 0.5)
         local iri = math.floor(innerRadius + 0.5)
@@ -681,6 +937,7 @@ function FogOfWar.DrawLightMarkers(vg, params)
             nvgStrokeWidth(vg, 2)
             nvgStroke(vg)
         end
+        ::continueLight::
     end
 end
 
@@ -704,6 +961,7 @@ function FogOfWar.DrawLanterns(vg, params)
     for i, light in ipairs(lightSources) do
         if light.noLantern then goto continue_lantern end
         if light.extinguished then goto continue_lantern end  -- 熄灭灯由 DrawUnlitLanterns 绘制
+        if light.diameter <= 0 then goto continue_lantern end
         local cx = mapX + (light.col - 1) * zGrid - offsetX
         local cy = mapY + (light.row - 1) * zGrid - offsetY
 
@@ -828,6 +1086,7 @@ function FogOfWar.AddLight(col, row, diameter, feather, group)
         group = group or 0,
     }
     table.insert(lightSources, light)
+    lightCacheDirty = true
     return #lightSources
 end
 
@@ -940,6 +1199,7 @@ function FogOfWar.RemoveLight(col, row)
                 end
             end
             table.remove(lightSources, i)
+            lightCacheDirty = true
             return true
         end
     end
@@ -985,6 +1245,7 @@ function FogOfWar.UpdateLight(index, diameter, feather, group)
     end
     if feather then light.feather = math.max(0, math.min(1.0, feather)) end
     if group ~= nil then light.group = math.max(0, math.floor(group)) end
+    lightCacheDirty = true
 end
 
 --- 移动光源到新位置
@@ -996,12 +1257,16 @@ function FogOfWar.MoveLight(index, newCol, newRow)
     if not light then return end
     light.col = newCol
     light.row = newRow
+    lightCacheDirty = true
 end
 
 --- 清空所有光源
 function FogOfWar.ClearAll()
     lightSources = {}
     activeTweens = {}
+    lightCache = {}
+    lightCacheDirty = true
+    lastCacheRange = -1
 end
 
 --- 获取光源数量
@@ -1010,10 +1275,13 @@ function FogOfWar.Count()
 end
 
 --- 序列化光源数据（用于保存）
+--- 跳过运行时临时光源（如篝火点燃产生的 noLantern 光源）
 ---@return table[]
 function FogOfWar.Serialize()
     local data = {}
     for _, light in ipairs(lightSources) do
+        -- 跳过运行时临时光源（篝火等动态光源标记了 noLantern）
+        if light.noLantern then goto continue_serialize end
         local entry = {
             col = light.col,
             row = light.row,
@@ -1027,6 +1295,7 @@ function FogOfWar.Serialize()
             entry.extinguished = true
         end
         table.insert(data, entry)
+        ::continue_serialize::
     end
     return data
 end
@@ -1199,16 +1468,32 @@ local function StartZoneTransition(oldZone, newZone)
         local lightZone = GetLightZoneIndex(light.col, light.row)
 
         if newZone == 0 then
-            -- 玩家离开所有区域 → 恢复所有被隐藏的光源
-            if light._originalDiameter then
-                zoneState.fadeInDiameters[light] = light._originalDiameter
-            end
-
-        elseif oldZone == 0 then
-            -- 玩家从无区域进入区域 → 只保留新区域的光，其他全灭
-            if lightZone ~= newZone then
+            -- 玩家离开所有光域 → 恢复不属于任何光域的灯，隐藏的光域灯保持隐藏
+            if lightZone == 0 then
+                -- 无光域的灯：如果之前被隐藏了，恢复它
+                if light._originalDiameter then
+                    zoneState.fadeInDiameters[light] = light._originalDiameter
+                end
+            elseif lightZone == oldZone then
+                -- 旧光域的灯：淡出
                 zoneState.fadeOutDiameters[light] = light.diameter
             end
+            -- 其他光域的灯保持隐藏（已经是灭的）
+
+        elseif oldZone == 0 then
+            -- 玩家从无光域进入光域 → 新光域灯亮起，无光域的灯灭掉
+            if lightZone == newZone then
+                -- 新光域的灯：淡入
+                local target = light._originalDiameter or light.diameter
+                zoneState.fadeInDiameters[light] = target
+                light.diameter = 0.1
+            elseif lightZone == 0 then
+                -- 不属于任何光域的灯：淡出
+                if light.diameter > 0 then
+                    zoneState.fadeOutDiameters[light] = light.diameter
+                end
+            end
+            -- 其他光域的灯保持隐藏（已经是灭的）
 
         else
             -- 玩家从区域A切换到区域B → 旧区域灭，新区域亮
@@ -1231,6 +1516,7 @@ end
 function FogOfWar.UpdateZoneTransition(dt)
     if not zoneState.transitioning then return end
 
+    lightCacheDirty = true  -- 区域过渡改变光源 diameter
     zoneState.transitionElapsed = zoneState.transitionElapsed + dt
     local progress = math.min(1.0, zoneState.transitionElapsed / ZONE_TRANSITION_DURATION)
 
@@ -1311,15 +1597,23 @@ function FogOfWar.InitZoneVisibility(playerCol, playerRow)
     local initialZone = FogOfWar.DetectPlayerZone(playerCol, playerRow)
     zoneState.activeGroup = initialZone
 
-    -- 玩家不在任何区域内，所有光源正常显示
-    if initialZone == 0 then return end
-
-    -- 玩家在某个区域内：只亮该区域的灯，其他全灭
-    for _, light in ipairs(lightSources) do
-        local lightZone = GetLightZoneIndex(light.col, light.row)
-        if lightZone ~= initialZone then
-            light._originalDiameter = light.diameter
-            light.diameter = 0
+    if initialZone == 0 then
+        -- 玩家不在任何光域内：隐藏所有属于光域的灯，只保留不属于任何光域的灯
+        for _, light in ipairs(lightSources) do
+            local lightZone = GetLightZoneIndex(light.col, light.row)
+            if lightZone ~= 0 then
+                light._originalDiameter = light.diameter
+                light.diameter = 0
+            end
+        end
+    else
+        -- 玩家在某个区域内：只亮该区域的灯，其他全灭
+        for _, light in ipairs(lightSources) do
+            local lightZone = GetLightZoneIndex(light.col, light.row)
+            if lightZone ~= initialZone then
+                light._originalDiameter = light.diameter
+                light.diameter = 0
+            end
         end
     end
 end

@@ -4,6 +4,7 @@
 
 local C = require "editor.Constants"
 local S = require "editor.State"
+local Undo = require "editor.UndoSystem"
 local UI = require("urhox-libs/UI")
 local CloudStorage = require "CloudStorage"
 
@@ -182,6 +183,27 @@ local BG_IMAGE_OPTIONS = {
     { path = "image/edited_传火祭祀场背景_无火光_20260530100627.png", name = "传火祭祀场(无火光)" },
     { path = "image/sewer_background_20260530144651.png", name = "下水道背景" },
 }
+
+-- 可选的装饰资产图片列表
+local DECO_IMAGE_OPTIONS = {
+    { path = "image/move_prompt_warm_yellow_20260530145024.png", name = "MOVE提示(暖黄)" },
+    { path = "image/传火祭祀场背景_20260530100114.png", name = "传火祭祀场(火光)" },
+    { path = "image/edited_传火祭祀场背景_无火光_20260530100627.png", name = "传火祭祀场(无火光)" },
+}
+
+function M.OpenDecorationDialog(col, row)
+    input:SetScreenKeyboardVisible(true)
+    S.dialogMode = "decoration"
+    S.decoDialogSelected = 1  -- 默认选第一个
+    S.decoDialogCol = col
+    S.decoDialogRow = row
+    S.decoWidthInput = "3"
+    S.decoHeightInput = "2"
+    S.decoAlphaInput = "100"
+    S.decoCursor = 0
+    S.decoFocusField = 1
+    S.renameBlink = 0
+end
 
 function M.OpenBackgroundDialog()
     input:SetScreenKeyboardVisible(true)
@@ -1078,7 +1100,13 @@ function M.HandleKeyDown(key)
     end
 
     if key == KEY_TAB then
-        if S.dialogMode == "light" then
+        if S.dialogMode == "decoration" then
+            S.decoFocusField = (S.decoFocusField % 3) + 1
+            if S.decoFocusField == 1 then S.decoCursor = #S.decoWidthInput
+            elseif S.decoFocusField == 2 then S.decoCursor = #S.decoHeightInput
+            else S.decoCursor = #S.decoAlphaInput end
+            S.renameBlink = 0
+        elseif S.dialogMode == "light" then
             if S.lightDialogFocus == 1 then
                 S.lightDialogFocus = 2
                 S.lightDialogCursor = #S.lightFeatherInput
@@ -1118,7 +1146,16 @@ function M.HandleKeyDown(key)
         return true
     end
 
-    if S.dialogMode == "canvas" then
+    if S.dialogMode == "decoration" then
+        local cur
+        if S.decoFocusField == 1 then cur = S.decoWidthInput
+        elseif S.decoFocusField == 2 then cur = S.decoHeightInput
+        else cur = S.decoAlphaInput end
+        cur, S.decoCursor = HandleNumericFieldKey(key, cur, S.decoCursor or 0)
+        if S.decoFocusField == 1 then S.decoWidthInput = cur
+        elseif S.decoFocusField == 2 then S.decoHeightInput = cur
+        else S.decoAlphaInput = cur end
+    elseif S.dialogMode == "canvas" then
         local cur = (S.canvasFocusField == 1) and S.canvasWidthInput or S.canvasHeightInput
         cur, S.canvasCursor = HandleNumericFieldKey(key, cur, S.canvasCursor)
         if S.canvasFocusField == 1 then S.canvasWidthInput = cur else S.canvasHeightInput = cur end
@@ -1174,7 +1211,24 @@ function M.HandleTextInput(text)
     S.imeComposition = ""
     S.imeCursor = 0
 
-    if S.dialogMode == "canvas" then
+    if S.dialogMode == "decoration" then
+        local digits = text:match("%d+")
+        if digits then
+            local cur
+            if S.decoFocusField == 1 then cur = S.decoWidthInput
+            elseif S.decoFocusField == 2 then cur = S.decoHeightInput
+            else cur = S.decoAlphaInput end
+            local maxLen = (S.decoFocusField == 3) and 3 or 2
+            if #cur < maxLen then
+                cur = string.sub(cur, 1, S.decoCursor or 0) .. digits .. string.sub(cur, (S.decoCursor or 0) + 1)
+                S.decoCursor = (S.decoCursor or 0) + #digits
+                S.renameBlink = 0
+                if S.decoFocusField == 1 then S.decoWidthInput = cur
+                elseif S.decoFocusField == 2 then S.decoHeightInput = cur
+                else S.decoAlphaInput = cur end
+            end
+        end
+    elseif S.dialogMode == "canvas" then
         local digits = text:match("%d+")
         if digits then
             local cur = (S.canvasFocusField == 1) and S.canvasWidthInput or S.canvasHeightInput
@@ -1322,6 +1376,43 @@ function M.HandleMouseDown(mx, my)
             local fieldY = startY + (i - 1) * rowGap
             if mx >= inputX and mx < inputX + inputW and my >= fieldY and my < fieldY + inputH then
                 S.playerParamFocus = i; S.playerParamCursor = #S.playerParamInputs[i]; S.renameBlink = 0
+                return true
+            end
+        end
+    end
+
+    -- 装饰对话框：点击列表项选中 + 输入框焦点
+    if S.dialogMode == "decoration" then
+        local itemH = 18
+        local startY = dlgY + 28
+        local itemX = dlgX + 12
+        local itemW = dlgW - 24
+        -- 图片选项
+        for i = 1, #DECO_IMAGE_OPTIONS do
+            local iy = startY + (i - 1) * itemH
+            if mx >= itemX and mx < itemX + itemW and my >= iy and my < iy + itemH - 2 then
+                S.decoDialogSelected = i
+                return true
+            end
+        end
+        -- 输入框焦点
+        local inputY = startY + #DECO_IMAGE_OPTIONS * itemH + 6
+        local inputW = 36
+        local inputH = 16
+        local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
+        if mx >= inputX and mx < inputX + inputW then
+            if my >= inputY and my < inputY + inputH then
+                S.decoFocusField = 1; S.decoCursor = #S.decoWidthInput; S.renameBlink = 0
+                return true
+            end
+            local inputY2 = inputY + 22
+            if my >= inputY2 and my < inputY2 + inputH then
+                S.decoFocusField = 2; S.decoCursor = #S.decoHeightInput; S.renameBlink = 0
+                return true
+            end
+            local inputY3 = inputY2 + 22
+            if my >= inputY3 and my < inputY3 + inputH then
+                S.decoFocusField = 3; S.decoCursor = #S.decoAlphaInput; S.renameBlink = 0
                 return true
             end
         end

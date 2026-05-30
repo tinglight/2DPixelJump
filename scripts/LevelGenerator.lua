@@ -30,6 +30,11 @@ local TILE = {
     CHECKPOINT   = 14,
     SOLID_PILLAR = 13,
     SOLID_SEWER  = 17,
+    CURTAIN      = 18,  -- 柳条门帘（不阻挡玩家，略微遮光，触碰晃动）
+    SLOPE_TR     = 19,  -- 右上斜坡
+    SLOPE_TL     = 20,  -- 左上斜坡
+    SLOPE_BR     = 21,  -- 右下斜坡
+    SLOPE_BL     = 22,  -- 左下斜坡
 }
 
 local BASE_JUMP = 3          -- 满火跳跃高度（格）

@@ -285,6 +285,9 @@ local function DrawPixelBlock(vg, x, y, size, r, g, b, normalIntensity, lighting
     nvgFillColor(vg, nvgRGBA(fr, fg, fb, 255))
     nvgFill(vg)
 
+    -- LOD: 像素块太小时跳过高光和阴影细节（节省 2/3 draw call）
+    if size < 4 then return end
+
     -- 像素内高光（左上角）
     if lighting > 0.3 and normalIntensity > 0.55 then
         local hlA = math.floor(30 * lighting * (normalIntensity - 0.5) * 2)
@@ -468,6 +471,19 @@ function SolidRenderer.DrawBrick(vg, px, py, gridSize, lighting, lightDirX, ligh
     -- 基于坐标的颜色微变（每个砖块略有色差增加自然感）
     local colorShift = (HashPos(col, row, 42) % 10) - 5  -- -5 ~ +4
 
+    -- 超级 LOD: gridSize 极小时直接画一个均色矩形，跳过整个 4×4 像素循环
+    if gridSize < 8 then
+        local lit = lighting * 0.8 + 0.1
+        local br = math.floor(math.max(0, math.min(255, (140 + colorShift) * lit)))
+        local bg = math.floor(math.max(0, math.min(255, (90 + colorShift) * lit)))
+        local bb = math.floor(math.max(0, math.min(255, (60 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, gridSize, gridSize)
+        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
+        nvgFill(vg)
+        return
+    end
+
     for r = 1, PIXEL_CELLS do
         for c = 1, PIXEL_CELLS do
             local cx = px + (c - 1) * cellSize
@@ -489,6 +505,9 @@ function SolidRenderer.DrawBrick(vg, px, py, gridSize, lighting, lightDirX, ligh
             DrawPixelBlock(vg, cx, cy, cellSize, br, bg, bb, normalIntensity, lighting)
         end
     end
+
+    -- LOD: 格子太小时跳过裂纹和青苔（在编辑器缩放小时大幅节省 draw call）
+    if gridSize < 12 then return end
 
     -- 绘制裂纹（基于坐标哈希决定是否有裂纹及类型）
     if col > 0 and row > 0 then
@@ -678,6 +697,19 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
     end
 
     local colorShift = (HashPos(col, row, 77) % 8) - 4
+
+    -- 超级 LOD: gridSize 极小时直接画一个均色矩形
+    if gridSize < 8 then
+        local lit = lighting * 0.8 + 0.1
+        local br = math.floor(math.max(0, math.min(255, (160 + colorShift) * lit)))
+        local bg = math.floor(math.max(0, math.min(255, (140 + colorShift) * lit)))
+        local bb = math.floor(math.max(0, math.min(255, (110 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, gridSize, gridSize)
+        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
+        nvgFill(vg)
+        return
+    end
 
     -- 绘制主体 4x4 像素格
     for r = 1, PIXEL_CELLS do
@@ -1345,9 +1377,84 @@ local function DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
 end
 
 -- ====================================================================
+-- 斜坡法线图（4个方向，45度面 + 实体底部）
+-- ====================================================================
+-- SLOPE_TR: 左下角直角，斜面从左下到右上（实体在下三角）
+local SLOPE_TR_NORMAL_MAP = {
+    { {0, -0.5}, {0, -0.5}, {0.5, -0.7}, {0.5, -0.7} },
+    { {-0.3, 0.3}, {0.5, -0.7}, {0.5, -0.7}, {0.5, -0.7} },
+    { {-0.3, 0.3}, {-0.3, 0.3}, {0.5, -0.7}, {0.5, -0.7} },
+    { {0, 0.8}, {-0.3, 0.3}, {-0.3, 0.3}, {0.5, -0.7} },
+}
+-- SLOPE_TL: 右下角直角，斜面从右下到左上（实体在下三角）
+local SLOPE_TL_NORMAL_MAP = {
+    { {-0.5, -0.7}, {-0.5, -0.7}, {0, -0.5}, {0, -0.5} },
+    { {-0.5, -0.7}, {-0.5, -0.7}, {-0.5, -0.7}, {0.3, 0.3} },
+    { {-0.5, -0.7}, {-0.5, -0.7}, {0.3, 0.3}, {0.3, 0.3} },
+    { {-0.5, -0.7}, {0.3, 0.3}, {0.3, 0.3}, {0, 0.8} },
+}
+-- SLOPE_BR: 左上角直角，斜面从左上到右下（实体在上三角）
+local SLOPE_BR_NORMAL_MAP = {
+    { {0, -0.8}, {0.3, -0.3}, {0.3, -0.3}, {-0.5, 0.7} },
+    { {0.3, -0.3}, {0.3, -0.3}, {-0.5, 0.7}, {-0.5, 0.7} },
+    { {0.3, -0.3}, {-0.5, 0.7}, {-0.5, 0.7}, {-0.5, 0.7} },
+    { {0, 0.5}, {0, 0.5}, {-0.5, 0.7}, {-0.5, 0.7} },
+}
+-- SLOPE_BL: 右上角直角，斜面从右上到左下（实体在上三角）
+local SLOPE_BL_NORMAL_MAP = {
+    { {0.5, 0.7}, {-0.3, -0.3}, {-0.3, -0.3}, {0, -0.8} },
+    { {0.5, 0.7}, {0.5, 0.7}, {-0.3, -0.3}, {-0.3, -0.3} },
+    { {0.5, 0.7}, {0.5, 0.7}, {0.5, 0.7}, {-0.3, -0.3} },
+    { {0.5, 0.7}, {0.5, 0.7}, {0, 0.5}, {0, 0.5} },
+}
+
+-- ====================================================================
+-- 斜坡颜色（与砖块一致的暖棕色调）
+-- ====================================================================
+local SLOPE_BASE_COLORS = {
+    { {85,65,50}, {90,68,54}, {88,66,52}, {84,64,49} },
+    { {100,78,58}, {110,85,62}, {108,83,60}, {102,80,59} },
+    { {95,72,53}, {104,79,58}, {102,77,56}, {96,73,54} },
+    { {84,64,49}, {90,68,54}, {88,66,52}, {85,65,50} },
+}
+
+-- ====================================================================
+-- 斜坡遮罩：哪些像素格属于实体部分（1=实体，0=空）
+-- ====================================================================
+-- SLOPE_TR: 左下直角，对角线从左下到右上
+local SLOPE_TR_MASK = {
+    { 0, 0, 0, 1 },
+    { 0, 0, 1, 1 },
+    { 0, 1, 1, 1 },
+    { 1, 1, 1, 1 },
+}
+-- SLOPE_TL: 右下直角，对角线从右下到左上
+local SLOPE_TL_MASK = {
+    { 1, 0, 0, 0 },
+    { 1, 1, 0, 0 },
+    { 1, 1, 1, 0 },
+    { 1, 1, 1, 1 },
+}
+-- SLOPE_BR: 左上直角，对角线从左上到右下
+local SLOPE_BR_MASK = {
+    { 1, 1, 1, 1 },
+    { 0, 1, 1, 1 },
+    { 0, 0, 1, 1 },
+    { 0, 0, 0, 1 },
+}
+-- SLOPE_BL: 右上直角，对角线从右上到左下
+local SLOPE_BL_MASK = {
+    { 1, 1, 1, 1 },
+    { 1, 1, 1, 0 },
+    { 1, 1, 0, 0 },
+    { 1, 0, 0, 0 },
+}
+
+-- ====================================================================
 -- DrawSewer - 绘制旧王城地下水渠风格砖块（主入口）
 -- ====================================================================
 function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+    local cellSize = gridSize / PIXEL_CELLS
     lighting = lighting or 0.5
     lightDirX = lightDirX or 0
     lightDirY = lightDirY or 0
@@ -1525,6 +1632,154 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
     end
 end
 
+-- ============================================================
+-- DrawSlope: 斜坡瓦片渲染（法线贴图光照）
+-- ============================================================
+function SolidRenderer.DrawSlope(vg, slopeType, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+    local cellSize = gridSize / PIXEL_CELLS
+    lighting = lighting or 0.5
+    lightDirX = lightDirX or 0
+    lightDirY = lightDirY or 0
+    col = col or 0
+    row = row or 0
+
+    -- 选择法线图和遮罩
+    local normalMap, mask
+    if slopeType == 19 then       -- SLOPE_TR
+        normalMap = SLOPE_TR_NORMAL_MAP
+        mask = SLOPE_TR_MASK
+    elseif slopeType == 20 then   -- SLOPE_TL
+        normalMap = SLOPE_TL_NORMAL_MAP
+        mask = SLOPE_TL_MASK
+    elseif slopeType == 21 then   -- SLOPE_BR
+        normalMap = SLOPE_BR_NORMAL_MAP
+        mask = SLOPE_BR_MASK
+    elseif slopeType == 22 then   -- SLOPE_BL
+        normalMap = SLOPE_BL_NORMAL_MAP
+        mask = SLOPE_BL_MASK
+    else
+        return
+    end
+
+    -- 基于坐标的颜色微变
+    local colorShift = (HashPos(col, row, 42) % 10) - 5
+
+    -- 超级 LOD: gridSize 极小时直接画一个三角形
+    if gridSize < 8 then
+        local lit = lighting * 0.8 + 0.1
+        local br = math.floor(math.max(0, math.min(255, (140 + colorShift) * lit)))
+        local bg = math.floor(math.max(0, math.min(255, (90 + colorShift) * lit)))
+        local bb = math.floor(math.max(0, math.min(255, (60 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        if slopeType == 19 then       -- TR: 左下-右下-右上
+            nvgMoveTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py)
+        elseif slopeType == 20 then   -- TL: 左上-右下-左下
+            nvgMoveTo(vg, px, py)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+            nvgLineTo(vg, px, py + gridSize)
+        elseif slopeType == 21 then   -- BR: 左下-右上-右下
+            nvgMoveTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+        else                          -- BL: 左上-左下-右下
+            nvgMoveTo(vg, px, py)
+            nvgLineTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+        end
+        nvgClosePath(vg)
+        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
+        nvgFill(vg)
+        return
+    end
+
+    -- 绘制实体部分的像素格（按遮罩）
+    for r = 1, PIXEL_CELLS do
+        for c = 1, PIXEL_CELLS do
+            if mask[r][c] == 1 then
+                local cx = px + (c - 1) * cellSize
+                local cy = py + (r - 1) * cellSize
+
+                local baseColor = SLOPE_BASE_COLORS[r][c]
+                local normal = normalMap[r][c]
+
+                local br = baseColor[1] + colorShift
+                local bg = baseColor[2] + colorShift
+                local bb = baseColor[3] + colorShift
+
+                local normalIntensity = 0.5
+                if lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0) then
+                    normalIntensity = CalcNormalLighting(lightDirX, lightDirY, normal[1], normal[2])
+                end
+
+                DrawPixelBlock(vg, cx, cy, cellSize, br, bg, bb, normalIntensity, lighting)
+            end
+        end
+    end
+
+    -- 绘制斜面边缘线（增强视觉辨识度）
+    if lighting > 0.05 then
+        local edgeAlpha = math.floor(math.max(40, 90 * lighting))
+        nvgBeginPath(vg)
+        if slopeType == 19 then       -- TR: 左下到右上
+            nvgMoveTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py)
+        elseif slopeType == 20 then   -- TL: 右下到左上
+            nvgMoveTo(vg, px + gridSize, py + gridSize)
+            nvgLineTo(vg, px, py)
+        elseif slopeType == 21 then   -- BR: 左上到右下
+            nvgMoveTo(vg, px, py)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+        elseif slopeType == 22 then   -- BL: 右上到左下
+            nvgMoveTo(vg, px + gridSize, py)
+            nvgLineTo(vg, px, py + gridSize)
+        end
+        nvgStrokeColor(vg, nvgRGBA(40, 35, 30, edgeAlpha))
+        nvgStrokeWidth(vg, math.max(0.5, gridSize / 16))
+        nvgStroke(vg)
+    end
+
+    -- 绘制裂纹（仅在实体区域）
+    if col > 0 and row > 0 then
+        local crackChance = HashFloat(col, row, 123)
+        if crackChance < 0.30 then  -- 30% 的斜坡有裂纹（比砖块少一些）
+            local crackIdx = (HashPos(col, row, 456) % 5) + 1
+            DrawCrack(vg, px, py, gridSize, crackIdx, lighting)
+        end
+    end
+
+    -- 绘制暴露边缘的青苔
+    if neighbors and col > 0 and row > 0 then
+        -- 底边和直角边暴露时绘制青苔
+        if slopeType == 19 or slopeType == 20 then
+            -- TR/TL 底部有实体，底边暴露时画苔
+            if not neighbors.bottom then
+                DrawMossEdge(vg, px, py, gridSize, "bottom", col, row, lighting, lightDirX, lightDirY)
+            end
+        end
+        if slopeType == 21 or slopeType == 22 then
+            -- BR/BL 顶部有实体，顶边暴露时画苔
+            if not neighbors.top then
+                DrawMossEdge(vg, px, py, gridSize, "top", col, row, lighting, lightDirX, lightDirY)
+            end
+        end
+        -- 侧边
+        if slopeType == 19 or slopeType == 21 then
+            -- 右边有实体
+            if not neighbors.right then
+                DrawMossEdge(vg, px, py, gridSize, "right", col, row, lighting, lightDirX, lightDirY)
+            end
+        end
+        if slopeType == 20 or slopeType == 22 then
+            -- 左边有实体
+            if not neighbors.left then
+                DrawMossEdge(vg, px, py, gridSize, "left", col, row, lighting, lightDirX, lightDirY)
+            end
+        end
+    end
+end
+
 -- ====================================================================
 -- DrawSolid - 通用入口（向后兼容旧调用，同时支持新参数）
 -- ====================================================================
@@ -1544,6 +1799,9 @@ function SolidRenderer.DrawSolid(vg, tileType, px, py, gridSize, lighting, light
         SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
     elseif tileType == 17 then
         SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+
+    elseif tileType >= 19 and tileType <= 22 then
+        SolidRenderer.DrawSlope(vg, tileType, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
     else
         SolidRenderer.DrawBrick(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
     end
@@ -1553,12 +1811,21 @@ end
 -- 碰撞检测回调（用于阴影遮挡）
 -- ====================================================================
 local solidCollisionChecker = nil
+local solidCurtainChecker = nil
+local CURTAIN_ATTENUATION = 0.3  -- 每层柳条衰减30%光照
 
 --- 设置碰撞检测函数（用于光照阴影计算）
 --- 签名: function(col, row) -> boolean
 ---@param checker function|nil
 function SolidRenderer.SetCollisionChecker(checker)
     solidCollisionChecker = checker
+end
+
+--- 设置柳条检测函数（用于部分遮光衰减）
+--- 签名: function(col, row) -> boolean
+---@param checker function|nil
+function SolidRenderer.SetCurtainChecker(checker)
+    solidCurtainChecker = checker
 end
 
 -- ====================================================================
@@ -1708,6 +1975,41 @@ function SolidRenderer.CalcPlayerLightDirection(col, row, playerCol, playerRow, 
     end
 
     local intensity = 1.0 - math.min(1.0, dist / playerRadius)
+
+    -- 柳条衰减：光线穿过柳条时强度降低
+    if solidCurtainChecker and intensity > 0 then
+        local curtainCount = 0
+        local cdx = col - srcC
+        local cdy = row - srcR
+        local absCdx = (cdx >= 0) and cdx or -cdx
+        local absCdy = (cdy >= 0) and cdy or -cdy
+        local csx = (cdx > 0) and 1 or (cdx < 0 and -1 or 0)
+        local csy = (cdy > 0) and 1 or (cdy < 0 and -1 or 0)
+        local cx, cy = srcC, srcR
+        if absCdx >= absCdy then
+            local cerr = absCdx // 2
+            for _ = 1, absCdx do
+                cx = cx + csx
+                cerr = cerr - absCdy
+                if cerr < 0 then cy = cy + csy; cerr = cerr + absCdx end
+                if cx == col and cy == row then break end
+                if solidCurtainChecker(cx, cy) then curtainCount = curtainCount + 1 end
+            end
+        else
+            local cerr = absCdy // 2
+            for _ = 1, absCdy do
+                cy = cy + csy
+                cerr = cerr - absCdx
+                if cerr < 0 then cx = cx + csx; cerr = cerr + absCdy end
+                if cx == col and cy == row then break end
+                if solidCurtainChecker(cx, cy) then curtainCount = curtainCount + 1 end
+            end
+        end
+        if curtainCount > 0 then
+            intensity = intensity * math.max(0.05, (1.0 - CURTAIN_ATTENUATION) ^ curtainCount)
+        end
+    end
+
     local lx, ly = 0, 0
     if dist > 0.01 then
         lx = -dx / dist
