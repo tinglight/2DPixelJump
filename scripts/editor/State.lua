@@ -386,6 +386,7 @@ S.playMoveFirst = false
 S.playCameraX = 0
 S.playCameraY = 0
 S.playGameTime = 0
+S.playGridVisible = false  -- 试玩模式网格默认隐藏，Shift 切换
 
 -- 世界试玩
 S.worldPlayData = nil

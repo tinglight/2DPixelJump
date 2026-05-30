@@ -12,6 +12,7 @@ local LevelManager = nil
 local Animation = nil  -- 用于触发动画回调
 local Renderer = nil   -- 用于触发 BONFIRE LIT 消息
 local CurtainRenderer = nil  -- 柳条门帘（触碰晃动）
+local Fireball = nil   -- 火球系统（吸收动画）
 
 function M.Inject(deps)
     Physics = deps.Physics
@@ -20,6 +21,7 @@ function M.Inject(deps)
     Animation = deps.Animation
     Renderer = deps.Renderer
     CurtainRenderer = deps.CurtainRenderer
+    Fireball = deps.Fireball
 end
 
 -- ====================================================================
@@ -54,6 +56,10 @@ M.player = {
 
     -- 跨关卡保护：切换关卡后不因满血而重置跳跃能力
     transitionProtect = false,
+
+    -- 能力点状态
+    hasFireball = false,      -- 是否已获得火球能力
+    hasLanternDash = false,   -- 是否已解锁灯间位移
 }
 
 --- 重置玩家状态
@@ -76,6 +82,8 @@ function M.ResetPlayer()
     p.isMoving = false
     p.moveAnimTime = 0
     p.fallAnimTime = 0
+    p.hasFireball = false
+    p.hasLanternDash = false
 end
 
 -- ====================================================================
@@ -429,6 +437,18 @@ function M.CheckItemCollection()
                             Renderer.ShowBonfireMessage()
                             Renderer.TriggerCampfireIgnite(key)
                         end
+                    end
+
+                elseif base == TILE.ABILITY_POINT and not LevelManager.collectedItems[key] then
+                    -- 能力点：吸收动画 + 清除 tile + 赋予火球能力
+                    LevelManager.collectedItems[key] = true
+                    LevelManager.levelData[row][col] = TILE.EMPTY
+                    p.hasFireball = true
+                    -- 触发吸收动画
+                    if Fireball then
+                        local worldX = (col - 1) * Config.GRID + Config.GRID * 0.5
+                        local worldY = (row - 1) * Config.GRID + Config.GRID * 0.5
+                        Fireball.StartAbsorbAnim(worldX, worldY)
                     end
                 end
             end

@@ -35,6 +35,7 @@ local TILE = {
     SLOPE_TL     = 20,  -- 左上斜坡
     SLOPE_BR     = 21,  -- 右下斜坡
     SLOPE_BL     = 22,  -- 左下斜坡
+    ABILITY_POINT = 23, -- 能力点（每关仅一个，像素化燃烧灯，赋予火球能力）
 }
 
 local BASE_JUMP = 3          -- 满火跳跃高度（格）

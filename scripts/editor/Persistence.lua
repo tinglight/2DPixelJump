@@ -81,20 +81,6 @@ function M.SerializeLevel()
     if S.bgStretchToCanvas then
         data.bgStretchToCanvas = true
     end
-    -- 装饰资产
-    if #S.decorations > 0 then
-        data.decorations = {}
-        for _, deco in ipairs(S.decorations) do
-            table.insert(data.decorations, {
-                col = deco.col,
-                row = deco.row,
-                w = deco.w,
-                h = deco.h,
-                image = deco.image,
-                alpha = deco.alpha,
-            })
-        end
-    end
     for row = 1, S.MAP_ROWS do
         for col = 1, S.MAP_COLS do
             local v = S.levelData[row][col]
@@ -238,23 +224,6 @@ function M.ApplyLevelData(data)
     S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
     S.bgStretchToCanvas = (data.bgStretchToCanvas == true)
     S.bgImageHandle = nil  -- 清除缓存，加载关卡时重新加载图片
-
-    -- 装饰资产
-    S.decorations = {}
-    if data.decorations then
-        for _, d in ipairs(data.decorations) do
-            table.insert(S.decorations, {
-                col = d.col or 1,
-                row = d.row or 1,
-                w = d.w or 2,
-                h = d.h or 2,
-                image = d.image or "",
-                alpha = d.alpha or 1.0,
-                handle = nil,  -- 运行时重新加载
-            })
-        end
-    end
-    S.selectedDecorationIndex = 0
 end
 
 --- 应用摄像机边界

@@ -22,6 +22,8 @@ function M.PlaceTile(col, row)
 
     if tileType == TILE.SPAWN then
         M.PlaceSpawn(col, row)
+    elseif tileType == TILE.ABILITY_POINT then
+        M.PlaceAbilityPoint(col, row)
     elseif tileType == TILE.SWITCH or tileType == TILE.GATE then
         M.PlaceGrouped(col, row, tileType)
     elseif tileType == TILE.HIDDEN_WALL then
@@ -51,6 +53,23 @@ function M.PlaceSpawn(col, row)
     S.spawnRow = row
     S.levelData[row][col] = TILE.SPAWN
     Undo.RecordSpawnChange(oldCol, oldRow, col, row)
+end
+
+--- 放置能力点（每关仅一个，类似 SPAWN 的唯一性约束）
+---@param col number
+---@param row number
+function M.PlaceAbilityPoint(col, row)
+    -- 清除旧的能力点
+    for r = 1, S.MAP_ROWS do
+        for c = 1, S.MAP_COLS do
+            if S.levelData[r][c] == TILE.ABILITY_POINT then
+                S.levelData[r][c] = TILE.EMPTY
+            end
+        end
+    end
+    local oldVal = S.levelData[row][col]
+    S.levelData[row][col] = TILE.ABILITY_POINT
+    Undo.RecordTileChange(col, row, oldVal, TILE.ABILITY_POINT)
 end
 
 --- 放置带颜色组的地块（开关/门）
@@ -147,7 +166,41 @@ function M.PlacePipe(col, row)
     end
 end
 
+--- 查找管道锚点（左上角）：给定管道区域内任意格子，返回锚点 col, row
+--- 如果该格不是管道返回 nil
+---@param col number
+---@param row number
+---@return number|nil anchorCol
+---@return number|nil anchorRow
+function M.FindPipeAnchor(col, row)
+    if col < 1 or col > S.MAP_COLS or row < 1 or row > S.MAP_ROWS then return nil, nil end
+    local val = S.levelData[row][col]
+    if TileUtils.GetTileType(val) ~= TILE.PIPE then return nil, nil end
+
+    -- 向左和向上搜索，找到管道区域的左上角
+    local anchorCol = col
+    while anchorCol > 1 do
+        local leftVal = S.levelData[row][anchorCol - 1]
+        if TileUtils.GetTileType(leftVal) == TILE.PIPE then
+            anchorCol = anchorCol - 1
+        else
+            break
+        end
+    end
+    local anchorRow = row
+    while anchorRow > 1 do
+        local upVal = S.levelData[anchorRow - 1][anchorCol]
+        if TileUtils.GetTileType(upVal) == TILE.PIPE then
+            anchorRow = anchorRow - 1
+        else
+            break
+        end
+    end
+    return anchorCol, anchorRow
+end
+
 --- 擦除地块（同时检查并删除装饰物）
+--- 对于管道（7x7），擦除整个管道区域
 ---@param col number
 ---@param row number
 function M.EraseTile(col, row)
@@ -165,6 +218,28 @@ function M.EraseTile(col, row)
     if S.levelData[row][col] == TILE.SPAWN then return end
     local oldVal = S.levelData[row][col]
     if oldVal == TILE.EMPTY then return end
+
+    -- 管道整体擦除
+    local anchorCol, anchorRow = M.FindPipeAnchor(col, row)
+    if anchorCol then
+        local pw = C.PIPE_WIDTH
+        local ph = C.PIPE_HEIGHT
+        for dy = 0, ph - 1 do
+            for dx = 0, pw - 1 do
+                local c = anchorCol + dx
+                local r = anchorRow + dy
+                if c >= 1 and c <= S.MAP_COLS and r >= 1 and r <= S.MAP_ROWS then
+                    local v = S.levelData[r][c]
+                    if TileUtils.GetTileType(v) == TILE.PIPE then
+                        S.levelData[r][c] = TILE.EMPTY
+                        Undo.RecordTileChange(c, r, v, TILE.EMPTY)
+                    end
+                end
+            end
+        end
+        return
+    end
+
     S.levelData[row][col] = TILE.EMPTY
     Undo.RecordTileChange(col, row, oldVal, TILE.EMPTY)
 end
@@ -177,10 +252,13 @@ function M.FindDecoration(col, row)
     for i, deco in ipairs(S.decorations) do
         local decoType = C.DECORATION_TYPES[deco.typeId]
         if decoType then
-            local halfW = math.ceil(decoType.size.w / 2)
-            local halfH = math.ceil(decoType.size.h / 2)
-            if col >= deco.col - halfW and col <= deco.col + halfW
-               and row >= deco.row - halfH and row <= deco.row + halfH then
+            -- 正确范围: 中心左侧 floor((w-1)/2) 格，右侧 floor(w/2) 格
+            local leftW = math.floor((decoType.size.w - 1) / 2)
+            local rightW = math.floor(decoType.size.w / 2)
+            local topH = math.floor((decoType.size.h - 1) / 2)
+            local bottomH = math.floor(decoType.size.h / 2)
+            if col >= deco.col - leftW and col <= deco.col + rightW
+               and row >= deco.row - topH and row <= deco.row + bottomH then
                 return i
             end
         else

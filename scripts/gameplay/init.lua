@@ -15,6 +15,9 @@ local PlayerController = require("gameplay.PlayerController")
 local Animation = require("gameplay.Animation")
 local Renderer = require("gameplay.Renderer")
 local CurtainRenderer = require("CurtainRenderer")
+local FlameDashChain = require("gameplay.FlameDashChain")
+local Fireball = require("gameplay.Fireball")
+local FogOfWar = require("FogOfWar")
 
 -- ====================================================================
 -- 注入依赖
@@ -42,6 +45,7 @@ PlayerController.Inject({
     Animation = Animation,
     Renderer = Renderer,
     CurtainRenderer = CurtainRenderer,
+    Fireball = Fireball,
 })
 
 Animation.Inject({
@@ -57,6 +61,30 @@ Renderer.Inject({
     LevelManager = LevelManager,
     Animation = Animation,
 })
+
+FlameDashChain.Inject({
+    LevelManager = LevelManager,
+    PlayerController = PlayerController,
+    Physics = Physics,
+})
+
+Fireball.Inject({
+    Physics = Physics,
+    PlayerController = PlayerController,
+    LevelManager = LevelManager,
+    FlameDashChain = FlameDashChain,
+})
+
+-- ====================================================================
+-- FogOfWar 光源系统初始化
+-- ====================================================================
+FogOfWar.SetCollisionChecker(function(col, row)
+    return Physics.IsSolidForLight(col, row)
+end)
+FogOfWar.SetCurtainChecker(function(col, row)
+    return CurtainRenderer.IsCurtainAt(col, row, LevelManager.levelData,
+        LevelGenerator.TILE, Physics.GetTileType)
+end)
 
 -- ====================================================================
 -- 游戏运行时状态
@@ -76,6 +104,9 @@ local scale, screenDesignW, screenDesignH, designOffsetX, designOffsetY
 local inputState = { jumpPressed = false }
 local prevLeft = false
 local prevRight = false
+
+-- 网格显示（默认隐藏，Shift 切换）
+local gridVisible = false
 
 -- 虚拟控件
 local vc_joystick = nil
@@ -107,6 +138,13 @@ LevelManager.SetCallbacks({
 -- 游戏流程
 -- ====================================================================
 
+--- 进入死亡状态（立即清除飞行中的火球和跃迁链）
+local function EnterGameOver()
+    gameState = Config.STATE_GAMEOVER
+    Fireball.Reset()
+    FlameDashChain.Reset()
+end
+
 --- 重置游戏（从篝火存档点复活，或重新开始）
 local function ResetGame()
     local player = PlayerController.player
@@ -118,6 +156,9 @@ local function ResetGame()
 
     Animation.Reset()
     CurtainRenderer.ClearSway()
+    FlameDashChain.Reset()
+    Fireball.Reset()
+    FogOfWar.ResetZoneState()
 
     -- 如果有篝火存档点，从存档点复活
     if LevelManager.checkpointCol and LevelManager.checkpointRow and LevelManager.checkpointFile then
@@ -157,6 +198,9 @@ local function ResetGame()
     end
 
     PixelSystem.Init()
+
+    -- 初始化光源区域可见性
+    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
 end
 
 --- 进入下一关
@@ -182,6 +226,13 @@ end
 -- 引擎入口
 -- ====================================================================
 function Start()
+    -- 如果作为主入口被调用，跳转到 main.lua（保留主菜单和编辑器入口）
+    ---@diagnostic disable-next-line: undefined-global
+    if not _GAMEPLAY_DIRECT then
+        require "main"
+        return Start()  -- main.lua 重新定义了 Start()，调用它
+    end
+
     print("=== Pixel Flame Platformer v3 ===")
 
     RecalcLayout()
@@ -204,6 +255,7 @@ function Start()
     local player = PlayerController.player
     LevelManager.InitLevel(player)
     PixelSystem.Init()
+    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
     player.fallTickCurrent = Config.PLAYER_CONFIG.fallTickBase
 
     -- 加载世界地图连通数据（异步）
@@ -218,6 +270,7 @@ function Start()
                         if firstNode and firstNode.file then
                             LevelManager.LoadLevelFromFile(firstNode.file, player)
                             PixelSystem.Init()
+                            FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
                         end
                         print("[WorldMap] Loaded with " .. #LevelManager.worldMapData.nodes .. " levels, " .. #LevelManager.worldMapData.connections .. " connections")
                     else
@@ -243,7 +296,7 @@ function Start()
     SubscribeToEvent("KeyDown", "HandleKeyDown")
     SubscribeToEvent("ScreenMode", "HandleScreenMode")
 
-    print("Controls: A/D = move, Space = jump, R = reset")
+    print("Controls: A/D = move, Space = jump, E = flame dash, R = reset")
     print("Collect fuel orbs to restore your flame!")
 end
 
@@ -275,11 +328,15 @@ function HandleNanoVGRender(eventType, eventData)
     nvgSave(vg)
     nvgTranslate(vg, designOffsetX, designOffsetY)
 
-    Renderer.DrawGrid()
-    Renderer.DrawMap()
+    if gridVisible then
+        Renderer.DrawGrid()
+    end
     Renderer.DrawDecorations()
+    Renderer.DrawMap()
     Renderer.DrawFuelBurst()
+    Renderer.DrawFireball()
     Renderer.DrawPlayer()
+    Renderer.DrawFogOfWar()
 
     nvgRestore(vg)
 
@@ -309,6 +366,10 @@ function HandleUpdate(eventType, eventData)
     -- 更新柳条门帘晃动动画
     CurtainRenderer.UpdateSway(dt)
 
+    -- 更新迷雾光源动画和区域可见性
+    FogOfWar.UpdateTweens(dt)
+    FogOfWar.UpdatePlayerZone(PlayerController.player.gridX + 1, PlayerController.player.gridY + 1, dt)
+
     -- 世界地图切换冷却
     if LevelManager.transitionCooldown > 0 then
         LevelManager.transitionCooldown = LevelManager.transitionCooldown - dt
@@ -319,6 +380,55 @@ function HandleUpdate(eventType, eventData)
     LevelManager.UpdateTransition(dt, PlayerController.player, cameraState)
     cameraX = cameraState.x
     if LevelManager.transition.active then return end
+
+    -- 灯火跃迁更新
+    local dashPlayer = PlayerController.player
+    local dashCtx = {
+        gridX = dashPlayer.gridX,
+        gridY = dashPlayer.gridY,
+        gridSize = Config.PLAYER_CONFIG.playerGridSize or 2,
+        mapRows = Config.MAP_ROWS,
+        onGround = function(gx, gy)
+            return Physics.PlayerOnGround(gx, gy)
+        end,
+        isBodyBlocked = function(gx, gy)
+            return Physics.PlayerCollidesAt(gx, gy)
+        end,
+        setPos = function(gx, gy)
+            dashPlayer.gridX = gx
+            dashPlayer.gridY = gy
+        end,
+        onLand = function()
+            dashPlayer.isOnGround = true
+            dashPlayer.isJumping = false
+            dashPlayer.fallGridCount = 0
+            dashPlayer.bottomHighestY = dashPlayer.gridY
+        end,
+        onBoundary = function()
+            EnterGameOver()
+        end,
+        onCrossLevel = function()
+            -- 跨关卡跃迁完成后刷新渲染/相机状态
+            cameraX = 0
+            dashPlayer.isOnGround = false
+            dashPlayer.isJumping = false
+            dashPlayer.fallGridCount = 0
+            dashPlayer.moveTimer = 0
+            dashPlayer.fallTimer = 0
+            LevelManager.transitionCooldown = 0.5
+        end,
+    }
+    local dashResult = FlameDashChain.Update(dt, dashCtx)
+
+    -- 火球飞行更新
+    Fireball.Update(dt)
+
+    -- 跃迁期间跳过普通移动/跳跃/垂直物理
+    if FlameDashChain.IsActive() then
+        -- 跃迁期间仍更新动画表现
+        Animation.Update(dt, gameTime)
+        return
+    end
 
     -- 表现层动画更新
     Animation.Update(dt, gameTime)
@@ -376,7 +486,7 @@ function HandleUpdate(eventType, eventData)
     -- 垂直物理
     local vertResult = PlayerController.UpdateVertical(dt)
     if vertResult == "gameover" then
-        gameState = Config.STATE_GAMEOVER
+        EnterGameOver()
         return
     elseif vertResult == "boundary" then
         -- 玩家下落超出地图底部，检查是否有连接关卡可传送
@@ -385,10 +495,10 @@ function HandleUpdate(eventType, eventData)
             if target and not LevelManager.transition.active then
                 LevelManager.StartLevelTransition(target, "down")
             elseif not target then
-                gameState = Config.STATE_GAMEOVER
+                EnterGameOver()
             end
         else
-            gameState = Config.STATE_GAMEOVER
+            EnterGameOver()
         end
         return
     end
@@ -396,7 +506,7 @@ function HandleUpdate(eventType, eventData)
     -- 收集检测
     local collectResult = PlayerController.CheckItemCollection()
     if collectResult == "gameover" then
-        gameState = Config.STATE_GAMEOVER
+        EnterGameOver()
         return
     elseif collectResult == "win" then
         gameState = Config.STATE_WIN
@@ -406,7 +516,7 @@ function HandleUpdate(eventType, eventData)
     -- 世界地图边界切换检测
     local boundaryResult = LevelManager.CheckBoundaryTransition(player)
     if boundaryResult == "gameover" then
-        gameState = Config.STATE_GAMEOVER
+        EnterGameOver()
         return
     end
 
@@ -427,6 +537,20 @@ function HandleKeyDown(eventType, eventData)
     if key == KEY_SPACE or key == KEY_W or key == KEY_UP then
         inputState.jumpPressed = true
     end
+    if key == KEY_E then
+        -- 火球发射（命中亮灯时由 Fireball 模块触发跃迁）
+        if gameState == Config.STATE_PLAYING and not FlameDashChain.IsActive() then
+            local player = PlayerController.player
+            if player.hasFireball then
+                local fdx, fdy = 0, 0
+                if input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT) then fdx = fdx - 1 end
+                if input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT) then fdx = fdx + 1 end
+                if input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP) then fdy = fdy - 1 end
+                if input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_DOWN) then fdy = fdy + 1 end
+                Fireball.Shoot(fdx, fdy)
+            end
+        end
+    end
     if key == KEY_R then
         ResetGame()
     end
@@ -441,6 +565,9 @@ function HandleKeyDown(eventType, eventData)
     end
     if key == KEY_3 then
         SetDifficulty("hard")
+    end
+    if key == KEY_LSHIFT or key == KEY_RSHIFT then
+        gridVisible = not gridVisible
     end
     if key == KEY_ESCAPE then
         engine:Exit()

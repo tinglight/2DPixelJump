@@ -2,6 +2,7 @@
 -- gameplay/LevelManager.lua — 关卡加载、世界地图切换、过渡动画
 ------------------------------------------------------------
 local Config = require("gameplay.Config")
+local FogOfWar = require("FogOfWar")
 
 local M = {}
 
@@ -225,6 +226,26 @@ function M.LoadLevelFromFile(filename, player)
     end
 
     -- 玩家参数为全局配置（从 data/player_params.json 加载），不再从关卡数据读取
+
+    -- 加载光源数据（灯笼 + 迷雾系统）
+    FogOfWar.Deserialize(data.lightSources)
+    if data.lightZones then
+        FogOfWar.DeserializeZones(data.lightZones)
+    end
+
+    -- gameplay 模式：只有编辑器中标记为"无光"(extinguished)的灯才初始熄灭，
+    -- 普通光源正常发光
+    local lights = FogOfWar.GetLightSources()
+    local litCount = 0
+    local unlitCount = 0
+    for _, light in ipairs(lights) do
+        if light.extinguished then
+            unlitCount = unlitCount + 1
+        else
+            litCount = litCount + 1
+        end
+    end
+    print("[Gameplay] Loaded " .. #lights .. " lights: " .. litCount .. " lit, " .. unlitCount .. " unlit (need fireball)")
 
     if recalcLayoutCallback then recalcLayoutCallback() end
 

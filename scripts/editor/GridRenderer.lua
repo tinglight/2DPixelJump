@@ -566,6 +566,98 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
                 end
             end
         end
+
+    elseif base == TILE.ABILITY_POINT then
+        -- 编辑器预览：能力点（旋转像素火球）
+        local t = os.clock()
+        local ps = math.max(1, math.floor(zGrid / 9))  -- 像素块大小，自适应缩放
+        local gridSize = 7  -- 7x7 像素火球
+        local totalSize = gridSize * ps
+        local startX = px + (zGrid - totalSize) * 0.5
+        local startY = py + (zGrid - totalSize) * 0.5
+
+        -- 浮动
+        local floatY = math.sin(t * 3 + col * 2.1) * ps * 0.5
+        startY = startY + floatY
+
+        -- 4帧旋转动画（核心高光位置旋转）
+        local frame = math.floor(t * 6 + col * 1.3) % 4
+
+        -- 火球形状 (7x7 圆形)
+        local shape = {
+            {0,0,1,1,1,0,0},
+            {0,1,1,1,1,1,0},
+            {1,1,1,1,1,1,1},
+            {1,1,1,1,1,1,1},
+            {1,1,1,1,1,1,1},
+            {0,1,1,1,1,1,0},
+            {0,0,1,1,1,0,0},
+        }
+
+        -- 核心高光遮罩（随帧旋转，4帧循环）
+        local coreFrames = {
+            {{0,0,0,0,0,0,0},{0,0,0,1,0,0,0},{0,0,1,1,1,0,0},{0,0,1,1,0,0,0},{0,0,0,1,0,0,0},{0,0,0,0,0,0,0},{0,0,0,0,0,0,0}},
+            {{0,0,0,0,0,0,0},{0,0,0,0,0,0,0},{0,0,1,1,0,0,0},{0,0,1,1,1,0,0},{0,0,0,1,1,0,0},{0,0,0,0,0,0,0},{0,0,0,0,0,0,0}},
+            {{0,0,0,0,0,0,0},{0,0,0,0,0,0,0},{0,0,0,1,0,0,0},{0,0,0,1,1,0,0},{0,0,1,1,1,0,0},{0,0,0,1,0,0,0},{0,0,0,0,0,0,0}},
+            {{0,0,0,0,0,0,0},{0,0,0,0,0,0,0},{0,0,0,1,1,0,0},{0,0,1,1,1,0,0},{0,0,1,1,0,0,0},{0,0,0,0,0,0,0},{0,0,0,0,0,0,0}},
+        }
+        local coreMask = coreFrames[frame + 1]
+
+        -- 外部光晕
+        local glowPulse = math.sin(t * 5 + col * 2.7) * 0.3 + 0.7
+        nvgBeginPath(vg)
+        nvgCircle(vg, px + zGrid * 0.5, py + zGrid * 0.5 + floatY, totalSize * 0.6 * glowPulse)
+        nvgFillColor(vg, nvgRGBA(255, 140, 30, math.floor(35 * glowPulse)))
+        nvgFill(vg)
+
+        -- 绘制火球像素
+        for r = 1, 7 do
+            for c = 1, 7 do
+                if shape[r][c] == 1 then
+                    local drawX = startX + (c - 1) * ps
+                    local drawY = startY + (r - 1) * ps
+                    -- 到中心的距离决定基础颜色
+                    local dx = c - 4
+                    local dy = r - 4
+                    local dist = math.sqrt(dx * dx + dy * dy)
+                    local cr, cg, cb
+                    if coreMask[r][c] == 1 then
+                        -- 核心高光：亮白黄
+                        cr, cg, cb = 255, 255, 220
+                    elseif dist < 1.5 then
+                        -- 内核：明黄
+                        cr, cg, cb = 255, 230, 80
+                    elseif dist < 2.5 then
+                        -- 中层：橙黄
+                        cr, cg, cb = 255, 160, 40
+                    else
+                        -- 外层：橙红
+                        cr, cg, cb = 230, 80, 20
+                    end
+                    -- 像素闪烁
+                    local flick = math.sin(t * 10 + r * 3 + c * 5) * 0.12 + 0.88
+                    cr = math.min(255, math.floor(cr * flick))
+                    cg = math.min(255, math.floor(cg * flick))
+                    cb = math.min(255, math.floor(cb * flick))
+                    nvgBeginPath(vg)
+                    nvgRect(vg, drawX, drawY, ps, ps)
+                    nvgFillColor(vg, nvgRGBA(cr, cg, cb, 255))
+                    nvgFill(vg)
+                end
+            end
+        end
+
+        -- 顶部火星
+        local sparkFrame = math.floor(t * 10 + col * 3) % 5
+        if sparkFrame < 3 then
+            local sparkX = startX + 3 * ps + math.sin(t * 7 + col) * ps
+            local sparkY = startY - ps - sparkFrame * ps * 0.6
+            local sparkAlpha = math.floor((1 - sparkFrame / 3) * 220)
+            nvgBeginPath(vg)
+            nvgRect(vg, sparkX, sparkY, ps, ps)
+            nvgFillColor(vg, nvgRGBA(255, 240, 100, sparkAlpha))
+            nvgFill(vg)
+        end
     end
 end
 
@@ -1060,6 +1152,9 @@ function M.Draw()
 
     local startCol, endCol, startRow, endRow = GetVisibleRange(mapW, mapH, zGrid)
 
+    -- 装饰物（背景图上方，地块下方 — 除背景外最底层）
+    DrawDecorations(vg, mapX, mapY, zGrid, startCol, endCol, startRow, endRow)
+
     DrawGridLines(vg, mapX, mapY, mapH, startCol, endCol, startRow, endRow, zGrid)
     DrawTiles(vg, mapX, mapY, startCol, endCol, startRow, endRow, zGrid)
 
@@ -1120,9 +1215,6 @@ function M.Draw()
             selectedIndex = S.selectedLightIndex,
         })
     end
-
-    -- 装饰物标记
-    DrawDecorations(vg, mapX, mapY, zGrid, startCol, endCol, startRow, endRow)
 
     -- 战争迷雾（独立于 gizmos 开关）
     if FogOfWar and S.fogShowInEditor then

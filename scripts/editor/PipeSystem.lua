@@ -158,15 +158,18 @@ function M.Update(dt)
     local G = C.GRID
 
     -- 计算玩家碰撞区域（每帧缓存一次）
+    -- 玩家是像素火焰体，实际像素尺寸 = pixelGridSize * pixelSize = 10*3 = 30px
+    -- 碰撞盒适当外扩以确保水柱能可靠命中
     M.hitWaterType = nil
     local playerAlive = S.play and S.play.alive
     local plx1, ply1, plx2, ply2 = 0, 0, 0, 0
     if playerAlive then
-        local playerSize = math.ceil((C.FLAME_CFG.pixelGridSize * C.FLAME_CFG.pixelSize) / G)
-        plx1 = (S.play.gridX - 1) * G
-        ply1 = (S.play.gridY - 1) * G
-        plx2 = plx1 + playerSize * G
-        ply2 = ply1 + playerSize * G
+        local playerPx = C.FLAME_CFG.pixelGridSize * C.FLAME_CFG.pixelSize  -- 实际像素尺寸 30
+        local pad = 4  -- 碰撞容差（像素），确保水柱边缘粒子也能命中
+        plx1 = (S.play.gridX - 1) * G - pad
+        ply1 = (S.play.gridY - 1) * G - pad
+        plx2 = (S.play.gridX - 1) * G + playerPx + pad
+        ply2 = (S.play.gridY - 1) * G + playerPx + pad
     end
 
     for _, pipe in ipairs(M.pipes) do
@@ -230,10 +233,11 @@ function M.Update(dt)
                 end
             end
 
-            if hitSolid or p.life <= 0 then
+            if hitSolid or hitWater or p.life <= 0 then
                 if hitSolid then
                     M.SpawnSplash(p.x, p.y, pipe.waterTypeIndex)
                 end
+                -- hitWater: 粒子被水面静默吸收，不产生溅射
                 table.remove(pipe.particles, i)
             else
                 i = i + 1
@@ -316,9 +320,53 @@ end
 
 ------------------------------------------------------------
 -- 玩家碰撞检测（返回 Update 中缓存的结果）
+-- 除了逐粒子碰撞，还检测玩家是否在活跃水柱的柱体范围内
 ------------------------------------------------------------
 function M.CheckPlayerHit()
-    return M.hitWaterType
+    if M.hitWaterType then
+        return M.hitWaterType
+    end
+
+    -- 补充检测：玩家是否在水柱柱体矩形范围内
+    -- 水柱 = 管口到最低粒子之间的连续水流区域
+    if not (S.play and S.play.alive) then return nil end
+    local G = C.GRID
+    local playerPx = C.FLAME_CFG.pixelGridSize * C.FLAME_CFG.pixelSize
+    local plx1 = (S.play.gridX - 1) * G
+    local ply1 = (S.play.gridY - 1) * G
+    local plx2 = plx1 + playerPx
+    local ply2 = ply1 + playerPx
+
+    for _, pipe in ipairs(M.pipes) do
+        if M.IsPipeActive(pipe) and #pipe.particles > 2 then
+            local PW = C.PIPE_WIDTH * G
+            local PH = C.PIPE_HEIGHT * G
+            local centerX = (pipe.col - 1) * G + PW * 0.5
+            local centerY = (pipe.row - 1) * G + PH * 0.5
+            local outerR = math.min(PW, PH) * 0.45
+            local innerR = outerR * 0.62
+
+            -- 水柱范围：管口底边 到 最低粒子
+            local streamTop = centerY + innerR
+            local streamBottom = streamTop
+            for _, p in ipairs(pipe.particles) do
+                if p.y > streamBottom then streamBottom = p.y end
+            end
+
+            -- 水柱宽度 = innerR * 0.9（和渲染一致）
+            local halfW = innerR * 0.5
+            local streamLeft = centerX - halfW
+            local streamRight = centerX + halfW
+
+            -- AABB 重叠检测
+            if plx2 > streamLeft and plx1 < streamRight
+                and ply2 > streamTop and ply1 < streamBottom then
+                return pipe.waterTypeIndex
+            end
+        end
+    end
+
+    return nil
 end
 
 ------------------------------------------------------------

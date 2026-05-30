@@ -9,6 +9,7 @@ local Undo = require "editor.UndoSystem"
 local Placement = require "editor.Placement"
 local Toolbar = require "editor.Toolbar"
 local CloudPanel = require "editor.CloudPanel"
+local GMTool = require "editor.GMTool"
 
 local TILE = C.TILE
 local MODE = C.MODE
@@ -402,6 +403,8 @@ function HandlePlayModeKey(key)
         end
     elseif key == KEY_R then
         PlayMode.StartPlayMode()
+    elseif key == KEY_LSHIFT or key == KEY_RSHIFT then
+        S.playGridVisible = not S.playGridVisible
     end
 end
 
@@ -423,6 +426,8 @@ function HandleWorldPlayModeKey(key)
         end
     elseif key == KEY_R then
         PlayMode.StartWorldPlayMode()
+    elseif key == KEY_LSHIFT or key == KEY_RSHIFT then
+        S.playGridVisible = not S.playGridVisible
     end
 end
 
@@ -655,6 +660,9 @@ function HandlePlayModeClick(button, mx, my)
     local pmx = (mx - offsetX) / fitScale
     local pmy = (my - offsetY) / fitScale
 
+    -- GM工具优先拦截
+    if GMTool.HandleMouseDown(pmx, pmy) then return end
+
     local backBtnW, backBtnH = 50, 16
     local backBtnX = S.playViewW - backBtnW - 6
     local backBtnY = (22 - backBtnH) * 0.5
@@ -674,6 +682,9 @@ function HandleWorldPlayClick(button, mx, my)
     local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
     local pmx = (mx - offsetX) / fitScale
     local pmy = (my - offsetY) / fitScale
+
+    -- GM工具优先拦截
+    if GMTool.HandleMouseDown(pmx, pmy) then return end
 
     local backBtnW, backBtnH = 60, 16
     local backBtnX = S.playViewW - backBtnW - 6
@@ -918,19 +929,18 @@ function HandleMapClick(button, mx, my)
     local col, row = ScreenToGrid(mx, my)
     if col < 1 or col > S.MAP_COLS or row < 1 or row > S.MAP_ROWS then return end
 
-    -- 装饰工具优先处理（无论交互模式），确保拖拽/删除始终可用
-    local currentToolDef = C.TOOLS[S.currentTool]
-    if currentToolDef and currentToolDef.tile == -3 then
-        HandleDecorationToolClick(button, col, row)
-        return
-    end
-
     if S.interactMode == INTERACT.SELECT then
         HandleSelectClick(button, mx, my, col, row)
     elseif S.interactMode == INTERACT.MOVE then
         HandleMoveClick(button, col, row)
     else
-        HandleDrawClick(button, col, row)
+        -- 绘制模式：装饰工具走装饰逻辑，其他走普通绘制
+        local currentToolDef = C.TOOLS[S.currentTool]
+        if currentToolDef and currentToolDef.tile == -3 then
+            HandleDecorationToolClick(button, col, row)
+        else
+            HandleDrawClick(button, col, row)
+        end
     end
 end
 
@@ -988,6 +998,17 @@ end
 
 function StartSingleMove(col, row)
     S.multiMoving = false
+    -- 优先检查装饰物
+    local decoIdx = Placement.FindDecoration(col, row)
+    if decoIdx then
+        S.selectedTileCol = col
+        S.selectedTileRow = row
+        S.selectedIsLight = false
+        S.selectedTiles = {{ col = col, row = row, isLight = false, lightIdx = 0, isDecoration = true, decoIdx = decoIdx }}
+        InitMoveDrag(col, row, 0, 0)
+        S.moveDragDecoIdx = decoIdx
+        return
+    end
     local lightIdx = FogOfWar.FindLight(col, row)
     if lightIdx then
         S.selectedTileCol = col
@@ -996,10 +1017,40 @@ function StartSingleMove(col, row)
         S.selectedLightIndex = lightIdx
         InitMoveDrag(col, row, 0, lightIdx)
     elseif IsTileSelectable(col, row) then
-        S.selectedTileCol = col
-        S.selectedTileRow = row
-        S.selectedIsLight = false
-        InitMoveDrag(col, row, S.levelData[row][col], 0)
+        -- 检查是否是管道：如果是，选中整个管道区域进行整体移动
+        local anchorCol, anchorRow = Placement.FindPipeAnchor(col, row)
+        if anchorCol then
+            -- 管道整体选中（7x7 区域全部加入 selectedTiles）
+            local pw = C.PIPE_WIDTH
+            local ph = C.PIPE_HEIGHT
+            S.selectedTiles = {}
+            for dy = 0, ph - 1 do
+                for dx = 0, pw - 1 do
+                    local c = anchorCol + dx
+                    local r = anchorRow + dy
+                    if c >= 1 and c <= S.MAP_COLS and r >= 1 and r <= S.MAP_ROWS then
+                        table.insert(S.selectedTiles, { col = c, row = r, isLight = false, lightIdx = 0 })
+                    end
+                end
+            end
+            S.selectedTileCol = anchorCol
+            S.selectedTileRow = anchorRow
+            S.selectedIsLight = false
+            -- 使用多选整体移动模式
+            S.multiMoving = true
+            S.moveDragging = true
+            S.moveDragStartCol = col
+            S.moveDragStartRow = row
+            S.moveDragCurrentCol = col
+            S.moveDragCurrentRow = row
+            S.moveDragTileValue = 0
+            S.moveDragLightIdx = 0
+        else
+            S.selectedTileCol = col
+            S.selectedTileRow = row
+            S.selectedIsLight = false
+            InitMoveDrag(col, row, S.levelData[row][col], 0)
+        end
     else
         S.ClearSelection()
     end
@@ -1013,6 +1064,7 @@ function InitMoveDrag(col, row, tileValue, lightIdx)
     S.moveDragCurrentRow = row
     S.moveDragTileValue = tileValue
     S.moveDragLightIdx = lightIdx
+    S.moveDragDecoIdx = 0
 end
 
 function HandleDrawClick(button, col, row)
@@ -1043,9 +1095,14 @@ function HandleDrawClick(button, col, row)
 
     -- 普通地块工具
     if button == MOUSEB_LEFT then
-        S.isDrawing = true; S.isErasing = false
+        local tool = C.TOOLS[S.currentTool]
+        local isPipe = tool and tool.tile == TILE.PIPE
         Placement.PlaceTile(col, row)
         S.lastPlacedCol = col; S.lastPlacedRow = row
+        -- 管道是 7x7 大型物体，放置一次后不应连续绘制
+        if not isPipe then
+            S.isDrawing = true; S.isErasing = false
+        end
     elseif button == MOUSEB_RIGHT then
         S.isErasing = true; S.isDrawing = false
         Placement.EraseTile(col, row)
@@ -1287,7 +1344,18 @@ end
 -- ====================================================================
 
 function M.HandleMouseUp(button, mx, my)
-    if S.editorMode == MODE.PLAY or S.editorMode == MODE.WORLDPLAY then return end
+    if S.editorMode == MODE.PLAY or S.editorMode == MODE.WORLDPLAY then
+        -- GM工具拖拽释放
+        if button == MOUSEB_LEFT then
+            local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
+            local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
+            local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
+            local pmx = (mx - offsetX) / fitScale
+            local pmy = (my - offsetY) / fitScale
+            GMTool.HandleMouseUp(pmx, pmy)
+        end
+        return
+    end
 
     if S.editorMode == MODE.WORLDMAP then
         WorldMapEditor.HandleMouseUp(button, mx, my)
@@ -1567,6 +1635,8 @@ function FinishMoveDrag(mx, my)
     if col ~= S.moveDragStartCol or row ~= S.moveDragStartRow then
         if S.multiMoving and #S.selectedTiles > 0 then
             ExecuteMultiMove(col, row)
+        elseif S.moveDragDecoIdx and S.moveDragDecoIdx > 0 then
+            ExecuteDecorationMove(col, row)
         elseif S.moveDragLightIdx > 0 then
             ExecuteLightMove(col, row)
         else
@@ -1576,6 +1646,7 @@ function FinishMoveDrag(mx, my)
 
     S.moveDragging = false
     S.multiMoving = false
+    S.moveDragDecoIdx = 0
 end
 
 function ExecuteMultiMove(targetCol, targetRow)
@@ -1596,17 +1667,17 @@ function ExecuteMultiMove(targetCol, targetRow)
         return
     end
 
-    -- 收集原始值
+    -- 收集原始值（跳过装饰物和光源）
     local tileValues = {}
     for i, st in ipairs(S.selectedTiles) do
-        if not st.isLight then
+        if not st.isLight and not st.isDecoration then
             tileValues[i] = S.levelData[st.row][st.col]
         end
     end
 
-    -- 清除原位置
+    -- 清除原位置（跳过装饰物和光源）
     for i, st in ipairs(S.selectedTiles) do
-        if not st.isLight and tileValues[i] then
+        if not st.isLight and not st.isDecoration and tileValues[i] then
             Undo.RecordTileChange(st.col, st.row, tileValues[i], TILE.EMPTY)
             S.levelData[st.row][st.col] = TILE.EMPTY
         end
@@ -1616,7 +1687,14 @@ function ExecuteMultiMove(targetCol, targetRow)
     for i, st in ipairs(S.selectedTiles) do
         local nc = st.col + offsetCol
         local nr = st.row + offsetRow
-        if st.isLight then
+        if st.isDecoration then
+            -- 装饰物：直接移动 S.decorations 条目的坐标
+            local deco = S.decorations[st.decoIdx]
+            if deco then
+                deco.col = nc
+                deco.row = nr
+            end
+        elseif st.isLight then
             FogOfWar.MoveLight(st.lightIdx, nc, nr)
         else
             S.levelData[nr][nc] = tileValues[i]
@@ -1643,10 +1721,12 @@ function ValidateMultiMoveTargets(offsetCol, offsetRow, selectedSet)
     for _, st in ipairs(S.selectedTiles) do
         local nc = st.col + offsetCol
         local nr = st.row + offsetRow
+        -- 所有类型都检查边界
         if nc < 1 or nc > S.MAP_COLS or nr < 1 or nr > S.MAP_ROWS then
             return false
         end
-        if not st.isLight then
+        -- 装饰物和光源只检查边界，不检查目标格是否为空
+        if not st.isLight and not st.isDecoration then
             local destVal = S.levelData[nr][nc]
             if destVal ~= TILE.EMPTY and not selectedSet[nr * 10000 + nc] then
                 return false
@@ -1654,6 +1734,23 @@ function ValidateMultiMoveTargets(offsetCol, offsetRow, selectedSet)
         end
     end
     return true
+end
+
+function ExecuteDecorationMove(col, row)
+    local deco = S.decorations[S.moveDragDecoIdx]
+    if not deco then return end
+    deco.col = col
+    deco.row = row
+    S.selectedTileCol = col
+    S.selectedTileRow = row
+    -- 更新 selectedTiles 中的坐标
+    if S.selectedTiles and #S.selectedTiles == 1 then
+        S.selectedTiles[1].col = col
+        S.selectedTiles[1].row = row
+    end
+    Undo.dirty = true
+    Undo.saveTimer = Undo.saveDelay
+    S.SetMessage("装饰物已移动到 (" .. col .. "," .. row .. ")", 1.5)
 end
 
 function ExecuteLightMove(col, row)

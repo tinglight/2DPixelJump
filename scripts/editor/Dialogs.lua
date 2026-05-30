@@ -223,11 +223,11 @@ function M.OpenBackgroundDialog()
 end
 
 function M.OpenDecorationDialog()
-    S.dialogMode = "decoration"
+    S.dialogMode = "decoProperty"
     S.decoDialogBrightnessInput = tostring(S.decoDialogBrightness)
     S.decoDialogScaleInput = tostring(S.decoDialogScale)
-    S.decoDialogFocusField = 0  -- 不自动聚焦，让用户看到当前值后点击编辑
-    S.decoDialogCursor = 0
+    S.decoDialogFocusField = 1  -- 自动聚焦明暗度输入框
+    S.decoDialogCursor = #S.decoDialogBrightnessInput  -- 光标放末尾
     S.renameBlink = 0
 end
 
@@ -306,16 +306,15 @@ function M.ConfirmDialog()
         if val then
             S.bgImageAlpha = math.max(0, math.min(100, val)) / 100
         end
-    elseif S.dialogMode == "decoration" then
+    elseif S.dialogMode == "decoProperty" then
         local typeId = S.currentDecorationType
-        -- 从输入框文本解析数值
-        local bVal = tonumber(S.decoDialogBrightnessInput) or 100
+        -- 从输入框文本解析数值（空值回退到打开时的原始值）
+        local bVal = tonumber(S.decoDialogBrightnessInput) or S.decoDialogBrightness or 100
         local brightness = math.max(0, math.min(100, math.floor(bVal)))
-        local sVal = tonumber(S.decoDialogScaleInput) or 100
+        local sVal = tonumber(S.decoDialogScaleInput) or S.decoDialogScale or 100
         local scale = math.max(10, math.min(1000, math.floor(sVal)))
         S.decoDialogBrightness = brightness
         S.decoDialogScale = scale
-        local Undo = require "editor.UndoSystem"
         if S.decoDialogEditIndex > 0 and S.decoDialogEditIndex <= #S.decorations then
             -- 编辑已有装饰
             local deco = S.decorations[S.decoDialogEditIndex]
@@ -365,7 +364,7 @@ local function GetDialogSize()
     elseif S.dialogMode == "player" then w = 200; h = 190
     elseif S.dialogMode == "light" then h = 122
     elseif S.dialogMode == "background" then w = 200; h = 30 + (#BG_IMAGE_OPTIONS + 1) * 18 + 24 + 20 + 32
-    elseif S.dialogMode == "decoration" then
+    elseif S.dialogMode == "decoProperty" then
         local typeCount = #C.DECORATION_TYPES
         local rows = math.ceil(typeCount / 3)
         w = 210; h = 30 + rows * 22 + 60 + 36  -- title + type grid + sliders + buttons
@@ -804,9 +803,7 @@ local function DrawDecorationDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgFillColor(vg, nvgRGBA(180, 180, 200, 255))
     nvgText(vg, inputX - 6, fieldY1 + inputH * 0.5, "明暗:")
 
-    local bText = S.decoDialogBrightnessInput
-    if #bText == 0 and S.decoDialogFocusField ~= 1 then bText = tostring(S.decoDialogBrightness) end
-    DrawInputBox(vg, inputX, fieldY1, inputW, inputH, bText, S.decoDialogFocusField == 1)
+    DrawInputBox(vg, inputX, fieldY1, inputW, inputH, S.decoDialogBrightnessInput, S.decoDialogFocusField == 1)
     if S.decoDialogFocusField == 1 then
         DrawCursorCentered(vg, inputX, fieldY1, inputW, inputH, S.decoDialogBrightnessInput, S.decoDialogCursor, 120, 140, 200)
     end
@@ -823,9 +820,7 @@ local function DrawDecorationDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgFillColor(vg, nvgRGBA(180, 180, 200, 255))
     nvgText(vg, inputX - 6, fieldY2 + inputH * 0.5, "缩放:")
 
-    local sText = S.decoDialogScaleInput
-    if #sText == 0 and S.decoDialogFocusField ~= 2 then sText = tostring(S.decoDialogScale) end
-    DrawInputBox(vg, inputX, fieldY2, inputW, inputH, sText, S.decoDialogFocusField == 2)
+    DrawInputBox(vg, inputX, fieldY2, inputW, inputH, S.decoDialogScaleInput, S.decoDialogFocusField == 2)
     if S.decoDialogFocusField == 2 then
         DrawCursorCentered(vg, inputX, fieldY2, inputW, inputH, S.decoDialogScaleInput, S.decoDialogCursor, 140, 180, 120)
     end
@@ -955,7 +950,7 @@ function M.Draw()
         DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
     elseif S.dialogMode == "background" then
         DrawBackgroundDialog(vg, dlgX, dlgY, dlgW, dlgH)
-    elseif S.dialogMode == "decoration" then
+    elseif S.dialogMode == "decoProperty" then
         DrawDecorationDialog(vg, dlgX, dlgY, dlgW, dlgH)
     elseif S.dialogMode == "trash" then
         DrawTrashDialog(vg, dlgX, dlgY, dlgW, dlgH)
@@ -1131,15 +1126,13 @@ function M.HandleKeyDown(key)
                 S.canvasCursor = #S.canvasWidthInput
             end
             S.renameBlink = 0
-        elseif S.dialogMode == "decoration" then
+        elseif S.dialogMode == "decoProperty" then
             if S.decoDialogFocusField == 1 then
                 S.decoDialogFocusField = 2
-                S.decoDialogScaleInput = ""
-                S.decoDialogCursor = 0
+                S.decoDialogCursor = #S.decoDialogScaleInput
             else
                 S.decoDialogFocusField = 1
-                S.decoDialogBrightnessInput = ""
-                S.decoDialogCursor = 0
+                S.decoDialogCursor = #S.decoDialogBrightnessInput
             end
             S.renameBlink = 0
         end
@@ -1172,9 +1165,21 @@ function M.HandleKeyDown(key)
         if S.lightDialogFocus == 1 then S.lightDiameterInput = cur
         elseif S.lightDialogFocus == 2 then S.lightFeatherInput = cur
         else S.lightGroupInput = cur end
-    elseif S.dialogMode == "decoration" and S.decoDialogFocusField > 0 then
+    elseif S.dialogMode == "decoProperty" and S.decoDialogFocusField > 0 then
         local cur = (S.decoDialogFocusField == 1) and S.decoDialogBrightnessInput or S.decoDialogScaleInput
         cur, S.decoDialogCursor = HandleNumericFieldKey(key, cur, S.decoDialogCursor)
+        -- KeyDown digit fallback: 当 TextInput 未触发时，直接处理数字键
+        local digit = nil
+        if key >= KEY_0 and key <= KEY_9 then digit = tostring(key - KEY_0)
+        elseif key >= KEY_KP_0 and key <= KEY_KP_9 then digit = tostring(key - KEY_KP_0) end
+        if digit then
+            local maxLen = (S.decoDialogFocusField == 1) and 3 or 4
+            if #cur < maxLen then
+                cur = string.sub(cur, 1, S.decoDialogCursor) .. digit .. string.sub(cur, S.decoDialogCursor + 1)
+                S.decoDialogCursor = S.decoDialogCursor + 1
+                S.renameBlink = 0
+            end
+        end
         if S.decoDialogFocusField == 1 then S.decoDialogBrightnessInput = cur else S.decoDialogScaleInput = cur end
     end
 
@@ -1283,18 +1288,9 @@ function M.HandleTextInput(text)
                 end
             end
         end
-    elseif S.dialogMode == "decoration" and S.decoDialogFocusField > 0 then
-        local digits = text:match("%d+")
-        if digits then
-            local cur = (S.decoDialogFocusField == 1) and S.decoDialogBrightnessInput or S.decoDialogScaleInput
-            local maxLen = (S.decoDialogFocusField == 1) and 3 or 4  -- 明暗度最多3位(100)，缩放最多4位(1000)
-            if #cur < maxLen then
-                cur = string.sub(cur, 1, S.decoDialogCursor) .. digits .. string.sub(cur, S.decoDialogCursor + 1)
-                S.decoDialogCursor = S.decoDialogCursor + #digits
-                S.renameBlink = 0
-                if S.decoDialogFocusField == 1 then S.decoDialogBrightnessInput = cur else S.decoDialogScaleInput = cur end
-            end
-        end
+    elseif S.dialogMode == "decoProperty" and S.decoDialogFocusField > 0 then
+        -- 装饰对话框数字输入由 HandleKeyDown 统一处理（避免 KeyDown+TextInput 重复插入）
+        -- 这里仅消费事件，不做插入
     end
 
     return true
@@ -1450,14 +1446,40 @@ function M.HandleMouseDown(mx, my)
         end
     end
 
-    -- 装饰物对话框：类型选择 + 滑条拖拽
-    if S.dialogMode == "decoration" then
+    -- 装饰物对话框：类型选择 + 输入框
+    if S.dialogMode == "decoProperty" then
         local types = C.DECORATION_TYPES
         local cols = 3
         local itemW = math.floor((dlgW - 24) / cols)
         local itemH = 20
         local startX = dlgX + 12
         local startY = dlgY + 28
+
+        -- 输入框区域（先检查输入框，优先级高于类型选择）
+        local typeRows = math.ceil(#types / cols)
+        local fieldStartY = startY + typeRows * itemH + 8
+        local inputW = 50
+        local inputH = 16
+        local gap = 22
+        local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
+        local fieldY1 = fieldStartY
+        local fieldY2 = fieldStartY + gap
+
+        -- 点击明暗度输入框
+        if mx >= inputX and mx < inputX + inputW and my >= fieldY1 and my < fieldY1 + inputH then
+            S.decoDialogFocusField = 1
+            S.decoDialogCursor = #S.decoDialogBrightnessInput
+            S.renameBlink = 0
+            return true
+        end
+
+        -- 点击缩放输入框
+        if mx >= inputX and mx < inputX + inputW and my >= fieldY2 and my < fieldY2 + inputH then
+            S.decoDialogFocusField = 2
+            S.decoDialogCursor = #S.decoDialogScaleInput
+            S.renameBlink = 0
+            return true
+        end
 
         -- 点击类型选择
         for i = 1, #types do
@@ -1471,33 +1493,6 @@ function M.HandleMouseDown(mx, my)
             end
         end
 
-        -- 输入框区域
-        local typeRows = math.ceil(#types / cols)
-        local fieldStartY = startY + typeRows * itemH + 8
-        local inputW = 50
-        local inputH = 16
-        local gap = 22
-        local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
-        local fieldY1 = fieldStartY
-        local fieldY2 = fieldStartY + gap
-
-        -- 点击明暗度输入框
-        if mx >= inputX and mx < inputX + inputW and my >= fieldY1 and my < fieldY1 + inputH then
-            S.decoDialogFocusField = 1
-            S.decoDialogBrightnessInput = ""  -- 清空以便重新输入
-            S.decoDialogCursor = 0
-            S.renameBlink = 0
-            return true
-        end
-
-        -- 点击缩放输入框
-        if mx >= inputX and mx < inputX + inputW and my >= fieldY2 and my < fieldY2 + inputH then
-            S.decoDialogFocusField = 2
-            S.decoDialogScaleInput = ""  -- 清空以便重新输入
-            S.decoDialogCursor = 0
-            S.renameBlink = 0
-            return true
-        end
     end
 
     -- 回收站对话框：还原按钮 + 关闭按钮

@@ -11,6 +11,8 @@ local SolidRenderer = require("SolidRenderer")
 local CurtainRenderer = require("CurtainRenderer")
 local PipeSystem = require("editor.PipeSystem")
 local PauseMenu = require("PauseMenu")
+local FlameDashChain = require("gameplay.FlameDashChain")
+local GMTool = require("editor.GMTool")
 
 local M = {}
 
@@ -33,6 +35,8 @@ local function DeepCopyLightSources(sources)
             feather = light.feather,
             group = light.group,
             noLantern = light.noLantern,
+            extinguished = light.extinguished,
+            targetDiameter = light.targetDiameter,
         }
     end
     return copy
@@ -390,6 +394,10 @@ function M.ProcessTileAt(col, row)
         if S.editorMode == C.MODE_WORLDPLAY and S.worldPlayCurrentFile then
             CrossLevel.ActivateCrossSwitch(S.worldPlayCurrentFile, group)
         end
+    elseif base == C.TILE.ABILITY_POINT and not S.play.collected[key] then
+        S.play.collected[key] = true
+        S.play.hasFireball = true
+        S.SetMessage("获得火球能力!", 1.5)
     elseif base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then
         S.play.hiddenWallRevealed[group] = S.play.gameTime
     elseif base == C.TILE.CHECKPOINT and not S.checkpointActivated[key] then
@@ -604,6 +612,18 @@ end
 ------------------------------------------------------------
 
 function M.Update(dt)
+    -- GM工具拖拽追踪（在所有逻辑之前，确保死亡/暂停时也能拖拽）
+    if GMTool.IsDragging() then
+        local mx = input:GetMousePosition().x / S.dpr / S.scaleF
+        local my = input:GetMousePosition().y / S.dpr / S.scaleF
+        local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
+        local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
+        local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
+        local pmx = (mx - offsetX) / fitScale
+        local pmy = (my - offsetY) / fitScale
+        GMTool.HandleMouseMove(pmx, pmy)
+    end
+
     S.play.gameTime = S.play.gameTime + dt
 
     -- 死亡中由 deathPhase 自行处理 ESC，此处跳过
@@ -649,14 +669,81 @@ function M.Update(dt)
     M.UpdateFlameTime(dt)
     M.UpdateTipPixels(dt)
     M.UpdateFallParticles(dt)
-    M.HandleMovementInput(dt)
-    M.HandleClimbInput(dt)
-    M.HandleJumpInput()
-    M.HandleProjectileInput()
-    M.UpdateVerticalPhysics(dt)
-    -- M.UpdateGroundRecovery(dt) -- BUG FIX: 移除被动恢复，火焰只通过燃料球/篝火恢复
-    M.UpdateFragilePlatform(dt)
-    CrossLevel.Update(dt)
+
+    -- 灯火跃迁更新
+    local dashCtx = {
+        gridX = S.play.gridX,
+        gridY = S.play.gridY,
+        gridSize = M.PlayerGridSize(),
+        mapRows = S.MAP_ROWS,
+        onGround = function(gx, gy) return M.OnGround(gx, gy) end,
+        isBodyBlocked = function(gx, gy)
+            local s = M.PlayerGridSize()
+            for dy = 0, s - 1 do
+                for dx = 0, s - 1 do
+                    if M.IsSolid(gx + dx, gy + dy) then return true end
+                end
+            end
+            return false
+        end,
+        setPos = function(gx, gy)
+            S.play.gridX = gx
+            S.play.gridY = gy
+        end,
+        onLand = function()
+            S.play.isOnGround = true
+            S.play.isJumping = false
+            S.play.fallTickCurrent = C.PLAY_FALL_BASE
+            S.play.fallGridCount = 0
+            S.play.fallAnimTime = 0
+        end,
+        onBoundary = function()
+            S.play.alive = false
+            S.play.deathTimer = 0
+        end,
+        -- 跨地图跃迁支持（编辑器世界试玩模式）
+        crossLevel = (S.editorMode == C.MODE_WORLDPLAY and S.worldPlayData and S.worldPlayCurrentFile) and {
+            worldMapData = S.worldPlayData,
+            currentLevelFile = S.worldPlayCurrentFile,
+            findConnectedLevel = function(dir) return M.WorldPlayFindConnection(dir) end,
+            loadLevel = function(targetFile)
+                local json = CloudStorage.Load(targetFile)
+                if not json then return false end
+                local ok2, data = pcall(cjson.decode, json)
+                if not ok2 or not data then return false end
+                M.ApplyWorldLevelData(data)
+                S.worldPlayCurrentFile = targetFile
+                return true
+            end,
+            getMapSize = function() return S.MAP_COLS, S.MAP_ROWS end,
+            player = S.play,
+            setCooldown = function(v) S.worldPlayCooldown = v end,
+        } or nil,
+        onCrossLevel = function()
+            S.worldPlayCooldown = 0.5
+            S.play.isOnGround = false
+            S.play.isJumping = false
+            S.play.fallGridCount = 0
+            S.play.fallAnimTime = 0
+            M.SnapCameraToPlayer()
+        end,
+    }
+    FlameDashChain.Update(dt, dashCtx)
+
+    -- 跃迁期间跳过普通移动/跳跃/物理，只处理道具输入（触发）和视觉更新
+    if FlameDashChain.IsActive() then
+        M.HandleProjectileInput()  -- 允许在飞行中重触发（实际被 IsActive 拦截）
+        CrossLevel.Update(dt)
+    else
+        M.HandleMovementInput(dt)
+        M.HandleClimbInput(dt)
+        M.HandleJumpInput()
+        M.HandleProjectileInput()
+        M.UpdateVerticalPhysics(dt)
+        -- M.UpdateGroundRecovery(dt) -- BUG FIX: 移除被动恢复，火焰只通过燃料球/篝火恢复
+        M.UpdateFragilePlatform(dt)
+        CrossLevel.Update(dt)
+    end
     M.UpdateBonfireMessage(dt)
     M.UpdateCampfireParticles(dt)
     M.UpdateFuelBurst(dt)
@@ -706,6 +793,9 @@ function M.Update(dt)
     FogOfWar.UpdateTweens(dt)
     FogOfWar.UpdatePlayerZone(S.play.gridX + 1, S.play.gridY + 1, dt)
 
+    -- GM 工具效果（覆盖本帧所有伤害/能量消耗）
+    GMTool.ApplyEffects()
+
     -- 世界试玩模式：冷却递减、过渡动画、边界检测
     if S.editorMode == C.MODE_WORLDPLAY then
         if S.worldPlayCooldown > 0 then
@@ -718,8 +808,15 @@ function M.Update(dt)
 end
 
 function M.HandleProjectileInput()
-    if input:GetKeyPress(KEY_E) then
-        CrossLevel.LaunchProjectile(S.play.gridX, S.play.gridY, S.play.facingRight)
+    if input:GetKeyPress(KEY_E) and not FlameDashChain.IsActive() then
+        if not S.play.hasFireball then return end
+        -- WASD 方向确定
+        local fdx, fdy = 0, 0
+        if input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT) then fdx = fdx - 1 end
+        if input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT) then fdx = fdx + 1 end
+        if input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP) then fdy = fdy - 1 end
+        if input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_DOWN) then fdy = fdy + 1 end
+        CrossLevel.LaunchProjectile(S.play.gridX, S.play.gridY, S.play.facingRight, fdx, fdy)
     end
 end
 
@@ -1278,6 +1375,105 @@ function M.DrawFragileParticles(vg)
     end
 end
 
+------------------------------------------------------------
+-- 灯火跃迁流光特效
+------------------------------------------------------------
+local dashTrailParticles = {}
+
+function M.DrawDashStreakEffect(vg)
+    local flyX, flyY = FlameDashChain.GetFlyPosition()
+    local dashState = FlameDashChain.GetState()
+    local ps = C.FLAME_CFG.pixelSize
+    local N = C.FLAME_CFG.pixelGridSize
+    local totalSize = N * ps
+
+    -- 计算屏幕像素位置
+    local screenX = (flyX - 1) * C.GRID - S.playCameraX + totalSize * 0.5
+    local screenY = (flyY - 1) * C.GRID - S.playCameraY + totalSize * 0.5
+
+    -- 生成拖尾粒子
+    if dashState == "flying" or dashState == "falling" then
+        for _ = 1, 2 do
+            table.insert(dashTrailParticles, {
+                x = screenX + (math.random() - 0.5) * totalSize * 0.4,
+                y = screenY + (math.random() - 0.5) * totalSize * 0.4,
+                life = 0.3 + math.random() * 0.2,
+                maxLife = 0.5,
+                size = 2 + math.random() * 3,
+            })
+        end
+    end
+
+    -- 绘制拖尾粒子
+    local i = 1
+    while i <= #dashTrailParticles do
+        local p = dashTrailParticles[i]
+        p.life = p.life - (1.0 / 60.0)
+        if p.life <= 0 then
+            table.remove(dashTrailParticles, i)
+        else
+            local alpha = math.floor(180 * (p.life / p.maxLife))
+            local size = p.size * (p.life / p.maxLife)
+            nvgBeginPath(vg)
+            nvgCircle(vg, p.x, p.y, size)
+            nvgFillColor(vg, nvgRGBA(255, 180, 50, alpha))
+            nvgFill(vg)
+            i = i + 1
+        end
+    end
+
+    -- 计算飞行方向角度
+    local angle = 0
+    if dashState == "flying" then
+        local targetCol, targetRow = FlameDashChain.GetTarget()
+        if targetCol and targetRow then
+            local tgtX = (targetCol - 1) * C.GRID - S.playCameraX
+            local tgtY = (targetRow - 1) * C.GRID - S.playCameraY
+            angle = math.atan(tgtY - screenY, tgtX - screenX)
+        end
+    elseif dashState == "falling" then
+        angle = math.pi / 2  -- 向下
+    end
+
+    -- 绘制流光核心（拉伸椭圆 + 外发光）
+    nvgSave(vg)
+    nvgTranslate(vg, screenX, screenY)
+    nvgRotate(vg, angle)
+
+    -- 外发光（大椭圆）
+    local glowW = totalSize * 1.2
+    local glowH = totalSize * 0.5
+    nvgBeginPath(vg)
+    nvgEllipse(vg, 0, 0, glowW, glowH)
+    local glowPaint = nvgRadialGradient(vg, 0, 0, glowW * 0.2, glowW,
+        nvgRGBA(255, 200, 80, 120), nvgRGBA(255, 120, 0, 0))
+    nvgFillPaint(vg, glowPaint)
+    nvgFill(vg)
+
+    -- 内核（亮白色拉伸）
+    local coreW = totalSize * 0.6
+    local coreH = totalSize * 0.25
+    nvgBeginPath(vg)
+    nvgEllipse(vg, 0, 0, coreW, coreH)
+    local corePaint = nvgRadialGradient(vg, 0, 0, coreW * 0.1, coreW * 0.8,
+        nvgRGBA(255, 255, 240, 240), nvgRGBA(255, 180, 50, 80))
+    nvgFillPaint(vg, corePaint)
+    nvgFill(vg)
+
+    nvgRestore(vg)
+
+    -- 到达灯时的闪光效果
+    if dashState == "arriving" then
+        local flashAlpha = math.floor(200 * math.max(0, 1 - (S.playGameTime % 0.2) * 5))
+        nvgBeginPath(vg)
+        nvgCircle(vg, screenX, screenY, totalSize * 0.8)
+        local flashPaint = nvgRadialGradient(vg, screenX, screenY, 0, totalSize * 0.8,
+            nvgRGBA(255, 240, 200, flashAlpha), nvgRGBA(255, 200, 100, 0))
+        nvgFillPaint(vg, flashPaint)
+        nvgFill(vg)
+    end
+end
+
 function M.UpdateCamera(dt)
     local zoom = S.playerParams.cameraZoom or 1.0
 
@@ -1645,6 +1841,10 @@ end
 
 local function ResetPlayState()
     CleanupCheckpointLight()
+    FlameDashChain.Reset()
+    dashTrailParticles = {}
+    GMTool.Reset()
+    GMTool.InitPosition()
 
     -- 将 FogOfWar 内部光源替换为克隆副本，避免试玩修改影响编辑器
     -- （savedEditorLightSources 在 StartPlayMode/StartWorldPlayMode 入口处已保存）
@@ -1681,6 +1881,7 @@ local function ResetPlayState()
     S.play.fragileGone = {}
     S.play.fragileParticles = {}
     S.play.inWater = false
+    S.play.hasFireball = false
     S.play.inBlackWater = false
     S.play.waterDrainAccum = 0
     S.play.isClimbing = false
@@ -2032,12 +2233,16 @@ function M.Draw()
             end
         end
     end
-    M.DrawTiles(vg, startCol, endCol)
     M.DrawDecorations(vg, startCol, endCol)
+    M.DrawTiles(vg, startCol, endCol)
     M.DrawFragileParticles(vg)
     PipeSystem.DrawParticles(vg, S.playCameraX, S.playCameraY)
     FlameRenderer.UpdateFlameAnim()
-    FlameRenderer.Draw()
+    if FlameDashChain.IsActive() then
+        M.DrawDashStreakEffect(vg)
+    else
+        FlameRenderer.Draw()
+    end
     -- 恢复闪光覆盖
     local flashIntensity = M.GetRecoverFlashIntensity()
     if flashIntensity > 0 then
@@ -2058,6 +2263,7 @@ function M.Draw()
     CrossLevel.Draw(vg, S.playCameraX, S.playCameraY)
     M.DrawFogOfWar(vg, startCol, endCol)
     M.DrawHUD(vg)
+    GMTool.Draw(vg)
     M.DrawOverlays(vg)
     M.DrawTransition()
 end
@@ -2108,6 +2314,11 @@ function M.DrawGrid(vg)
     local endCol = math.min(S.MAP_COLS, startCol + math.ceil(visibleW / C.GRID) + 2)
     local startRow = math.max(1, math.floor(S.playCameraY / C.GRID) + 1)
     local endRow = math.min(S.MAP_ROWS, startRow + math.ceil(visibleH / C.GRID) + 2)
+
+    -- 网格隐藏时仅返回可见列范围，不绘制
+    if not S.playGridVisible then
+        return startCol, endCol
+    end
 
     -- 细线
     nvgBeginPath(vg)
@@ -2198,6 +2409,11 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawFragileTile(vg, px, py, row, col)
     elseif base == C.TILE.CURTAIN then
         M.DrawCurtainTile(vg, px, py, row, col)
+    elseif base == C.TILE.ABILITY_POINT then
+        local apKey = row .. "_" .. col
+        if not S.play.collected[apKey] then
+            M.DrawAbilityPointTile(vg, px, py, row, col)
+        end
     end
 end
 
@@ -2252,6 +2468,105 @@ function M.DrawSolidTileWithLight(vg, px, py, tileType, row, col)
     }
 
     SolidRenderer.DrawSolid(vg, tileType, px, py, C.GRID, totalLit, totalLdx, totalLdy, col, row, neighbors)
+end
+
+function M.DrawAbilityPointTile(vg, px, py, row, col)
+    local GRID = C.GRID
+    local ps = 3  -- 像素块大小（大一些更醒目）
+    local t = S.playGameTime or 0
+    row = row or 1
+    col = col or 1
+
+    -- 7x7 像素火球形状（圆形）
+    local shape = {
+        {0,0,1,1,1,0,0},
+        {0,1,1,1,1,1,0},
+        {1,1,1,1,1,1,1},
+        {1,1,1,1,1,1,1},
+        {1,1,1,1,1,1,1},
+        {0,1,1,1,1,1,0},
+        {0,0,1,1,1,0,0},
+    }
+
+    -- 4帧旋转动画（核心高光位置旋转）
+    local frame = math.floor(t * 6 + col * 1.3) % 4
+    local coreFrames = {
+        {{0,0,0,0,0,0,0},{0,0,0,1,0,0,0},{0,0,1,1,1,0,0},{0,0,1,1,0,0,0},{0,0,0,1,0,0,0},{0,0,0,0,0,0,0},{0,0,0,0,0,0,0}},
+        {{0,0,0,0,0,0,0},{0,0,0,0,0,0,0},{0,0,1,1,0,0,0},{0,0,1,1,1,0,0},{0,0,0,1,1,0,0},{0,0,0,0,0,0,0},{0,0,0,0,0,0,0}},
+        {{0,0,0,0,0,0,0},{0,0,0,0,0,0,0},{0,0,0,1,0,0,0},{0,0,0,1,1,0,0},{0,0,1,1,1,0,0},{0,0,0,1,0,0,0},{0,0,0,0,0,0,0}},
+        {{0,0,0,0,0,0,0},{0,0,0,0,0,0,0},{0,0,0,1,1,0,0},{0,0,1,1,1,0,0},{0,0,1,1,0,0,0},{0,0,0,0,0,0,0},{0,0,0,0,0,0,0}},
+    }
+    local coreMask = coreFrames[frame + 1]
+
+    -- 浮动
+    local floatY = math.sin(t * 3 + col * 2.1) * 1.5
+    local totalSize = 7 * ps
+    local startX = px + (GRID - totalSize) * 0.5
+    local startY = py + (GRID - totalSize) * 0.5 + floatY
+
+    -- 外部光晕（橙色脉冲）
+    local glowPulse = math.sin(t * 5 + col * 2.7) * 0.3 + 0.7
+    nvgBeginPath(vg)
+    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5 + floatY, totalSize * 0.6 * glowPulse)
+    nvgFillColor(vg, nvgRGBA(255, 140, 30, math.floor(50 * glowPulse)))
+    nvgFill(vg)
+
+    -- 绘制火球像素
+    for r = 1, 7 do
+        for c = 1, 7 do
+            if shape[r][c] == 1 then
+                local drawX = startX + (c - 1) * ps
+                local drawY = startY + (r - 1) * ps
+                local dx = c - 4
+                local dy = r - 4
+                local dist = math.sqrt(dx * dx + dy * dy)
+                local cr, cg, cb
+                if coreMask[r][c] == 1 then
+                    cr, cg, cb = 255, 255, 220
+                elseif dist < 1.5 then
+                    cr, cg, cb = 255, 230, 80
+                elseif dist < 2.5 then
+                    cr, cg, cb = 255, 160, 40
+                else
+                    cr, cg, cb = 230, 80, 20
+                end
+                local flick = math.sin(t * 10 + r * 3 + c * 5) * 0.12 + 0.88
+                cr = math.min(255, math.floor(cr * flick))
+                cg = math.min(255, math.floor(cg * flick))
+                cb = math.min(255, math.floor(cb * flick))
+                nvgBeginPath(vg)
+                nvgRect(vg, drawX, drawY, ps, ps)
+                nvgFillColor(vg, nvgRGBA(cr, cg, cb, 255))
+                nvgFill(vg)
+            end
+        end
+    end
+
+    -- 顶部火星
+    local sparkFrame = math.floor(t * 10 + col * 3) % 5
+    if sparkFrame < 3 then
+        local sparkX = startX + 3 * ps + math.sin(t * 7 + col) * ps
+        local sparkY = startY - ps - sparkFrame * ps * 0.6
+        local sparkAlpha = math.floor((1 - sparkFrame / 3) * 220)
+        nvgBeginPath(vg)
+        nvgRect(vg, sparkX, sparkY, ps, ps)
+        nvgFillColor(vg, nvgRGBA(255, 240, 100, sparkAlpha))
+        nvgFill(vg)
+    end
+
+    -- 侧面旋转火星
+    local sideAngle = t * 4 + col * 1.5
+    for i = 1, 2 do
+        local angle = sideAngle + i * math.pi
+        local sparkDist = totalSize * 0.5 + ps
+        local sx = px + GRID * 0.5 + math.cos(angle) * sparkDist
+        local sy = py + GRID * 0.5 + floatY + math.sin(angle) * sparkDist * 0.6
+        local sAlpha = math.floor(math.abs(math.sin(angle + t * 3)) * 180)
+        nvgBeginPath(vg)
+        nvgRect(vg, sx, sy, ps, ps)
+        nvgFillColor(vg, nvgRGBA(255, 200, 60, sAlpha))
+        nvgFill(vg)
+    end
 end
 
 function M.DrawCurtainTile(vg, px, py, row, col)
@@ -3729,8 +4044,10 @@ function M.DrawDecorations(vg, startCol, endCol)
             if decoType.sprite and decoType.size then
                 local sizeW = decoType.size.w or 1
                 local sizeH = decoType.size.h or 1
-                local drawW = sizeW * C.GRID
-                local drawH = sizeH * C.GRID
+                -- 应用装饰物缩放（scale 存储为百分比，100=原始大小）
+                local scaleFactor = (deco.scale or 100) / 100
+                local drawW = sizeW * C.GRID * scaleFactor
+                local drawH = sizeH * C.GRID * scaleFactor
                 -- 锚点在中心：放置格的中心 = 装饰物图片的中心
                 local imgX = px + C.GRID * 0.5 - drawW * 0.5
                 local imgY = py + C.GRID * 0.5 - drawH * 0.5

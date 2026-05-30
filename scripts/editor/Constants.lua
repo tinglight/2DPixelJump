@@ -58,6 +58,7 @@ M.TILE = {
     SLOPE_TL     = 20,  -- 左上斜坡：右下角为直角（实体在下方）
     SLOPE_BR     = 21,  -- 右下斜坡：左上角为直角（实体在上方）
     SLOPE_BL     = 22,  -- 左下斜坡：右上角为直角（实体在上方）
+    ABILITY_POINT = 23, -- 能力点（每关仅一个，像素化燃烧灯，赋予火球能力）
 }
 
 -- ====================================================================
@@ -162,6 +163,7 @@ M.TOOLS = {
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
     { id = "LADDER",      tile = M.TILE.LADDER,      name = "梯子", color = {160, 110, 50, 255},  group = "terrain" },
     { id = "CHECKPOINT",  tile = M.TILE.CHECKPOINT,   name = "篝火", color = {255, 140, 30, 255},  group = "pickup" },
+    { id = "ABILITY_POINT", tile = M.TILE.ABILITY_POINT, name = "能力点", color = {255, 160, 40, 255}, group = "pickup" },
     { id = "FRAGILE",     tile = M.TILE.FRAGILE,     name = "脆台", color = {110, 85, 60, 255}, group = "terrain" },
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
     { id = "LIGHT_ZONE", tile = -2,                 name = "光域", color = {255, 160, 40, 255},  group = "terrain" },
@@ -169,10 +171,10 @@ M.TOOLS = {
     { id = "DECORATION", tile = -3, name = "装饰", color = {160, 155, 140, 255}, group = "decoration" },
 }
 
-M.LIGHT_TOOL_INDEX = 23
-M.LIGHT_ZONE_TOOL_INDEX = 24
-M.UNLIT_LIGHT_TOOL_INDEX = 25
-M.DECORATION_TOOL_INDEX = 26
+M.LIGHT_TOOL_INDEX = 24
+M.LIGHT_ZONE_TOOL_INDEX = 25
+M.UNLIT_LIGHT_TOOL_INDEX = 26
+M.DECORATION_TOOL_INDEX = 27
 M.HIDDEN_WALL_TOOL_INDEX = 19
 
 -- ====================================================================
@@ -204,6 +206,7 @@ end
 M.DECORATION_TYPES = {
     { id = "goddess1", name = "女神像", color = {160, 155, 140}, sprite = "image/edited_女神像_无底座_20260530153654.png", size = {w = 10, h = 10} },
     { id = "broken_lantern", name = "破损灯", color = {90, 70, 40}, sprite = "image/broken_lantern_deco_20260530155851.png", size = {w = 3, h = 3} },
+    { id = "broken_pipe", name = "破败水管", color = {40, 50, 45}, sprite = "image/decorative_broken_pipe_pixel_20260530194030.png", size = {w = 7, h = 7} },
 }
 
 -- ====================================================================

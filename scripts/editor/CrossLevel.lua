@@ -5,6 +5,7 @@
 local C = require("editor.Constants")
 local S = require("editor.State")
 local TileUtils = require("editor.TileUtils")
+local FlameDashChain = require("gameplay.FlameDashChain")
 
 local M = {}
 
@@ -23,21 +24,33 @@ end
 -- 道具发射
 ------------------------------------------------------------
 
---- 从玩家位置发射火球
-function M.LaunchProjectile(gridX, gridY, facingRight)
+--- 从玩家位置发射火球（直线飞行，方向由 WASD 决定）
+function M.LaunchProjectile(gridX, gridY, facingRight, fdx, fdy)
     local playerSize = C.FLAME_CFG.pixelGridSize * C.FLAME_CFG.pixelSize
     local centerX = (gridX - 1) * C.GRID + playerSize * 0.5
     local centerY = (gridY - 1) * C.GRID + playerSize * 0.5
-    local dir = facingRight and 1 or -1
+
+    -- 方向归一化：无输入时使用面朝方向
+    fdx = fdx or 0
+    fdy = fdy or 0
+    if fdx == 0 and fdy == 0 then
+        fdx = facingRight and 1 or -1
+    end
+    local len = math.sqrt(fdx * fdx + fdy * fdy)
+    if len > 0 then
+        fdx = fdx / len
+        fdy = fdy / len
+    end
+
     -- 从角色前方偏移发射
-    local spawnX = centerX + dir * (playerSize * 0.5 + 4)
-    local spawnY = centerY - 2
+    local spawnX = centerX + fdx * (playerSize * 0.5 + 4)
+    local spawnY = centerY + fdy * (playerSize * 0.5 + 4)
 
     table.insert(S.projectiles, {
         x = spawnX,
         y = spawnY,
-        vx = C.PROJECTILE_SPEED * dir,
-        vy = 0,
+        vx = C.PROJECTILE_SPEED * fdx,
+        vy = C.PROJECTILE_SPEED * fdy,
         life = C.PROJECTILE_LIFE,
     })
 end
@@ -73,8 +86,7 @@ function M.UpdateOneProjectile(proj, dt)
     proj.life = proj.life - dt
     if proj.life <= 0 then return true end
 
-    -- 物理移动
-    proj.vy = proj.vy + C.PROJECTILE_GRAVITY * dt
+    -- 直线移动（无重力）
     proj.x = proj.x + proj.vx * dt
     proj.y = proj.y + proj.vy * dt
 
@@ -86,12 +98,65 @@ function M.UpdateOneProjectile(proj, dt)
     -- 当前关卡内碰撞检测
     local col = math.floor(proj.x / C.GRID) + 1
     local row = math.floor(proj.y / C.GRID) + 1
+
+    -- 优先检测灯（灯可能嵌在墙里或紧贴墙壁，必须在墙碰撞之前检测）
+    -- 使用像素距离检测（比精确格子匹配更可靠）
+    if FogOfWar then
+        local lights = FogOfWar.GetLightSources()
+        for _, light in ipairs(lights) do
+            local lampX = (light.col - 1) * C.GRID + C.GRID * 0.5
+            local lampY = (light.row - 1) * C.GRID + C.GRID * 0.5
+            local dx = proj.x - lampX
+            local dy = proj.y - lampY
+            local dist = math.sqrt(dx * dx + dy * dy)
+            if dist < C.GRID * 0.8 then
+                if light.extinguished then
+                    -- 命中熄灭灯 → 点燃
+                    FogOfWar.IgniteLight(light.col, light.row)
+                    S.lightSources = FogOfWar.GetLightSources()
+                    S.SetMessage("灯被点亮了!", 1.5)
+                    return true  -- 火球消耗
+                else
+                    -- 命中已亮灯 → 触发灯火跃迁
+                    if FogOfWar.GetEffectiveDiameter(light) > 1 and not light.noLantern then
+                        if not FlameDashChain.IsActive() then
+                            local PlayMode = require("editor.PlayMode")
+                            local triggerCtx = {
+                                gridX = S.play.gridX,
+                                gridY = S.play.gridY,
+                                gridSize = PlayMode.PlayerGridSize(),
+                                mapRows = S.MAP_ROWS,
+                                forceLamp = light,
+                                isBodyBlocked = function(gx, gy)
+                                    local ps = PlayMode.PlayerGridSize()
+                                    for dy = 0, ps - 1 do
+                                        for dx = 0, ps - 1 do
+                                            if PlayMode.IsSolid(gx + dx, gy + dy) then return true end
+                                        end
+                                    end
+                                    return false
+                                end,
+                            }
+                            if FlameDashChain.TryTrigger(triggerCtx) then
+                                return true  -- 火球消耗，跃迁已触发
+                            end
+                        end
+                    end
+                    -- 没有跃迁能力，火球穿过已亮灯
+                end
+            end
+        end
+    end
+
+    -- 然后检测墙壁/水面/开关等 tile 碰撞
     if col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
         local val = S.levelData[row][col]
         local base, group = TileUtils.GetTileType(val)
         if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
             or base == C.TILE.SLOPE_TR or base == C.TILE.SLOPE_TL or base == C.TILE.SLOPE_BR or base == C.TILE.SLOPE_BL then
             return true  -- 碰墙消失
+        elseif base == C.TILE.WATER or base == C.TILE.BLACK_WATER or base == C.TILE.POISON_WATER or base == C.TILE.PIPE then
+            return true  -- 碰水面/流水消失
         elseif base == C.TILE.GATE and not S.play.switchState[group] then
             return true  -- 碰关闭的门消失
         elseif base == C.TILE.SWITCH then
@@ -106,16 +171,6 @@ function M.UpdateOneProjectile(proj, dt)
                 end
             end
             return true
-        end
-    end
-
-    -- 火球点亮熄灭的灯
-    if FogOfWar and col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
-        if FogOfWar.HasUnlitLight(col, row) then
-            FogOfWar.IgniteLight(col, row)
-            S.lightSources = FogOfWar.GetLightSources()
-            S.SetMessage("灯被点亮了!", 1.5)
-            return true  -- 火球消耗
         end
     end
 
@@ -316,14 +371,18 @@ function M.Draw(vg, cameraX, cameraY)
         nvgFill(vg)
         -- 小尾巴（反方向拖尾）
         local tailLen = 8
-        local tailDir = proj.vx > 0 and -1 or 1
-        nvgBeginPath(vg)
-        nvgMoveTo(vg, screenX, screenY - 2)
-        nvgLineTo(vg, screenX + tailDir * tailLen, screenY)
-        nvgLineTo(vg, screenX, screenY + 2)
-        nvgClosePath(vg)
-        nvgFillColor(vg, nvgRGBA(255, 100, 0, 150))
-        nvgFill(vg)
+        local speed = math.sqrt(proj.vx * proj.vx + proj.vy * proj.vy)
+        if speed > 0.01 then
+            local tdx = -proj.vx / speed
+            local tdy = -proj.vy / speed
+            nvgBeginPath(vg)
+            nvgMoveTo(vg, screenX - tdy * 2, screenY + tdx * 2)
+            nvgLineTo(vg, screenX + tdx * tailLen, screenY + tdy * tailLen)
+            nvgLineTo(vg, screenX + tdy * 2, screenY - tdx * 2)
+            nvgClosePath(vg)
+            nvgFillColor(vg, nvgRGBA(255, 100, 0, 150))
+            nvgFill(vg)
+        end
     end
 end
 

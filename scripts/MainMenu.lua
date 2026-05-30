@@ -524,22 +524,27 @@ function MainMenu.Init(callbacks)
     })
 
     -- 初始化音效
-    audioScene = Scene()
-    audioScene:CreateComponent("Octree")
-    audioNode = audioScene:CreateChild("MenuAudio")
-    clickSource = audioNode:CreateComponent("SoundSource")
-    clickSource.soundType = "Effect"
-    clickSource.gain = sfxVolume
-    clickSound = cache:GetResource("Sound", "audio/sfx/ui_click.ogg")
+    if not audioScene then
+        audioScene = Scene()
+        audioScene:CreateComponent("Octree")
+        audioNode = audioScene:CreateChild("MenuAudio")
+        clickSource = audioNode:CreateComponent("SoundSource")
+        clickSource.soundType = "Effect"
+        clickSource.gain = sfxVolume
+        clickSound = cache:GetResource("Sound", "audio/sfx/ui_click.ogg")
 
-    -- BGM 初始化
-    bgmSource = audioNode:CreateComponent("SoundSource")
-    bgmSource.soundType = "Music"
-    bgmSource.gain = musicVolume
-    bgmSound = cache:GetResource("Sound", "audio/menu_bgm.ogg")
+        -- BGM 初始化
+        bgmSource = audioNode:CreateComponent("SoundSource")
+        bgmSource.soundType = "Music"
+        bgmSource.gain = musicVolume
+        bgmSound = cache:GetResource("Sound", "audio/menu_bgm.ogg")
+    end
+
     if bgmSound then
         bgmSound.looped = true
-        bgmSource:Play(bgmSound)
+        if bgmSource and not bgmSource:IsPlaying() then
+            bgmSource:Play(bgmSound)
+        end
     end
 
     -- 确保音频系统可用
@@ -547,11 +552,15 @@ function MainMenu.Init(callbacks)
     audio:SetMasterGain("Music", musicVolume)
     audio:SetMasterGain("Master", 1.0)
 
-    -- 检查存档并构建 UI
+    -- 先立即构建 UI（使用当前存档状态），确保主菜单立即可见
+    BuildUI()
+    initialized = true
+    print("[MainMenu] Init OK (immediate), hasSave=" .. tostring(hasSaveData))
+
+    -- 异步检查存档，如果存档状态变化则重建 UI
     CheckSaveData(function()
         BuildUI()
-        initialized = true
-        print("[MainMenu] Init OK, hasSave=" .. tostring(hasSaveData))
+        print("[MainMenu] UI rebuilt after save check, hasSave=" .. tostring(hasSaveData))
     end)
 end
 

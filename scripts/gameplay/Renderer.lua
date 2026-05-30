@@ -6,6 +6,7 @@ local GAME_VERSION = require("version")
 local SolidRenderer = require("SolidRenderer")
 local EditorConstants = require("editor.Constants")
 local CurtainRenderer = require("CurtainRenderer")
+local FogOfWar = require("FogOfWar")
 
 local M = {}
 
@@ -707,7 +708,7 @@ function M.DrawMap()
     for row = 1, Config.MAP_ROWS do
         for col = startCol, endCol do
             local val = LevelManager.levelData[row][col]
-            if val == TILE.EMPTY then goto continueTile end
+            if not val or val == TILE.EMPTY then goto continueTile end
 
             local base, group = Physics.GetTileType(val)
             local px = (col - 1) * GRID - M.cameraX
@@ -905,6 +906,12 @@ function M.DrawMap()
 
                 CurtainRenderer.DrawCurtain(vg, px, py, GRID, totalLit, totalLdx, totalLdy,
                     col, row, M.gameTime, hasAbove, hasBelow)
+
+            elseif base == TILE.ABILITY_POINT then
+                local key = row .. "_" .. col
+                if not LevelManager.collectedItems[key] then
+                    M.DrawAbilityPointTile(px, py, row, col)
+                end
             end
 
             ::continueTile::
@@ -1207,6 +1214,220 @@ function M.DrawFuelPixelFlame(px, py, col, row)
         nvgFillColor(vg, nvgRGBA(255, 240, 100, sparkAlpha))
         nvgFill(vg)
     end
+end
+
+-- ====================================================================
+-- 能力点渲染（像素化燃烧灯）
+-- ====================================================================
+function M.DrawAbilityPointTile(px, py, row, col)
+    local vg = M.vg
+    local GRID = Config.GRID
+    local ps = 3  -- 像素块大小（更大更醒目）
+    local t = M.gameTime
+
+    -- 7x7 像素火球形状（圆形）
+    local shape = {
+        {0,0,1,1,1,0,0},
+        {0,1,1,1,1,1,0},
+        {1,1,1,1,1,1,1},
+        {1,1,1,1,1,1,1},
+        {1,1,1,1,1,1,1},
+        {0,1,1,1,1,1,0},
+        {0,0,1,1,1,0,0},
+    }
+
+    -- 4帧旋转动画（核心高光位置旋转模拟自转）
+    local frame = math.floor(t * 6 + col * 1.3) % 4
+    local coreFrames = {
+        { -- 高光偏左上
+            {0,0,0,0,0,0,0},
+            {0,0,0,1,0,0,0},
+            {0,0,1,1,1,0,0},
+            {0,0,1,1,0,0,0},
+            {0,0,0,1,0,0,0},
+            {0,0,0,0,0,0,0},
+            {0,0,0,0,0,0,0},
+        },
+        { -- 高光偏左下
+            {0,0,0,0,0,0,0},
+            {0,0,0,0,0,0,0},
+            {0,0,1,1,0,0,0},
+            {0,0,1,1,1,0,0},
+            {0,0,0,1,1,0,0},
+            {0,0,0,0,0,0,0},
+            {0,0,0,0,0,0,0},
+        },
+        { -- 高光偏右下
+            {0,0,0,0,0,0,0},
+            {0,0,0,0,0,0,0},
+            {0,0,0,1,0,0,0},
+            {0,0,0,1,1,0,0},
+            {0,0,1,1,1,0,0},
+            {0,0,0,1,0,0,0},
+            {0,0,0,0,0,0,0},
+        },
+        { -- 高光偏右上
+            {0,0,0,0,0,0,0},
+            {0,0,0,0,0,0,0},
+            {0,0,0,1,1,0,0},
+            {0,0,1,1,1,0,0},
+            {0,0,1,1,0,0,0},
+            {0,0,0,0,0,0,0},
+            {0,0,0,0,0,0,0},
+        },
+    }
+    local coreMask = coreFrames[frame + 1]
+
+    -- 浮动动画
+    local floatY = math.sin(t * 3 + col * 2.1) * 1.5
+
+    local totalSize = 7 * ps
+    local startX = px + (GRID - totalSize) * 0.5
+    local startY = py + (GRID - totalSize) * 0.5 + floatY
+
+    -- 外部光晕（橙色脉冲）
+    local glowPulse = math.sin(t * 5 + col * 2.7) * 0.3 + 0.7
+    nvgBeginPath(vg)
+    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5 + floatY, 10 * glowPulse)
+    nvgFillColor(vg, nvgRGBA(255, 140, 30, math.floor(45 * glowPulse)))
+    nvgFill(vg)
+
+    -- 绘制火球像素
+    for r = 1, 7 do
+        for c = 1, 7 do
+            if shape[r][c] == 1 then
+                local drawX = startX + (c - 1) * ps
+                local drawY = startY + (r - 1) * ps
+                -- 到中心的距离决定基础颜色
+                local dx = c - 4
+                local dy = r - 4
+                local dist = math.sqrt(dx * dx + dy * dy)
+                local cr, cg, cb
+                if coreMask[r][c] == 1 then
+                    -- 旋转核心高光：亮白黄
+                    cr, cg, cb = 255, 255, 220
+                elseif dist < 1.5 then
+                    -- 内核：明黄
+                    cr, cg, cb = 255, 230, 80
+                elseif dist < 2.5 then
+                    -- 中层：橙黄
+                    cr, cg, cb = 255, 160, 40
+                else
+                    -- 外层：橙红
+                    cr, cg, cb = 230, 80, 20
+                end
+                -- 像素闪烁
+                local flick = math.sin(t * 10 + r * 3 + c * 5) * 0.12 + 0.88
+                cr = math.min(255, math.floor(cr * flick))
+                cg = math.min(255, math.floor(cg * flick))
+                cb = math.min(255, math.floor(cb * flick))
+                nvgBeginPath(vg)
+                nvgRect(vg, drawX, drawY, ps, ps)
+                nvgFillColor(vg, nvgRGBA(cr, cg, cb, 255))
+                nvgFill(vg)
+            end
+        end
+    end
+
+    -- 顶部火星粒子
+    local sparkFrame = math.floor(t * 10 + col * 3) % 5
+    if sparkFrame < 3 then
+        local sparkX = startX + 3 * ps + math.sin(t * 7 + col) * ps
+        local sparkY = startY - ps - sparkFrame * ps * 0.6
+        local sparkAlpha = math.floor((1 - sparkFrame / 3) * 220)
+        nvgBeginPath(vg)
+        nvgRect(vg, sparkX, sparkY, ps, ps)
+        nvgFillColor(vg, nvgRGBA(255, 240, 100, sparkAlpha))
+        nvgFill(vg)
+    end
+
+    -- 侧面小火星（模拟旋转飞溅）
+    local sideSparkAngle = t * 4 + col * 1.5
+    for i = 1, 2 do
+        local angle = sideSparkAngle + i * math.pi
+        local sparkDist = totalSize * 0.5 + ps
+        local sx = px + GRID * 0.5 + math.cos(angle) * sparkDist
+        local sy = py + GRID * 0.5 + floatY + math.sin(angle) * sparkDist * 0.6
+        local sAlpha = math.floor(math.abs(math.sin(angle + t * 3)) * 180)
+        nvgBeginPath(vg)
+        nvgRect(vg, sx, sy, ps, ps)
+        nvgFillColor(vg, nvgRGBA(255, 200, 60, sAlpha))
+        nvgFill(vg)
+    end
+end
+
+-- ====================================================================
+-- 火球渲染（飞行中+尾迹+吸收动画）
+-- ====================================================================
+function M.DrawFireball()
+    local vg = M.vg
+    local Fireball = require("gameplay.Fireball")
+    local t = M.gameTime
+
+    -- 渲染吸收动画
+    local absorbAnim = Fireball.GetAbsorbAnim()
+    if absorbAnim then
+        local progress = absorbAnim.timer / absorbAnim.duration
+        -- 粒子收缩到玩家中心
+        local player = PlayerController.player
+        local s = Physics.PlayerGridSize()
+        local playerCX = (player.gridX - 1) * Config.GRID + s * Config.GRID * 0.5
+        local playerCY = (player.gridY - 1) * Config.GRID + s * Config.GRID * 0.5
+        -- 生成 6 个粒子从能力点向玩家飞
+        for i = 1, 6 do
+            local angle = (i / 6) * math.pi * 2 + t * 3
+            local startRadius = 12 * (1 - progress)
+            local sx = absorbAnim.x + math.cos(angle) * startRadius
+            local sy = absorbAnim.y + math.sin(angle) * startRadius
+            local fx = sx + (playerCX - sx) * progress
+            local fy = sy + (playerCY - sy) * progress
+            local alpha = math.floor(255 * (1 - progress))
+            local size = 2 * (1 - progress * 0.5)
+            nvgBeginPath(vg)
+            nvgCircle(vg, fx - M.cameraX, fy, size)
+            nvgFillColor(vg, nvgRGBA(200, 120, 255, alpha))
+            nvgFill(vg)
+        end
+    end
+
+    -- 渲染火球
+    local fb = Fireball.GetFireball()
+    if not fb then return end
+
+    local fbX = fb.x - M.cameraX
+    local fbY = fb.y
+
+    -- 绘制尾迹（使用相对偏移，避免相机移动造成曲线错觉）
+    for i, trail in ipairs(fb.trail) do
+        if trail.alpha > 0 then
+            local tAlpha = math.floor(trail.alpha * 180)
+            local tSize = 3 - i * 0.3
+            if tSize > 0 then
+                nvgBeginPath(vg)
+                nvgCircle(vg, fbX + trail.offX, fbY + trail.offY, tSize)
+                nvgFillColor(vg, nvgRGBA(255, 160, 40, tAlpha))
+                nvgFill(vg)
+            end
+        end
+    end
+
+    -- 绘制火球本体（带闪烁）
+    local flick = math.sin(t * 20) * 0.2 + 0.8
+    -- 外圈光晕
+    nvgBeginPath(vg)
+    nvgCircle(vg, fbX, fbY, 6 * flick)
+    nvgFillColor(vg, nvgRGBA(255, 200, 50, 60))
+    nvgFill(vg)
+    -- 中心球
+    nvgBeginPath(vg)
+    nvgCircle(vg, fbX, fbY, 4)
+    nvgFillColor(vg, nvgRGBA(255, 220, 100, 255))
+    nvgFill(vg)
+    -- 核心亮点（偏向飞行反方向）
+    nvgBeginPath(vg)
+    nvgCircle(vg, fbX - fb.dx * 1.5, fbY - fb.dy * 1.5, 2)
+    nvgFillColor(vg, nvgRGBA(255, 255, 220, 255))
+    nvgFill(vg)
 end
 
 -- ====================================================================
@@ -1553,8 +1774,10 @@ function M.DrawDecorations()
             if decoType.sprite and decoType.size then
                 local sizeW = decoType.size.w or 1
                 local sizeH = decoType.size.h or 1
-                local drawW = sizeW * GRID
-                local drawH = sizeH * GRID
+                -- 应用装饰物缩放（scale 存储为百分比，100=原始大小）
+                local scaleFactor = (deco.scale or 100) / 100
+                local drawW = sizeW * GRID * scaleFactor
+                local drawH = sizeH * GRID * scaleFactor
                 -- 锚点在中心：放置格的中心 = 装饰物图片的中心
                 local imgX = px + GRID * 0.5 - drawW * 0.5
                 local imgY = py + GRID * 0.5 - drawH * 0.5
@@ -1585,6 +1808,76 @@ function M.DrawDecorations()
             ::continueDeco::
         end
     end
+end
+
+-- ====================================================================
+-- 迷雾与灯笼渲染
+-- ====================================================================
+function M.DrawFogOfWar()
+    local vg = M.vg
+    local GRID = Config.GRID
+
+    local startCol = math.max(1, math.floor(M.cameraX / GRID) + 1)
+    local visW = Config.DESIGN_W * (Config.PLAYER_CONFIG.cameraZoom or 1.0)
+    local endCol = math.min(Config.MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
+
+    -- 将玩家动态光源临时加入光源列表
+    local sources = FogOfWar.GetLightSources()
+    local playerLightIdx = nil
+    local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
+    local playerDiameter = Config.PLAYER_CONFIG.defaultLightDiameter * flameRatio
+    if playerDiameter >= 1 then
+        local player = PlayerController.player
+        local playerS = Physics.PlayerGridSize()
+        local lightCol = player.gridX + math.floor(playerS * 0.5)
+        local lightRow = player.gridY + math.floor(playerS * 0.5)
+        table.insert(sources, {
+            col = lightCol,
+            row = lightRow,
+            diameter = playerDiameter,
+            feather = 0.5,
+        })
+        playerLightIdx = #sources
+    end
+
+    FogOfWar.SetLightSources(sources)
+    FogOfWar.Draw(vg, {
+        gridSize = GRID,
+        startCol = startCol,
+        endCol = endCol,
+        startRow = 1,
+        endRow = Config.MAP_ROWS,
+        offsetX = M.cameraX,
+        offsetY = 0,
+        zoomLevel = 1.0,
+        mapX = 0,
+        mapY = 0,
+    })
+
+    -- 移除临时的玩家动态光源，恢复原始列表
+    if playerLightIdx then
+        table.remove(sources, playerLightIdx)
+    end
+
+    -- 在迷雾上方绘制像素提灯（仅地图光源，不含玩家）
+    FogOfWar.DrawLanterns(vg, {
+        gridSize = GRID,
+        offsetX = M.cameraX,
+        offsetY = 0,
+        zoomLevel = 1.0,
+        mapX = 0,
+        mapY = 0,
+    })
+
+    -- 绘制熄灭的提灯（暗色调，等待被火球点亮）
+    FogOfWar.DrawUnlitLanterns(vg, {
+        gridSize = GRID,
+        offsetX = M.cameraX,
+        offsetY = 0,
+        zoomLevel = 1.0,
+        mapX = 0,
+        mapY = 0,
+    })
 end
 
 return M

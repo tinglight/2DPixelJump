@@ -1468,32 +1468,18 @@ local function StartZoneTransition(oldZone, newZone)
         local lightZone = GetLightZoneIndex(light.col, light.row)
 
         if newZone == 0 then
-            -- 玩家离开所有光域 → 恢复不属于任何光域的灯，隐藏的光域灯保持隐藏
-            if lightZone == 0 then
-                -- 无光域的灯：如果之前被隐藏了，恢复它
-                if light._originalDiameter then
-                    zoneState.fadeInDiameters[light] = light._originalDiameter
-                end
-            elseif lightZone == oldZone then
-                -- 旧光域的灯：淡出
-                zoneState.fadeOutDiameters[light] = light.diameter
+            -- 玩家离开所有光域 → 恢复所有被隐藏的光源
+            if light._originalDiameter then
+                zoneState.fadeInDiameters[light] = light._originalDiameter
             end
-            -- 其他光域的灯保持隐藏（已经是灭的）
 
         elseif oldZone == 0 then
-            -- 玩家从无光域进入光域 → 新光域灯亮起，无光域的灯灭掉
-            if lightZone == newZone then
-                -- 新光域的灯：淡入
-                local target = light._originalDiameter or light.diameter
-                zoneState.fadeInDiameters[light] = target
-                light.diameter = 0.1
-            elseif lightZone == 0 then
-                -- 不属于任何光域的灯：淡出
+            -- 玩家从无光域进入光域 → 只保留新区域的光，其他全灭
+            if lightZone ~= newZone then
                 if light.diameter > 0 then
                     zoneState.fadeOutDiameters[light] = light.diameter
                 end
             end
-            -- 其他光域的灯保持隐藏（已经是灭的）
 
         else
             -- 玩家从区域A切换到区域B → 旧区域灭，新区域亮
@@ -1598,14 +1584,8 @@ function FogOfWar.InitZoneVisibility(playerCol, playerRow)
     zoneState.activeGroup = initialZone
 
     if initialZone == 0 then
-        -- 玩家不在任何光域内：隐藏所有属于光域的灯，只保留不属于任何光域的灯
-        for _, light in ipairs(lightSources) do
-            local lightZone = GetLightZoneIndex(light.col, light.row)
-            if lightZone ~= 0 then
-                light._originalDiameter = light.diameter
-                light.diameter = 0
-            end
-        end
+        -- 玩家不在任何光域内：所有光源正常显示（不隐藏任何灯）
+        return
     else
         -- 玩家在某个区域内：只亮该区域的灯，其他全灭
         for _, light in ipairs(lightSources) do
@@ -1633,6 +1613,39 @@ end
 ---@return number
 function FogOfWar.GetActiveGroup()
     return zoneState.activeGroup
+end
+
+--- 获取光源的"有效直径"（忽略动画过渡的影响）
+--- 用于灯火跃迁等需要判断灯实际照明范围的场景
+--- 规则：
+---   1. 如果光源正在 zone fade-in 过渡中 → 返回 fadeInDiameters 中的目标值
+---   2. 如果光源被 zone 系统隐藏（diameter=0, _originalDiameter 存在）→ 返回 0（不可链）
+---   3. 如果光源正在 tween 动画中（IgniteLight）→ 返回 tween 的目标直径
+---   4. 如果光源有 targetDiameter（反序列化的熄灭灯被点亮前）→ 返回 targetDiameter
+---   5. 正常情况 → 返回当前 diameter
+---@param light table 光源引用
+---@return number 有效直径
+function FogOfWar.GetEffectiveDiameter(light)
+    -- 1. zone fade-in 过渡中：用目标直径
+    if zoneState.fadeInDiameters[light] then
+        return zoneState.fadeInDiameters[light]
+    end
+    -- 2. 被 zone 系统完全隐藏的灯（不在过渡中，diameter=0）
+    if light._originalDiameter and light.diameter == 0 then
+        return 0
+    end
+    -- 3. 正在 tween 动画（IgniteLight 等）
+    for _, tw in ipairs(activeTweens) do
+        if tw.light == light and tw.targetDiameter > 0 then
+            return tw.targetDiameter
+        end
+    end
+    -- 4. 反序列化后尚未点亮的灯有 targetDiameter 字段
+    if light.targetDiameter then
+        return light.targetDiameter
+    end
+    -- 5. 正常情况
+    return light.diameter or 0
 end
 
 -- 区域显示颜色（按索引循环）

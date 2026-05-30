@@ -1545,7 +1545,7 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
             end
         end
         -- 外角圆角裁切
-        local cellSize = gridSize / PIXEL_CELLS
+        cellSize = gridSize / PIXEL_CELLS
         if neighbors and not neighbors.top and not neighbors.left then
             DrawPillarRoundedCorner(vg, px, py, cellSize, "tl", lighting)
         end
@@ -1586,7 +1586,7 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
         DrawSewerWaterStain(vg, px, py, gridSize, "bottom", col, row, lighting)
         DrawSewerEdgeShadow(vg, px, py, gridSize, "bottom", lighting)
         -- 衔接线（墙体到地面过渡）
-        local cellSize = gridSize / PIXEL_CELLS
+        cellSize = gridSize / PIXEL_CELLS
         local lineA = math.floor(math.max(30, 65 * (lighting * 0.5 + 0.5)))
         nvgBeginPath(vg)
         nvgRect(vg, px, py + gridSize - math.max(1, cellSize * 0.4),
@@ -1596,7 +1596,7 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
 
     elseif tileClass == SEWER_TYPE_WATER_EDGE then
         -- 水边衔接：仅底部薄阴影过渡，不覆盖水方块表现
-        local cellSize = gridSize / PIXEL_CELLS
+        cellSize = gridSize / PIXEL_CELLS
         local edgeA = math.floor(50 * (lighting * 0.3 + 0.7))
         nvgBeginPath(vg)
         nvgRect(vg, px, py + gridSize - math.max(1, cellSize * 0.3),
@@ -1606,7 +1606,7 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
     end
 
     -- 5. 绿色荧光苔藓点（像素块风格，少量随机亮起）
-    local cellSize = gridSize / PIXEL_CELLS
+    cellSize = gridSize / PIXEL_CELLS
     -- 只有约30%的瓦片有荧光苔藓
     local glowSeed = HashFloat(col * 13 + 7, row * 17 + 3, 999)
     if glowSeed < 0.30 then
