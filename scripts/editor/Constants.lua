@@ -51,6 +51,7 @@ M.TILE = {
     CHECKPOINT   = 14,
     PIPE         = 15,
     FRAGILE      = 16,
+    SOLID_SEWER  = 17,
 }
 
 -- ====================================================================
@@ -126,6 +127,8 @@ M.TOOLS = {
         submenu = "collision" },
     { id = "SOLID_PILLAR", tile = M.TILE.SOLID_PILLAR, name = "柱子", color = {90, 80, 110, 255}, group = "terrain",
         submenu = "collision" },
+    { id = "SOLID_SEWER", tile = M.TILE.SOLID_SEWER, name = "下水道", color = {45, 55, 38, 255}, group = "terrain",
+        submenu = "collision" },
     { id = "SPAWN",       tile = M.TILE.SPAWN,       name = "主角", color = {255, 200, 50, 255},  group = "player" },
     { id = "FUEL",        tile = M.TILE.FUEL,        name = "火焰", color = {255, 100, 20, 255},  group = "pickup" },
     { id = "GOAL",        tile = M.TILE.GOAL,        name = "终点", color = {100, 255, 100, 255}, group = "pickup" },
@@ -148,9 +151,9 @@ M.TOOLS = {
     { id = "LIGHT_ZONE", tile = -2,                 name = "光域", color = {255, 160, 40, 255},  group = "terrain" },
 }
 
-M.LIGHT_TOOL_INDEX = 17
-M.LIGHT_ZONE_TOOL_INDEX = 18
-M.HIDDEN_WALL_TOOL_INDEX = 13
+M.LIGHT_TOOL_INDEX = 18
+M.LIGHT_ZONE_TOOL_INDEX = 19
+M.HIDDEN_WALL_TOOL_INDEX = 14
 
 -- ====================================================================
 -- 子菜单分组定义

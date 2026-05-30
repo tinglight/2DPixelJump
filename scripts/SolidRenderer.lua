@@ -771,6 +771,170 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
 end
 
 -- ====================================================================
+-- 下水道砖块配色（深绿/暗黄湿润色调）
+-- ====================================================================
+local SEWER_BASE_COLORS = {
+    { {38,48,35}, {44,52,38}, {44,52,38}, {38,48,35} },
+    { {52,62,42}, {58,68,46}, {56,66,44}, {52,62,42} },
+    { {46,56,38}, {52,62,42}, {50,60,40}, {46,56,38} },
+    { {38,48,35}, {44,52,38}, {44,52,38}, {38,48,35} },
+}
+
+-- 下水道法线图（更深的凹槽感）
+local SEWER_NORMAL_MAP = {
+    { {0, -0.9}, {0, -0.8}, {0, -0.8}, {0, -0.9} },
+    { {-0.4, 0.6}, {0, 0.7}, {0, 0.7}, {0.4, 0.6} },
+    { {-0.4, -0.3}, {0, 0.2}, {0, 0.2}, {0.4, -0.3} },
+    { {0, 0.9}, {0, 0.8}, {0, 0.8}, {0, 0.9} },
+}
+
+-- 水渍/锈迹颜色
+local SEWER_STAIN_COLORS = {
+    {60, 80, 50},   -- 暗绿水渍
+    {80, 65, 35},   -- 铁锈色
+    {50, 70, 55},   -- 青绿水垢
+    {70, 60, 40},   -- 深黄泥垢
+}
+
+-- ====================================================================
+-- DrawSewerStainEdge - 下水道边缘水渍效果（替代青苔）
+-- ====================================================================
+local function DrawSewerStainEdge(vg, px, py, gridSize, edge, col, row, lighting, lightDirX, lightDirY)
+    local cellSize = gridSize / 4.0
+    local normals = MOSS_NORMALS[edge]
+
+    for i = 1, 4 do
+        local h = HashFloat(col * 11 + i, row * 17, edge:byte(1) + 50)
+        if h < 0.55 then
+            local depth = 1 + math.floor(HashFloat(col + i * 5, row * 7, 99) * 1.5)
+            local colorIdx = (HashPos(col, row, i + 10) % 4) + 1
+            local stainColor = SEWER_STAIN_COLORS[colorIdx]
+            local nx, ny = normals[i][1], normals[i][2]
+
+            local stainLit = 0.5
+            if lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0) then
+                stainLit = CalcNormalLighting(lightDirX, lightDirY, nx, ny)
+            end
+
+            local litMul = lighting * 0.5 + 0.5
+            local normalBoost = (stainLit - 0.5) * 2.0 * HIGHLIGHT_BOOST * lighting
+
+            local sr = math.floor(math.max(0, math.min(255, stainColor[1] * litMul + normalBoost)))
+            local sg = math.floor(math.max(0, math.min(255, stainColor[2] * litMul + normalBoost * 0.8)))
+            local sb = math.floor(math.max(0, math.min(255, stainColor[3] * litMul + normalBoost * 0.5)))
+
+            for d = 1, depth do
+                local mx, my
+                if edge == "top" then
+                    mx = px + (i - 1) * cellSize
+                    my = py + (d - 1) * cellSize
+                elseif edge == "bottom" then
+                    mx = px + (i - 1) * cellSize
+                    my = py + gridSize - d * cellSize
+                elseif edge == "left" then
+                    mx = px + (d - 1) * cellSize
+                    my = py + (i - 1) * cellSize
+                elseif edge == "right" then
+                    mx = px + gridSize - d * cellSize
+                    my = py + (i - 1) * cellSize
+                end
+
+                local depthAlpha = math.floor(200 - (d - 1) * 70)
+                nvgBeginPath(vg)
+                nvgRect(vg, mx, my, cellSize, cellSize)
+                nvgFillColor(vg, nvgRGBA(sr, sg, sb, depthAlpha))
+                nvgFill(vg)
+            end
+
+            -- 湿润高光（模拟水渍反光）
+            if stainLit > 0.6 and lighting > 0.3 then
+                local specA = math.floor((stainLit - 0.5) * 60 * lighting)
+                local sx, sy
+                if edge == "top" then
+                    sx = px + (i - 1) * cellSize + cellSize * 0.25
+                    sy = py + cellSize * 0.25
+                elseif edge == "bottom" then
+                    sx = px + (i - 1) * cellSize + cellSize * 0.25
+                    sy = py + gridSize - cellSize * 0.75
+                elseif edge == "left" then
+                    sx = px + cellSize * 0.25
+                    sy = py + (i - 1) * cellSize + cellSize * 0.25
+                elseif edge == "right" then
+                    sx = px + gridSize - cellSize * 0.75
+                    sy = py + (i - 1) * cellSize + cellSize * 0.25
+                end
+                if specA > 5 then
+                    nvgBeginPath(vg)
+                    nvgRect(vg, sx, sy, math.max(1, cellSize * 0.5), math.max(1, cellSize * 0.5))
+                    nvgFillColor(vg, nvgRGBA(120, 160, 100, specA))
+                    nvgFill(vg)
+                end
+            end
+        end
+    end
+end
+
+-- ====================================================================
+-- DrawSewer - 绘制下水道风格砖块（深绿暗色 + 水渍边缘 + 裂纹）
+-- ====================================================================
+function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+    local cellSize = gridSize / PIXEL_CELLS
+    lighting = lighting or 0.5
+    lightDirX = lightDirX or 0
+    lightDirY = lightDirY or 0
+    col = col or 0
+    row = row or 0
+
+    local colorShift = (HashPos(col, row, 77) % 8) - 4
+
+    for r = 1, PIXEL_CELLS do
+        for c = 1, PIXEL_CELLS do
+            local cx = px + (c - 1) * cellSize
+            local cy = py + (r - 1) * cellSize
+
+            local baseColor = SEWER_BASE_COLORS[r][c]
+            local normal = SEWER_NORMAL_MAP[r][c]
+
+            local br = baseColor[1] + colorShift
+            local bg = baseColor[2] + colorShift
+            local bb = baseColor[3] + colorShift
+
+            local normalIntensity = 0.5
+            if lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0) then
+                normalIntensity = CalcNormalLighting(lightDirX, lightDirY, normal[1], normal[2])
+            end
+
+            DrawPixelBlock(vg, cx, cy, cellSize, br, bg, bb, normalIntensity, lighting)
+        end
+    end
+
+    -- 裂纹（比普通砖块稍多）
+    if col > 0 and row > 0 then
+        local crackChance = HashFloat(col, row, 200)
+        if crackChance < 0.55 then
+            local crackIdx = (HashPos(col, row, 789) % 5) + 1
+            DrawCrack(vg, px, py, gridSize, crackIdx, lighting)
+        end
+    end
+
+    -- 边缘水渍（替代青苔）
+    if neighbors and col > 0 and row > 0 then
+        if not neighbors.top then
+            DrawSewerStainEdge(vg, px, py, gridSize, "top", col, row, lighting, lightDirX, lightDirY)
+        end
+        if not neighbors.bottom then
+            DrawSewerStainEdge(vg, px, py, gridSize, "bottom", col, row, lighting, lightDirX, lightDirY)
+        end
+        if not neighbors.left then
+            DrawSewerStainEdge(vg, px, py, gridSize, "left", col, row, lighting, lightDirX, lightDirY)
+        end
+        if not neighbors.right then
+            DrawSewerStainEdge(vg, px, py, gridSize, "right", col, row, lighting, lightDirX, lightDirY)
+        end
+    end
+end
+
+-- ====================================================================
 -- DrawSolid - 通用入口（向后兼容旧调用，同时支持新参数）
 -- ====================================================================
 ---@param vg userdata
@@ -787,6 +951,8 @@ end
 function SolidRenderer.DrawSolid(vg, tileType, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
     if tileType == 13 then
         SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+    elseif tileType == 17 then
+        SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
     else
         SolidRenderer.DrawBrick(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
     end
