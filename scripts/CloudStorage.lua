@@ -76,8 +76,15 @@ end
 -- ====================================================================
 
 --- 初始化：从云端加载所有关卡数据到内存，若云端无数据则从本地读取默认值
+--- 如果已初始化且缓存有效，跳过重新加载（避免重复调用 Start() 时清空关卡数据）
 ---@param callback fun(ok: boolean, err?: string)
 function CloudStorage.Init(callback)
+    -- 已初始化且有有效缓存时直接返回，避免清空数据
+    if initialized and cache.nextIndex >= 1 then
+        if callback then callback(true) end
+        return
+    end
+
     cache.levels = {}
     cache.nextIndex = 1
 
@@ -433,31 +440,55 @@ function CloudStorage.RestoreFromTrash(fname, callback)
         return
     end
 
-    -- 恢复到正式缓存
-    cache.levels[fname] = item.data
-
-    -- 从回收站移除
-    trashBin[fname] = nil
-    CloudStorage._SaveTrashBin()
-
-    -- 更新 nextIndex（确保编号不冲突）
-    local idx = tonumber(fname:match("level_(%d+)%.json"))
-    if idx and idx >= cache.nextIndex then
-        cache.nextIndex = idx + 1
-    end
-
-    -- 写回云端
-    local key = FilenameToKey(fname)
+    -- 解码关卡数据
     local decodeOk, data = pcall(cjson.decode, item.data)
     if not decodeOk or not data then
         if callback then callback(false, "数据解码失败") end
         return
     end
 
+    -- 使用新编号作为文件名（新增到列表底部）
+    local newIdx = cache.nextIndex
+    local newFname = string.format("level_%d.json", newIdx)
+    cache.nextIndex = newIdx + 1
+
+    -- 处理显示名称冲突：如果 levelName 与现有关卡重名，加 (1)/(2)/... 后缀
+    local restoredName = data.levelName or ""
+    if restoredName ~= "" then
+        -- 收集现有关卡的所有显示名称
+        local existingNames = {}
+        for existFname, jsonStr in pairs(cache.levels) do
+            local ok2, existData = pcall(cjson.decode, jsonStr)
+            if ok2 and existData and existData.levelName and existData.levelName ~= "" then
+                existingNames[existData.levelName] = true
+            end
+        end
+        -- 检查冲突并加后缀
+        if existingNames[restoredName] then
+            local suffix = 1
+            while existingNames[restoredName .. "(" .. suffix .. ")"] do
+                suffix = suffix + 1
+            end
+            data.levelName = restoredName .. "(" .. suffix .. ")"
+        end
+    end
+
+    -- 重新编码（可能修改了 levelName）
+    local newJsonStr = cjson.encode(data)
+
+    -- 恢复到正式缓存（使用新文件名）
+    cache.levels[newFname] = newJsonStr
+
+    -- 从回收站移除
+    trashBin[fname] = nil
+    CloudStorage._SaveTrashBin()
+
+    -- 写回云端
+    local key = FilenameToKey(newFname)
     clientCloud:BatchSet()
         :Set(key, data)
         :Set("editor_index", { nextIndex = cache.nextIndex })
-        :Save("还原关卡 " .. fname, {
+        :Save("还原关卡 " .. fname .. " -> " .. newFname, {
             ok = function()
                 if callback then callback(true) end
             end,
