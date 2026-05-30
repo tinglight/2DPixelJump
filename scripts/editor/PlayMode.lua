@@ -752,7 +752,7 @@ function M.HandleClimbInput(dt)
             S.play.isJumping = false
             S.play.jumpGridsRemain = 0
             S.play.fallTickCurrent = C.PLAY_FALL_BASE
-            S.play.fallGridCount = 0
+            M.SyncFallGridCount()
             S.play.climbTimer = 0
         end
 
@@ -818,7 +818,7 @@ function M.ProcessFallTick(dt)
             S.play.isClimbing = true
             S.play.isJumping = false
             S.play.fallTickCurrent = C.PLAY_FALL_BASE
-            S.play.fallGridCount = 0
+            M.SyncFallGridCount()
             S.play.fallTimer = 0
             S.play.fallAnimTime = 0
             S.play.climbTimer = 0
@@ -862,7 +862,7 @@ function M.ApplyFallOneGrid()
             S.play.isClimbing = true
             S.play.isJumping = false
             S.play.fallTickCurrent = C.PLAY_FALL_BASE
-            S.play.fallGridCount = 0
+            M.SyncFallGridCount()
             S.play.fallTimer = 0
             S.play.fallAnimTime = 0
             S.play.climbTimer = 0
