@@ -1,6 +1,6 @@
 ------------------------------------------------------------
 -- editor/PipeSystem.lua — 管道流水粒子系统
--- 5x5 大圆形排水管（无背景） + 直条型水流 + 流水音效
+-- 7x7 大圆形排水管（无背景） + 直条型水流 + 流水音效
 ------------------------------------------------------------
 local C = require("editor.Constants")
 local S = require("editor.State")
@@ -229,8 +229,8 @@ function M.Update(dt)
                 end
             end
 
-            if hitSolid or hitWater or p.life <= 0 then
-                if hitSolid or hitWater then
+            if hitSolid or p.life <= 0 then
+                if hitSolid then
                     M.SpawnSplash(p.x, p.y, pipe.waterTypeIndex)
                 end
                 table.remove(pipe.particles, i)
@@ -261,7 +261,7 @@ end
 
 ------------------------------------------------------------
 -- 发射粒子（从管口底部边缘向下流出）
--- 管口中心 = 5x5 区域正中心，管口内径 = outerR * 0.62
+-- 管口中心 = 7x7 区域正中心，管口内径 = outerR * 0.62
 -- 粒子从管口底边开始，限制在管口宽度内
 ------------------------------------------------------------
 function M.EmitParticle(pipe)
@@ -288,7 +288,7 @@ function M.EmitParticle(pipe)
         vx = spread * 0.2,
         vy = C.PIPE_INITIAL_VY + math.random() * 15,
         life = 4.0,
-        size = 2.5 + math.random() * 2.0,
+        size = 4.0,
     }
     table.insert(pipe.particles, particle)
 end
@@ -321,7 +321,7 @@ function M.CheckPlayerHit()
 end
 
 ------------------------------------------------------------
--- 渲染管道本体（5x5 大圆形排水管，无背景）
+-- 渲染管道本体（7x7 像素风魂系排水管）
 ------------------------------------------------------------
 function M.DrawPipe(vg, px, py, pipe)
     local G = C.GRID
@@ -331,87 +331,123 @@ function M.DrawPipe(vg, px, py, pipe)
     local wColor = C.PIPE_WATER_COLORS[C.PIPE_WATER_TYPES[pipe.waterTypeIndex]]
         or C.PIPE_WATER_COLORS[C.TILE.WATER]
 
+    local PS = 4  -- 像素块尺寸
     local cx = px + PW * 0.5
     local cy = py + PH * 0.5
-    local outerR = math.min(PW, PH) * 0.46
+    local outerR = math.min(PW, PH) * 0.45
+    local innerR = outerR * 0.62
 
-    -- 管壁外圈（大金属圆管，无底板背景）
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR)
-    nvgFillColor(vg, nvgRGBA(62, 67, 78, 255))
-    nvgFill(vg)
+    -- 辅助：用像素方块填充圆形区域
+    local function fillPixelCircle(centerX, centerY, radius, r, g, b, a)
+        local startX = math.floor((centerX - radius) / PS) * PS
+        local startY = math.floor((centerY - radius) / PS) * PS
+        local endX = math.floor((centerX + radius) / PS) * PS
+        local endY = math.floor((centerY + radius) / PS) * PS
+        for by = startY, endY, PS do
+            for bx = startX, endX, PS do
+                local dx = (bx + PS * 0.5) - centerX
+                local dy = (by + PS * 0.5) - centerY
+                if dx * dx + dy * dy <= radius * radius then
+                    nvgBeginPath(vg)
+                    nvgRect(vg, bx, by, PS, PS)
+                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                    nvgFill(vg)
+                end
+            end
+        end
+    end
 
-    -- 管壁中圈（立体层次）
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR * 0.87)
-    nvgFillColor(vg, nvgRGBA(80, 85, 98, 255))
-    nvgFill(vg)
+    -- 辅助：像素圆环（外圆减内圆）
+    local function fillPixelRing(centerX, centerY, rOuter, rInner, r, g, b, a)
+        local startX = math.floor((centerX - rOuter) / PS) * PS
+        local startY = math.floor((centerY - rOuter) / PS) * PS
+        local endX = math.floor((centerX + rOuter) / PS) * PS
+        local endY = math.floor((centerY + rOuter) / PS) * PS
+        for by = startY, endY, PS do
+            for bx = startX, endX, PS do
+                local dx = (bx + PS * 0.5) - centerX
+                local dy = (by + PS * 0.5) - centerY
+                local d2 = dx * dx + dy * dy
+                if d2 <= rOuter * rOuter and d2 > rInner * rInner then
+                    nvgBeginPath(vg)
+                    nvgRect(vg, bx, by, PS, PS)
+                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                    nvgFill(vg)
+                end
+            end
+        end
+    end
 
-    -- 顶部高光弧
-    nvgBeginPath(vg)
-    nvgArc(vg, cx, cy, outerR * 0.80, -2.5, -0.6, 1)
-    nvgStrokeColor(vg, nvgRGBA(150, 155, 170, 190))
-    nvgStrokeWidth(vg, 2.5)
-    nvgStroke(vg)
+    -- 外圈管壁（黑灰）
+    fillPixelRing(cx, cy, outerR, outerR * 0.85, 32, 34, 36, 255)
 
-    -- 底部暗影弧
-    nvgBeginPath(vg)
-    nvgArc(vg, cx, cy, outerR * 0.80, 0.6, 2.5, 1)
-    nvgStrokeColor(vg, nvgRGBA(30, 32, 40, 160))
-    nvgStrokeWidth(vg, 2.0)
-    nvgStroke(vg)
+    -- 中圈管壁（深灰）
+    fillPixelRing(cx, cy, outerR * 0.85, innerR, 48, 52, 50, 255)
 
-    -- 管口黑洞
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR * 0.62)
-    nvgFillColor(vg, nvgRGBA(8, 10, 15, 255))
-    nvgFill(vg)
+    -- 墨绿高光（顶部弧形区域的像素块）
+    local startX = math.floor((cx - outerR) / PS) * PS
+    local endX = math.floor((cx + outerR) / PS) * PS
+    local startY = math.floor((cy - outerR) / PS) * PS
+    for by = startY, startY + math.floor(outerR * 0.4 / PS) * PS, PS do
+        for bx = startX, endX, PS do
+            local dx = (bx + PS * 0.5) - cx
+            local dy = (by + PS * 0.5) - cy
+            local d2 = dx * dx + dy * dy
+            if d2 <= (outerR * 0.92) * (outerR * 0.92) and d2 > (outerR * 0.75) * (outerR * 0.75) then
+                if dy < -outerR * 0.2 then
+                    nvgBeginPath(vg)
+                    nvgRect(vg, bx, by, PS, PS)
+                    nvgFillColor(vg, nvgRGBA(45, 85, 62, 140))
+                    nvgFill(vg)
+                end
+            end
+        end
+    end
 
-    -- 管口内静态水面（底部积水）
+    -- 管口黑洞（像素圆）
+    fillPixelCircle(cx, cy, innerR, 8, 10, 12, 255)
+
+    -- 管口底部积水（下半部分像素块）
     if active then
-        local waterR = outerR * 0.55
+        local waterR = innerR * 0.88
+        local wStartX = math.floor((cx - waterR) / PS) * PS
+        local wEndX = math.floor((cx + waterR) / PS) * PS
+        local wStartY = math.floor(cy / PS) * PS
+        local wEndY = math.floor((cy + waterR) / PS) * PS
+        for by = wStartY, wEndY, PS do
+            for bx = wStartX, wEndX, PS do
+                local dx = (bx + PS * 0.5) - cx
+                local dy = (by + PS * 0.5) - cy
+                if dx * dx + dy * dy <= waterR * waterR then
+                    nvgBeginPath(vg)
+                    nvgRect(vg, bx, by, PS, PS)
+                    nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 150))
+                    nvgFill(vg)
+                end
+            end
+        end
+    end
+
+    -- 墨绿苔痕像素点（伪随机）
+    local seed = pipe.col * 31 + pipe.row * 17
+    for i = 0, 4 do
+        local angle = (seed * (i + 1) * 2.17) % (math.pi * 2)
+        local dist = outerR * (0.72 + ((seed * (i + 3)) % 12) * 0.01)
+        local dx = cx + math.cos(angle) * dist
+        local dy = cy + math.sin(angle) * dist
+        local bx = math.floor(dx / PS) * PS
+        local by = math.floor(dy / PS) * PS
         nvgBeginPath(vg)
-        -- 只画底部半圆弧表示积水
-        nvgArc(vg, cx, cy, waterR, 0.5, 2.64, 1)
-        nvgClosePath(vg)
-        nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 160))
+        nvgRect(vg, bx, by, PS, PS)
+        nvgFillColor(vg, nvgRGBA(30, 70, 48, 180))
         nvgFill(vg)
     end
 
-    -- 外圈轮廓
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR)
-    nvgStrokeColor(vg, nvgRGBA(35, 38, 45, 255))
-    nvgStrokeWidth(vg, 2.0)
-    nvgStroke(vg)
-
-    -- 内圈边缘
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR * 0.64)
-    nvgStrokeColor(vg, nvgRGBA(45, 48, 58, 220))
-    nvgStrokeWidth(vg, 1.5)
-    nvgStroke(vg)
-
-    -- 铆钉（8个）
-    for i = 0, 7 do
-        local a = i * 0.785 + 0.3
-        local rx = cx + outerR * 0.77 * math.cos(a)
-        local ry = cy + outerR * 0.77 * math.sin(a)
-        nvgBeginPath(vg)
-        nvgCircle(vg, rx, ry, 2.0)
-        nvgFillColor(vg, nvgRGBA(105, 110, 122, 220))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgCircle(vg, rx - 0.5, ry - 0.5, 0.8)
-        nvgFillColor(vg, nvgRGBA(160, 165, 175, 100))
-        nvgFill(vg)
-    end
-
-    -- 开关组指示器
+    -- 开关组指示器（像素方块）
     if pipe.switchGroup > 0 then
         local gc = C.GROUP_COLORS[pipe.switchGroup] or C.GROUP_COLORS[1]
         nvgBeginPath(vg)
-        nvgCircle(vg, px + PW - 6, py + 6, 3.5)
+        nvgRect(vg, px + PW - PS * 2, py + PS, PS, PS)
         if active then
             nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], 255))
         else
@@ -420,25 +456,31 @@ function M.DrawPipe(vg, px, py, pipe)
         nvgFill(vg)
     end
 
-    -- 关闭标记
+    -- 关闭标记（像素 X）
     if not active then
-        nvgBeginPath(vg)
-        nvgMoveTo(vg, cx - outerR * 0.3, cy - outerR * 0.3)
-        nvgLineTo(vg, cx + outerR * 0.3, cy + outerR * 0.3)
-        nvgMoveTo(vg, cx - outerR * 0.3, cy + outerR * 0.3)
-        nvgLineTo(vg, cx + outerR * 0.3, cy - outerR * 0.3)
-        nvgStrokeColor(vg, nvgRGBA(220, 50, 50, 220))
-        nvgStrokeWidth(vg, 2.5)
-        nvgStroke(vg)
+        local markR = math.floor(innerR * 0.6 / PS) * PS
+        for i = 0, markR / PS - 1 do
+            local off = i * PS
+            nvgBeginPath(vg)
+            nvgRect(vg, cx - markR * 0.5 + off, cy - markR * 0.5 + off, PS, PS)
+            nvgFillColor(vg, nvgRGBA(180, 40, 40, 220))
+            nvgFill(vg)
+            nvgBeginPath(vg)
+            nvgRect(vg, cx + markR * 0.5 - off - PS, cy - markR * 0.5 + off, PS, PS)
+            nvgFillColor(vg, nvgRGBA(180, 40, 40, 220))
+            nvgFill(vg)
+        end
     end
 end
 
 ------------------------------------------------------------
--- 渲染水流（直条型水柱 + 粒子细节）
+-- 渲染水流（像素风水柱 + 像素水滴，黑灰墨绿色调）
 ------------------------------------------------------------
 function M.DrawParticles(vg, cameraX, cameraY)
     cameraX = cameraX or 0
     cameraY = cameraY or 0
+    local PS = 4  -- 像素块尺寸
+
     for _, pipe in ipairs(M.pipes) do
         if M.IsPipeActive(pipe) and #pipe.particles > 0 then
             local wColor = C.PIPE_WATER_COLORS[C.PIPE_WATER_TYPES[pipe.waterTypeIndex]]
@@ -449,13 +491,11 @@ function M.DrawParticles(vg, cameraX, cameraY)
             local PH = C.PIPE_HEIGHT * G
             local centerX = (pipe.col - 1) * G + PW * 0.5 - cameraX
             local centerY = (pipe.row - 1) * G + PH * 0.5 - cameraY
-
-            -- 管口几何（与 DrawPipe 一致）
-            local outerR = math.min(PW, PH) * 0.46
-            local holeR = outerR * 0.62
+            local outerR = math.min(PW, PH) * 0.45
+            local innerR = outerR * 0.62
 
             -- 水柱从管口底边开始
-            local topY = centerY + holeR * 0.85
+            local topY = centerY + innerR
             local bottomY = topY
 
             for _, p in ipairs(pipe.particles) do
@@ -463,75 +503,85 @@ function M.DrawParticles(vg, cameraX, cameraY)
                 if sy > bottomY then bottomY = sy end
             end
 
-            -- 直条型水柱（宽度匹配管口内径）
-            local streamW = holeR * 1.1
-            if bottomY > topY + 4 then
-                -- 主水柱：直条矩形
+            -- 像素水柱（方块列）
+            local streamW = math.floor(innerR * 0.9 / PS) * PS
+            if bottomY > topY + PS then
+                local colX = math.floor((centerX - streamW * 0.5) / PS) * PS
+                local colY = math.floor(topY / PS) * PS
+                local colH = math.floor((bottomY - topY) / PS) * PS
+
+                -- 主水柱
                 nvgBeginPath(vg)
-                nvgRoundedRect(vg, centerX - streamW * 0.5, topY,
-                    streamW, bottomY - topY, 3)
-                nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 130))
+                nvgRect(vg, colX, colY, streamW, colH)
+                nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 110))
                 nvgFill(vg)
 
-                -- 内层更亮的窄柱（核心水流）
-                local coreW = streamW * 0.5
+                -- 核心亮柱（窄）
+                local coreW = math.max(PS, math.floor(streamW * 0.4 / PS) * PS)
+                local coreX = math.floor((centerX - coreW * 0.5) / PS) * PS
                 nvgBeginPath(vg)
-                nvgRoundedRect(vg, centerX - coreW * 0.5, topY,
-                    coreW, (bottomY - topY) * 0.85, 2)
+                nvgRect(vg, coreX, colY, coreW, math.floor(colH * 0.85 / PS) * PS)
                 nvgFillColor(vg, nvgRGBA(
-                    math.min(255, wColor[1] + 40),
-                    math.min(255, wColor[2] + 40),
-                    math.min(255, wColor[3] + 40), 100))
+                    math.min(255, wColor[1] + 35),
+                    math.min(255, wColor[2] + 35),
+                    math.min(255, wColor[3] + 35), 80))
                 nvgFill(vg)
 
-                -- 水柱中心高光线
+                -- 墨绿色边缘像素列
                 nvgBeginPath(vg)
-                nvgRect(vg, centerX - 1, topY, 2, (bottomY - topY) * 0.7)
-                nvgFillColor(vg, nvgRGBA(255, 255, 255, 35))
+                nvgRect(vg, colX, colY, PS, colH)
+                nvgFillColor(vg, nvgRGBA(30, 70, 50, 70))
+                nvgFill(vg)
+                nvgBeginPath(vg)
+                nvgRect(vg, colX + streamW - PS, colY, PS, colH)
+                nvgFillColor(vg, nvgRGBA(30, 70, 50, 70))
                 nvgFill(vg)
 
-                -- 水柱边缘细线（左右各一条，增加流动感）
-                local edgeAlpha = math.floor(50 + math.sin(S.playGameTime * 8) * 15)
-                nvgBeginPath(vg)
-                nvgRect(vg, centerX - streamW * 0.45, topY + 2, 1, (bottomY - topY) * 0.6)
-                nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], edgeAlpha))
-                nvgFill(vg)
-                nvgBeginPath(vg)
-                nvgRect(vg, centerX + streamW * 0.43, topY + 4, 1, (bottomY - topY) * 0.55)
-                nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], edgeAlpha))
-                nvgFill(vg)
+                -- 流动纹理（像素块滚动）
+                local flowOffset = math.floor((S.playGameTime * 40) / PS) * PS
+                for fy = colY, colY + colH - PS, PS * 3 do
+                    local drawY = fy + (flowOffset % (PS * 3))
+                    if drawY >= colY and drawY < colY + colH then
+                        nvgBeginPath(vg)
+                        nvgRect(vg, colX, drawY, PS, PS)
+                        nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 50))
+                        nvgFill(vg)
+                        nvgBeginPath(vg)
+                        nvgRect(vg, colX + streamW - PS, drawY + PS, PS, PS)
+                        nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 50))
+                        nvgFill(vg)
+                    end
+                end
             end
 
-            -- 粒子细节（在水柱上点缀水滴）
+            -- 像素水滴粒子（方块）
             for _, p in ipairs(pipe.particles) do
-                local screenX = p.x - cameraX
-                local screenY = p.y - cameraY
-                local tailLen = math.min(p.vy * 0.035, 6)
-                local alpha = math.floor(math.min(p.life * 2, 1.0) * 140)
+                local screenX = math.floor((p.x - cameraX) / PS) * PS
+                local screenY = math.floor((p.y - cameraY) / PS) * PS
+                local alpha = math.floor(math.min(p.life * 2, 1.0) * 160)
 
                 nvgBeginPath(vg)
-                nvgRoundedRect(vg, screenX - p.size * 0.4, screenY - tailLen,
-                    p.size * 0.8, p.size + tailLen, p.size * 0.3)
+                nvgRect(vg, screenX, screenY, PS, PS)
                 nvgFillColor(vg, nvgRGBA(
-                    math.min(255, wColor[1] + 30),
-                    math.min(255, wColor[2] + 30),
-                    math.min(255, wColor[3] + 30),
-                    math.floor(alpha * 0.4)))
+                    math.min(255, wColor[1] + 25),
+                    math.min(255, wColor[2] + 25),
+                    math.min(255, wColor[3] + 25),
+                    math.floor(alpha * 0.6)))
                 nvgFill(vg)
             end
         end
     end
 
-    -- 溅射粒子
+    -- 溅射粒子（像素方块）
     for _, sp in ipairs(M.splashes) do
-        local screenX = sp.x - cameraX
-        local screenY = sp.y - cameraY
+        local screenX = math.floor((sp.x - cameraX) / PS) * PS
+        local screenY = math.floor((sp.y - cameraY) / PS) * PS
         local wColor = C.PIPE_WATER_COLORS[C.PIPE_WATER_TYPES[sp.waterTypeIndex]]
             or C.PIPE_WATER_COLORS[C.TILE.WATER]
         local alpha = math.floor((sp.life / 0.5) * 180)
 
         nvgBeginPath(vg)
-        nvgCircle(vg, screenX, screenY, 1.2)
+        nvgRect(vg, screenX, screenY, PS, PS)
         nvgFillColor(vg, nvgRGBA(
             math.min(255, wColor[1] + 40),
             math.min(255, wColor[2] + 40),
@@ -542,7 +592,7 @@ function M.DrawParticles(vg, cameraX, cameraY)
 end
 
 ------------------------------------------------------------
--- 编辑器静态预览（5x5 大圆管简化版，无背景）
+-- 编辑器静态预览（7x7 像素风圆形管道缩略图，黑灰墨绿）
 ------------------------------------------------------------
 function M.DrawPipeStatic(vg, px, py, val)
     local G = C.GRID
@@ -551,29 +601,55 @@ function M.DrawPipeStatic(vg, px, py, val)
     local wColor = C.PIPE_WATER_COLORS[C.PIPE_WATER_TYPES[waterTypeIndex]]
         or C.PIPE_WATER_COLORS[C.TILE.WATER]
 
+    local PS = 2  -- 缩略图用小像素块
     local cx = px + G * 0.5
     local cy = py + G * 0.5
-    local outerR = G * 0.45
+    local outerR = G * 0.42
+    local innerR = outerR * 0.55
 
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR)
-    nvgFillColor(vg, nvgRGBA(62, 67, 78, 255))
-    nvgFill(vg)
+    -- 用像素方块画圆环管壁
+    local startX = math.floor((cx - outerR) / PS) * PS
+    local startY = math.floor((cy - outerR) / PS) * PS
+    local endX = math.floor((cx + outerR) / PS) * PS
+    local endY = math.floor((cy + outerR) / PS) * PS
+    for by = startY, endY, PS do
+        for bx = startX, endX, PS do
+            local dx = (bx + PS * 0.5) - cx
+            local dy = (by + PS * 0.5) - cy
+            local d2 = dx * dx + dy * dy
+            if d2 <= outerR * outerR then
+                local r, g, b, a
+                if d2 <= innerR * innerR then
+                    -- 管口黑洞
+                    r, g, b, a = 8, 10, 12, 255
+                    -- 下半部分积水
+                    if dy > 0 and d2 <= (innerR * 0.9) * (innerR * 0.9) then
+                        r, g, b, a = wColor[1], wColor[2], wColor[3], 180
+                    end
+                elseif d2 > (outerR * 0.8) * (outerR * 0.8) then
+                    -- 外圈黑灰
+                    r, g, b, a = 32, 34, 36, 255
+                else
+                    -- 中圈深灰
+                    r, g, b, a = 48, 52, 50, 255
+                    -- 顶部墨绿高光
+                    if dy < -outerR * 0.2 and d2 > (outerR * 0.65) * (outerR * 0.65) then
+                        r, g, b, a = 42, 78, 58, 200
+                    end
+                end
+                nvgBeginPath(vg)
+                nvgRect(vg, bx, by, PS, PS)
+                nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                nvgFill(vg)
+            end
+        end
+    end
 
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy, outerR * 0.55)
-    nvgFillColor(vg, nvgRGBA(15, 18, 25, 255))
-    nvgFill(vg)
-
-    nvgBeginPath(vg)
-    nvgCircle(vg, cx, cy + outerR * 0.15, outerR * 0.28)
-    nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 200))
-    nvgFill(vg)
-
+    -- 开关组指示
     if switchGroup > 0 then
         local gc = C.GROUP_COLORS[switchGroup] or C.GROUP_COLORS[1]
         nvgBeginPath(vg)
-        nvgCircle(vg, px + G - 3, py + 3, 2)
+        nvgRect(vg, px + G - PS * 2, py, PS, PS)
         nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], 255))
         nvgFill(vg)
     end

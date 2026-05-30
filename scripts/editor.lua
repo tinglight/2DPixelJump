@@ -46,6 +46,7 @@ local Toolbar = require "editor.Toolbar"
 local Sidebar = require "editor.Sidebar"
 local GridRenderer = require "editor.GridRenderer"
 local InputHandler = require "editor.InputHandler"
+local CloudPanel = require "editor.CloudPanel"
 local CrossLevel = require "editor.CrossLevel"
 
 -- ====================================================================
@@ -73,7 +74,12 @@ PlayMode.Inject({
 CrossLevel.Inject({
     CloudStorage = CloudStorage,
     WorldMapEditor = WorldMapEditor,
+    FogOfWar = FogOfWar,
     cjson = cjson,
+})
+CloudPanel.Inject({
+    Persistence = Persistence,
+    CloudStorage = CloudStorage,
 })
 
 -- ====================================================================
@@ -250,6 +256,8 @@ function HandleNanoVGRender(eventType, eventData)
         Toolbar.DrawSubmenuPopup()
         Toolbar.DrawTopBar()
         Toolbar.DrawBottomBar()
+        CloudPanel.DrawButton(S.vg)
+        CloudPanel.DrawPanel(S.vg)
         Sidebar.Draw()
         Dialogs.Draw()
     end

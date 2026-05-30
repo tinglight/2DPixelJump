@@ -242,6 +242,7 @@ function HandleNanoVGRender(eventType, eventData)
 
     Renderer.DrawGrid()
     Renderer.DrawMap()
+    Renderer.DrawDecorations()
     Renderer.DrawFuelBurst()
     Renderer.DrawPlayer()
 

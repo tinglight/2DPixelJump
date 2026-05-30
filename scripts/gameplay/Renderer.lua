@@ -4,6 +4,7 @@
 local Config = require("gameplay.Config")
 local GAME_VERSION = require("version")
 local SolidRenderer = require("SolidRenderer")
+local EditorConstants = require("editor.Constants")
 
 local M = {}
 
@@ -498,10 +499,23 @@ local function IsPillarAt(row, col)
     return base == 13  -- SOLID_PILLAR only
 end
 
+-- 检查某格是否为水体（用于下水道水边衔接检测）
+local function IsWaterAt(row, col)
+    if row < 1 or row > Config.MAP_ROWS or col < 1 or col > Config.MAP_COLS then
+        return false
+    end
+    local val = LevelManager.levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = Physics.GetTileType(val)
+    return base == 9 or base == 10 or base == 11  -- WATER, POISON_WATER, BLACK_WATER
+end
+
 function M.DrawMap()
     local vg = M.vg
     local GRID = Config.GRID
     local TILE = LevelManager.TILE
+    -- 传入动画时间驱动萤火虫闪烁
+    SolidRenderer.SetTime(M.gameTime)
     local startCol = math.max(1, math.floor(M.cameraX / GRID) + 1)
     local visW = Config.DESIGN_W * (Config.PLAYER_CONFIG.cameraZoom or 1.0)
     local endCol = math.min(Config.MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
@@ -561,6 +575,14 @@ function M.DrawMap()
                     pillarLeft   = IsPillarAt(row, col - 1),
                     pillarRight  = IsPillarAt(row, col + 1),
                 }
+                -- 下水道瓦片额外检测：对角邻居 + 水体邻接
+                if base == 17 then  -- SOLID_SEWER
+                    neighbors.topLeft     = IsSolidAt(row - 1, col - 1)
+                    neighbors.topRight    = IsSolidAt(row - 1, col + 1)
+                    neighbors.bottomLeft  = IsSolidAt(row + 1, col - 1)
+                    neighbors.bottomRight = IsSolidAt(row + 1, col + 1)
+                    neighbors.water = IsWaterAt(row + 1, col) or IsWaterAt(row, col - 1) or IsWaterAt(row, col + 1)
+                end
 
                 SolidRenderer.DrawSolid(vg, base, px, py, GRID, totalLit, totalLdx, totalLdy, col, row, neighbors)
 
@@ -1196,6 +1218,66 @@ function M.DrawLevelTransition()
     nvgRect(vg, 0, 0, M.screenDesignW, M.screenDesignH)
     nvgFillColor(vg, nvgRGBA(0, 0, 0, a))
     nvgFill(vg)
+end
+
+-- ====================================================================
+-- 装饰物渲染
+-- ====================================================================
+local gameDecoImageCache = {}  -- { [spritePath] = nvgImageHandle }
+
+function M.DrawDecorations()
+    if not LevelManager.decorations or #LevelManager.decorations == 0 then return end
+
+    local vg = M.vg
+    local GRID = Config.GRID
+    local DECO_TYPES = EditorConstants.DECORATION_TYPES
+    local startCol = math.max(1, math.floor(M.cameraX / GRID) + 1)
+    local visW = Config.DESIGN_W * (Config.PLAYER_CONFIG.cameraZoom or 1.0)
+    local endCol = math.min(Config.MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
+
+    for _, deco in ipairs(LevelManager.decorations) do
+        if deco.col >= startCol and deco.col <= endCol then
+            local decoType = DECO_TYPES[deco.typeId]
+            if not decoType then goto continueDeco end
+
+            local px = (deco.col - 1) * GRID - M.cameraX
+            local py = (deco.row - 1) * GRID
+
+            if decoType.sprite and decoType.size then
+                local sizeW = decoType.size.w or 1
+                local sizeH = decoType.size.h or 1
+                local drawW = sizeW * GRID
+                local drawH = sizeH * GRID
+                -- 锚点在中心：放置格的中心 = 装饰物图片的中心
+                local imgX = px + GRID * 0.5 - drawW * 0.5
+                local imgY = py + GRID * 0.5 - drawH * 0.5
+
+                -- 加载/缓存贴图
+                if not gameDecoImageCache[decoType.sprite] then
+                    local handle = nvgCreateImage(vg, decoType.sprite, 0)
+                    gameDecoImageCache[decoType.sprite] = handle or -1
+                end
+
+                local imgHandle = gameDecoImageCache[decoType.sprite]
+                if imgHandle and imgHandle > 0 then
+                    local paint = nvgImagePattern(vg, imgX, imgY, drawW, drawH, 0, imgHandle, 1.0)
+                    nvgBeginPath(vg)
+                    nvgRect(vg, imgX, imgY, drawW, drawH)
+                    nvgFillPaint(vg, paint)
+                    nvgFill(vg)
+                end
+            else
+                -- 无贴图 fallback
+                local color = decoType.color or {180, 140, 220}
+                nvgBeginPath(vg)
+                nvgRect(vg, px, py, GRID, GRID)
+                nvgFillColor(vg, nvgRGBA(color[1], color[2], color[3], 150))
+                nvgFill(vg)
+            end
+
+            ::continueDeco::
+        end
+    end
 end
 
 return M

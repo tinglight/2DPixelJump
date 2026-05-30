@@ -8,6 +8,7 @@ local TileUtils = require "editor.TileUtils"
 local Undo = require "editor.UndoSystem"
 local Placement = require "editor.Placement"
 local Toolbar = require "editor.Toolbar"
+local CloudPanel = require "editor.CloudPanel"
 
 local TILE = C.TILE
 local MODE = C.MODE
@@ -23,6 +24,8 @@ local ZOOM_MAX = C.ZOOM_MAX
 local TOOLS = C.TOOLS
 local LIGHT_TOOL_INDEX = C.LIGHT_TOOL_INDEX
 local LIGHT_ZONE_TOOL_INDEX = C.LIGHT_ZONE_TOOL_INDEX
+local UNLIT_LIGHT_TOOL_INDEX = C.UNLIT_LIGHT_TOOL_INDEX
+local DECORATION_TOOL_INDEX = C.DECORATION_TOOL_INDEX
 
 local M = {}
 
@@ -237,6 +240,7 @@ function M.HandleUpdate(dt)
     UpdateMoveDrag()
     UpdateBoxSelect()
     UpdateLightZoneDraw()
+    UpdateDecoDrag()
     UpdateDrawErase()
     UpdateAutoSave(dt)
 end
@@ -602,6 +606,11 @@ function M.HandleMouseDown(button, mx, my)
         return
     end
 
+    -- 云端同步面板（右下角）
+    if button == MOUSEB_LEFT and CloudPanel.HandleMouseDown(mx, my) then
+        return
+    end
+
     -- 回收站按钮（底部右下角）
     if button == MOUSEB_LEFT and Toolbar.HitTestTrashButton(mx, my) then
         Dialogs.OpenTrashDialog()
@@ -909,6 +918,13 @@ function HandleMapClick(button, mx, my)
     local col, row = ScreenToGrid(mx, my)
     if col < 1 or col > S.MAP_COLS or row < 1 or row > S.MAP_ROWS then return end
 
+    -- 装饰工具优先处理（无论交互模式），确保拖拽/删除始终可用
+    local currentToolDef = C.TOOLS[S.currentTool]
+    if currentToolDef and currentToolDef.tile == -3 then
+        HandleDecorationToolClick(button, col, row)
+        return
+    end
+
     if S.interactMode == INTERACT.SELECT then
         HandleSelectClick(button, mx, my, col, row)
     elseif S.interactMode == INTERACT.MOVE then
@@ -1006,9 +1022,22 @@ function HandleDrawClick(button, col, row)
         return
     end
 
+    -- 无光工具（熄灭灯）
+    if S.currentTool == UNLIT_LIGHT_TOOL_INDEX then
+        HandleUnlitLightToolClick(button, col, row)
+        return
+    end
+
     -- 光域工具
     if S.currentTool == LIGHT_ZONE_TOOL_INDEX then
         HandleLightZoneToolClick(button, col, row)
+        return
+    end
+
+    -- 装饰工具（tile == -3 的工具都是装饰类型）
+    local currentToolDef = C.TOOLS[S.currentTool]
+    if currentToolDef and currentToolDef.tile == -3 then
+        HandleDecorationToolClick(button, col, row)
         return
     end
 
@@ -1047,6 +1076,39 @@ function HandleLightToolClick(button, col, row)
             Undo.dirty = true
             Undo.saveTimer = Undo.saveDelay
             S.SetMessage("删除光源", 1.5)
+        end
+    end
+end
+
+-- ====================================================================
+-- 无光工具（熄灭灯）
+-- ====================================================================
+
+function HandleUnlitLightToolClick(button, col, row)
+    if button == MOUSEB_LEFT then
+        local existIdx = FogOfWar.FindLight(col, row)
+        if existIdx then
+            -- 已有光源（含熄灭灯），打开参数对话框
+            Dialogs.OpenLightDialog(existIdx)
+        else
+            -- 放置一个熄灭的光源
+            local idx = FogOfWar.AddUnlitLight(col, row, 6, 0.5)
+            S.selectedLightIndex = idx
+            S.lightSources = FogOfWar.GetLightSources()
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
+            S.SetMessage("放置无光灯 (" .. col .. "," .. row .. ") 可被火球点亮", 2.0)
+            Dialogs.OpenLightDialog(idx)
+        end
+    elseif button == MOUSEB_RIGHT then
+        local removed = FogOfWar.RemoveLight(col, row)
+        if removed then
+            S.lightSources = FogOfWar.GetLightSources()
+            S.selectedLightIndex = 0
+            S.dialogMode = nil
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
+            S.SetMessage("删除无光灯", 1.5)
         end
     end
 end
@@ -1126,6 +1188,101 @@ function FinishLightZoneDraw()
 end
 
 -- ====================================================================
+-- 装饰工具
+-- ====================================================================
+
+function HandleDecorationToolClick(button, col, row)
+    if button == MOUSEB_LEFT then
+        -- 检查是否点击了已有装饰物 → 开始拖拽
+        local existIdx = Placement.FindDecoration(col, row)
+        if existIdx then
+            -- 选中并开始拖拽
+            S.selectedDecorationIndex = existIdx
+            S.decoDragging = true
+            S.decoDragIndex = existIdx
+            S.decoDragStartCol = col
+            S.decoDragStartRow = row
+            S.SetMessage("拖拽装饰物 (松开放置, 双击编辑)", 1.5)
+        else
+            -- 点击空位 → 打开装饰物配置弹窗
+            S.decoDialogCol = col
+            S.decoDialogRow = row
+            S.decoDialogEditIndex = 0
+            S.decoDialogBrightness = 100
+            S.decoDialogScale = 100
+            S.currentDecorationType = 1
+            Dialogs.OpenDecorationDialog()
+        end
+    elseif button == MOUSEB_RIGHT then
+        -- 右键删除
+        local existIdx = Placement.FindDecoration(col, row)
+        if existIdx then
+            table.remove(S.decorations, existIdx)
+            if S.selectedDecorationIndex == existIdx then
+                S.selectedDecorationIndex = 0
+            end
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
+            S.SetMessage("删除装饰", 1.5)
+        end
+    end
+end
+
+-- ====================================================================
+-- 装饰物拖拽更新（跟随鼠标）
+-- ====================================================================
+
+function UpdateDecoDrag()
+    if not S.decoDragging then return end
+    -- 实时更新装饰物位置，让它跟随鼠标
+    local mx, my = GetDesignMouse()
+    local col, row = ScreenToGrid(mx, my)
+    col = math.max(1, math.min(S.MAP_COLS, col))
+    row = math.max(1, math.min(S.MAP_ROWS, row))
+
+    local idx = S.decoDragIndex
+    if idx > 0 and idx <= #S.decorations then
+        S.decorations[idx].col = col
+        S.decorations[idx].row = row
+    end
+end
+
+-- ====================================================================
+-- 装饰物拖拽完成
+-- ====================================================================
+
+function FinishDecoDrag(mx, my)
+    S.decoDragging = false
+    local col, row = ScreenToGrid(mx, my)
+    col = math.max(1, math.min(S.MAP_COLS, col))
+    row = math.max(1, math.min(S.MAP_ROWS, row))
+
+    local idx = S.decoDragIndex
+    if idx > 0 and idx <= #S.decorations then
+        local deco = S.decorations[idx]
+        -- UpdateDecoDrag 已实时移动位置，这里最终确认
+        deco.col = col
+        deco.row = row
+        if col ~= S.decoDragStartCol or row ~= S.decoDragStartRow then
+            -- 真正移动了 → 标记脏
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
+            S.SetMessage("装饰已移动到 (" .. col .. "," .. row .. ")", 1.5)
+        else
+            -- 原地释放 → 打开编辑弹窗
+            S.decoDialogCol = deco.col
+            S.decoDialogRow = deco.row
+            S.decoDialogEditIndex = idx
+            S.decoDialogBrightness = deco.brightness or 100
+            S.decoDialogScale = deco.scale or 100
+            S.currentDecorationType = deco.typeId or 1
+            Dialogs.OpenDecorationDialog()
+        end
+    end
+    S.decoDragIndex = 0
+end
+
+-- ====================================================================
 -- HandleMouseUp
 -- ====================================================================
 
@@ -1155,6 +1312,12 @@ function M.HandleMouseUp(button, mx, my)
 end
 
 function HandleLeftRelease(mx, my)
+    -- 装饰物拖拽释放
+    if S.decoDragging then
+        FinishDecoDrag(mx, my)
+        return
+    end
+
     -- 工具栏滑动拖拽释放
     -- pending 状态释放：未超阈值，视为点击
     if S.toolbarDragPending then
@@ -1340,6 +1503,17 @@ function CollectTilesInRange(c1, r1, c2, r2, toolTile, priorityList, otherList)
             end
         end
     end
+    -- 也收集范围内的装饰物
+    for i, deco in ipairs(S.decorations) do
+        if deco.col >= c1 and deco.col <= c2 and deco.row >= r1 and deco.row <= r2 then
+            local entry = { col = deco.col, row = deco.row, isLight = false, lightIdx = 0, isDecoration = true, decoIdx = i }
+            if toolTile == -3 then
+                priorityList[#priorityList + 1] = entry
+            else
+                otherList[#otherList + 1] = entry
+            end
+        end
+    end
 end
 
 function ClickSelect()
@@ -1357,6 +1531,16 @@ function ClickSelect()
         S.selectedLightIndex = lightIdx
         S.selectedTiles = {{ col = col, row = row, isLight = true, lightIdx = lightIdx }}
         S.SetMessage("选中光源 (" .. col .. "," .. row .. ")", 1.5)
+    elseif Placement.FindDecoration(col, row) then
+        -- 选中装饰物
+        local decoIdx = Placement.FindDecoration(col, row)
+        S.selectedTileCol = col
+        S.selectedTileRow = row
+        S.selectedIsLight = false
+        S.selectedTiles = {{ col = col, row = row, isLight = false, lightIdx = 0, isDecoration = true, decoIdx = decoIdx }}
+        local deco = S.decorations[decoIdx]
+        local decoType = C.DECORATION_TYPES[deco.typeId] or { name = "装饰" }
+        S.SetMessage("选中: " .. decoType.name .. " (" .. col .. "," .. row .. ")", 1.5)
     elseif IsTileSelectable(col, row) then
         S.selectedTileCol = col
         S.selectedTileRow = row
@@ -1560,6 +1744,10 @@ function DeleteSelection()
 
     local deltas = {}
     local lightRemoveCount = 0
+    local decoRemoveCount = 0
+
+    -- 收集要删除的装饰物索引（需要从大到小删除以避免索引错乱）
+    local decoIndicesToRemove = {}
 
     for _, st in ipairs(S.selectedTiles) do
         if st.isLight then
@@ -1567,6 +1755,12 @@ function DeleteSelection()
             local removed = FogOfWar.RemoveLight(st.col, st.row)
             if removed then
                 lightRemoveCount = lightRemoveCount + 1
+            end
+        elseif st.isDecoration then
+            -- 收集装饰物索引
+            local decoIdx = Placement.FindDecoration(st.col, st.row)
+            if decoIdx then
+                decoIndicesToRemove[#decoIndicesToRemove + 1] = decoIdx
             end
         else
             -- 删除地块（不删除 SPAWN）
@@ -1581,6 +1775,13 @@ function DeleteSelection()
         end
     end
 
+    -- 从大到小排序后删除装饰物，避免索引错乱
+    table.sort(decoIndicesToRemove, function(a, b) return a > b end)
+    for _, idx in ipairs(decoIndicesToRemove) do
+        table.remove(S.decorations, idx)
+        decoRemoveCount = decoRemoveCount + 1
+    end
+
     -- 记录到撤销栈（单次撤销）
     if #deltas > 0 then
         Undo.RecordBatch(deltas, "delete")
@@ -1590,8 +1791,12 @@ function DeleteSelection()
         Undo.dirty = true
         Undo.saveTimer = Undo.saveDelay
     end
+    if decoRemoveCount > 0 then
+        Undo.dirty = true
+        Undo.saveTimer = Undo.saveDelay
+    end
 
-    local total = #deltas + lightRemoveCount
+    local total = #deltas + lightRemoveCount + decoRemoveCount
     S.SetMessage("已删除 " .. total .. " 个物体", 1.5)
     S.ClearSelection()
 end

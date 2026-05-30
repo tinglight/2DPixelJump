@@ -14,6 +14,15 @@
 local SolidRenderer = {}
 
 -- ====================================================================
+-- 动画时间（由外部每帧调用 SetTime 传入）
+-- ====================================================================
+local _animTime = 0
+
+function SolidRenderer.SetTime(t)
+    _animTime = t or 0
+end
+
+-- ====================================================================
 -- 像素网格配置
 -- ====================================================================
 local PIXEL_CELLS = 4  -- 每个碰撞格子细分为 4x4 像素网格
@@ -771,165 +780,747 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
 end
 
 -- ====================================================================
--- 下水道砖块配色（深绿/暗黄湿润色调）
+-- 旧王城地下水渠 - 瓦片渲染系统
 -- ====================================================================
+-- 主题: 低饱和暗色、类魂氛围、石砌水渠、潮湿石砖、残破圣堂、
+--       黑水侵蚀、苔藓和腐败根须
+--
+-- 10种瓦片类型（根据 neighbors 自动判定）:
+-- 1. 地面中心块 (CENTER)       - 四面有邻居
+-- 2. 地面上边缘块 (TOP_EDGE)   - 上方无邻居
+-- 3. 左右侧边块 (SIDE_EDGE)    - 左或右无邻居
+-- 4. 底部边缘块 (BOTTOM_EDGE)  - 下方无邻居
+-- 5. 内角块 (INNER_CORNER)     - 对角无邻居但两侧有
+-- 6. 外角块 (OUTER_CORNER)     - 两面相邻无邻居
+-- 7. 断裂平台边缘 (FRACTURED)  - 上方和一侧无邻居
+-- 8. 墙体块 (WALL)             - 左右都有邻居，上下至少一面无
+-- 9. 墙体与地面衔接块 (WALL_FLOOR) - 上方为墙、下方为空
+-- 10. 水边衔接块 (WATER_EDGE)  - 邻接水体
+-- ====================================================================
+
+-- 旧王城石砖基色（冷灰偏青，低饱和）
 local SEWER_BASE_COLORS = {
-    { {38,48,35}, {44,52,38}, {44,52,38}, {38,48,35} },
-    { {52,62,42}, {58,68,46}, {56,66,44}, {52,62,42} },
-    { {46,56,38}, {52,62,42}, {50,60,40}, {46,56,38} },
-    { {38,48,35}, {44,52,38}, {44,52,38}, {38,48,35} },
+    { {32,34,38}, {38,40,44}, {36,39,43}, {33,35,39} },
+    { {42,44,48}, {50,52,56}, {48,50,54}, {43,45,49} },
+    { {38,40,45}, {46,48,52}, {44,46,51}, {39,41,46} },
+    { {33,35,39}, {39,41,45}, {37,39,43}, {34,36,40} },
 }
 
--- 下水道法线图（更深的凹槽感）
+-- 墙体石砖基色（更深更冷，垂直砌石感）
+local SEWER_WALL_COLORS = {
+    { {28,30,35}, {34,36,40}, {32,34,39}, {29,31,36} },
+    { {36,38,43}, {44,46,50}, {42,44,49}, {37,39,44} },
+    { {32,34,39}, {40,42,46}, {38,40,45}, {33,35,40} },
+    { {29,31,36}, {35,37,41}, {33,35,40}, {30,32,37} },
+}
+
+-- 地面上边缘基色（稍亮，表面风化）
+local SEWER_TOP_COLORS = {
+    { {40,42,48}, {48,50,55}, {46,48,53}, {41,43,49} },
+    { {44,46,51}, {52,54,58}, {50,52,57}, {45,47,52} },
+    { {38,40,45}, {46,48,52}, {44,46,51}, {39,41,46} },
+    { {33,35,39}, {39,41,45}, {37,39,43}, {34,36,40} },
+}
+
+-- 底部边缘基色（被水侵蚀，偏暗偏绿）
+local SEWER_BOTTOM_COLORS = {
+    { {32,34,38}, {38,40,44}, {36,39,43}, {33,35,39} },
+    { {36,40,42}, {42,46,48}, {40,44,46}, {37,41,43} },
+    { {30,36,35}, {36,42,40}, {34,40,38}, {31,37,36} },
+    { {25,32,30}, {30,38,35}, {28,35,33}, {26,33,31} },
+}
+
+-- 法线图（石砖凹凸）
 local SEWER_NORMAL_MAP = {
-    { {0, -0.9}, {0, -0.8}, {0, -0.8}, {0, -0.9} },
-    { {-0.4, 0.6}, {0, 0.7}, {0, 0.7}, {0.4, 0.6} },
-    { {-0.4, -0.3}, {0, 0.2}, {0, 0.2}, {0.4, -0.3} },
-    { {0, 0.9}, {0, 0.8}, {0, 0.8}, {0, 0.9} },
+    { {0, -0.85}, {0, -0.7}, {0, -0.7}, {0, -0.85} },
+    { {-0.4, 0.5}, {0, 0.6}, {0, 0.6}, {0.4, 0.5} },
+    { {-0.4, -0.3}, {0, 0.15}, {0, 0.15}, {0.4, -0.3} },
+    { {0, 0.85}, {0, 0.7}, {0, 0.7}, {0, 0.85} },
 }
 
--- 水渍/锈迹颜色
-local SEWER_STAIN_COLORS = {
-    {60, 80, 50},   -- 暗绿水渍
-    {80, 65, 35},   -- 铁锈色
-    {50, 70, 55},   -- 青绿水垢
-    {70, 60, 40},   -- 深黄泥垢
+-- 墙体法线（垂直砌缝更深）
+local SEWER_WALL_NORMAL = {
+    { {-0.5, -0.9}, {0, -0.85}, {0, -0.85}, {0.5, -0.9} },
+    { {-0.6, 0.3}, {-0.1, 0.4}, {0.1, 0.4}, {0.6, 0.3} },
+    { {-0.6, -0.3}, {-0.1, -0.2}, {0.1, -0.2}, {0.6, -0.3} },
+    { {-0.5, 0.9}, {0, 0.85}, {0, 0.85}, {0.5, 0.9} },
 }
 
+-- 苔藓/根须颜色（暗绿偏灰，类魂风格不会太鲜）
+local SEWER_MOSS_COLORS = {
+    {28, 42, 22},   -- 暗苔藓
+    {22, 36, 18},   -- 深腐苔
+    {35, 48, 28},   -- 稍亮湿苔
+    {18, 30, 15},   -- 极暗腐苔
+}
+
+-- 腐败根须颜色
+local SEWER_ROOT_COLORS = {
+    {42, 32, 22},   -- 暗棕腐根
+    {35, 26, 18},   -- 深褐根须
+    {50, 38, 26},   -- 干枯根
+    {28, 22, 16},   -- 黑色死根
+}
+
+-- 黑水侵蚀颜色
+local SEWER_WATER_STAIN_COLORS = {
+    {20, 28, 32},   -- 黑水渍
+    {15, 22, 28},   -- 深黑水迹
+    {25, 34, 38},   -- 暗青水线
+    {18, 25, 30},   -- 阴暗积水
+}
+
+-- 湿润高光颜色（冷色调反光）
+local SEWER_WET_HIGHLIGHT = {80, 95, 110}
+
 -- ====================================================================
--- DrawSewerStainEdge - 下水道边缘水渍效果（替代青苔）
+-- 瓦片类型判定函数
 -- ====================================================================
-local function DrawSewerStainEdge(vg, px, py, gridSize, edge, col, row, lighting, lightDirX, lightDirY)
-    local cellSize = gridSize / 4.0
-    local normals = MOSS_NORMALS[edge]
+local SEWER_TYPE_CENTER      = 1
+local SEWER_TYPE_TOP_EDGE    = 2
+local SEWER_TYPE_SIDE_EDGE   = 3
+local SEWER_TYPE_BOTTOM_EDGE = 4
+local SEWER_TYPE_INNER_CORNER = 5
+local SEWER_TYPE_OUTER_CORNER = 6
+local SEWER_TYPE_FRACTURED   = 7
+local SEWER_TYPE_WALL        = 8
+local SEWER_TYPE_WALL_FLOOR  = 9
+local SEWER_TYPE_WATER_EDGE  = 10
 
-    for i = 1, 4 do
-        local h = HashFloat(col * 11 + i, row * 17, edge:byte(1) + 50)
-        if h < 0.55 then
-            local depth = 1 + math.floor(HashFloat(col + i * 5, row * 7, 99) * 1.5)
-            local colorIdx = (HashPos(col, row, i + 10) % 4) + 1
-            local stainColor = SEWER_STAIN_COLORS[colorIdx]
-            local nx, ny = normals[i][1], normals[i][2]
+local function ClassifySewerTile(neighbors)
+    if not neighbors then return SEWER_TYPE_CENTER end
 
-            local stainLit = 0.5
-            if lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0) then
-                stainLit = CalcNormalLighting(lightDirX, lightDirY, nx, ny)
-            end
+    local t = neighbors.top
+    local b = neighbors.bottom
+    local l = neighbors.left
+    local r = neighbors.right
+    local water = neighbors.water  -- 是否邻接水体
 
-            local litMul = lighting * 0.5 + 0.5
-            local normalBoost = (stainLit - 0.5) * 2.0 * HIGHLIGHT_BOOST * lighting
+    -- 10. 水边衔接块 - 邻接水体（底部或侧面有水）
+    if water then return SEWER_TYPE_WATER_EDGE end
 
-            local sr = math.floor(math.max(0, math.min(255, stainColor[1] * litMul + normalBoost)))
-            local sg = math.floor(math.max(0, math.min(255, stainColor[2] * litMul + normalBoost * 0.8)))
-            local sb = math.floor(math.max(0, math.min(255, stainColor[3] * litMul + normalBoost * 0.5)))
+    -- 6. 外角块 - 两面相邻无邻居（角落位置）
+    if not t and not l then return SEWER_TYPE_OUTER_CORNER end
+    if not t and not r then return SEWER_TYPE_OUTER_CORNER end
+    if not b and not l then return SEWER_TYPE_OUTER_CORNER end
+    if not b and not r then return SEWER_TYPE_OUTER_CORNER end
 
-            for d = 1, depth do
-                local mx, my
-                if edge == "top" then
-                    mx = px + (i - 1) * cellSize
-                    my = py + (d - 1) * cellSize
-                elseif edge == "bottom" then
-                    mx = px + (i - 1) * cellSize
-                    my = py + gridSize - d * cellSize
-                elseif edge == "left" then
-                    mx = px + (d - 1) * cellSize
-                    my = py + (i - 1) * cellSize
-                elseif edge == "right" then
-                    mx = px + gridSize - d * cellSize
-                    my = py + (i - 1) * cellSize
-                end
+    -- 7. 断裂平台边缘 - 上方无邻居 + 一侧也无（但已被外角覆盖，这里处理特殊断裂）
+    -- （外角已处理，此处对应：三面暴露的凸出断块）
+    if not t and not b then return SEWER_TYPE_FRACTURED end
 
-                local depthAlpha = math.floor(200 - (d - 1) * 70)
-                nvgBeginPath(vg)
-                nvgRect(vg, mx, my, cellSize, cellSize)
-                nvgFillColor(vg, nvgRGBA(sr, sg, sb, depthAlpha))
-                nvgFill(vg)
-            end
+    -- 9. 墙体与地面衔接块 - 上方有、下方无、左右有
+    if t and not b and l and r then return SEWER_TYPE_WALL_FLOOR end
 
-            -- 湿润高光（模拟水渍反光）
-            if stainLit > 0.6 and lighting > 0.3 then
-                local specA = math.floor((stainLit - 0.5) * 60 * lighting)
-                local sx, sy
-                if edge == "top" then
-                    sx = px + (i - 1) * cellSize + cellSize * 0.25
-                    sy = py + cellSize * 0.25
-                elseif edge == "bottom" then
-                    sx = px + (i - 1) * cellSize + cellSize * 0.25
-                    sy = py + gridSize - cellSize * 0.75
-                elseif edge == "left" then
-                    sx = px + cellSize * 0.25
-                    sy = py + (i - 1) * cellSize + cellSize * 0.25
-                elseif edge == "right" then
-                    sx = px + gridSize - cellSize * 0.75
-                    sy = py + (i - 1) * cellSize + cellSize * 0.25
-                end
-                if specA > 5 then
-                    nvgBeginPath(vg)
-                    nvgRect(vg, sx, sy, math.max(1, cellSize * 0.5), math.max(1, cellSize * 0.5))
-                    nvgFillColor(vg, nvgRGBA(120, 160, 100, specA))
-                    nvgFill(vg)
-                end
-            end
-        end
+    -- 8. 墙体块 - 左右有邻居、上方无
+    if not t and l and r and b then return SEWER_TYPE_WALL end
+
+    -- 2. 地面上边缘块 - 上方无邻居
+    if not t then return SEWER_TYPE_TOP_EDGE end
+
+    -- 4. 底部边缘块 - 下方无邻居
+    if not b then return SEWER_TYPE_BOTTOM_EDGE end
+
+    -- 3. 左右侧边块 - 左或右无邻居
+    if not l or not r then return SEWER_TYPE_SIDE_EDGE end
+
+    -- 5. 内角块 - 四面有邻居但对角无（检查对角邻居）
+    if neighbors.topLeft == false or neighbors.topRight == false
+       or neighbors.bottomLeft == false or neighbors.bottomRight == false then
+        return SEWER_TYPE_INNER_CORNER
     end
+
+    -- 1. 地面中心块 - 四面都有邻居
+    return SEWER_TYPE_CENTER
 end
 
 -- ====================================================================
--- DrawSewer - 绘制下水道风格砖块（深绿暗色 + 水渍边缘 + 裂纹）
+-- DrawSewerBase - 绘制石砖基底（通用）
 -- ====================================================================
-function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+local function DrawSewerBase(vg, px, py, gridSize, colorMap, normalMap, lighting, lightDirX, lightDirY, col, row)
     local cellSize = gridSize / PIXEL_CELLS
-    lighting = lighting or 0.5
-    lightDirX = lightDirX or 0
-    lightDirY = lightDirY or 0
-    col = col or 0
-    row = row or 0
+    local colorShift = (HashPos(col, row, 77) % 6) - 3
+    local lit = lighting * 0.55 + 0.45
+    local hasLight = lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0)
 
-    local colorShift = (HashPos(col, row, 77) % 8) - 4
+    -- 优化：先画一个平均色底色大矩形，减少后续开销
+    local avgColor = colorMap[2][2]
+    local avgR = math.floor(math.max(0, math.min(255, (avgColor[1] + colorShift) * lit)))
+    local avgG = math.floor(math.max(0, math.min(255, (avgColor[2] + colorShift) * lit)))
+    local avgB = math.floor(math.max(0, math.min(255, (avgColor[3] + colorShift) * lit)))
+    nvgBeginPath(vg)
+    nvgRect(vg, px, py, gridSize, gridSize)
+    nvgFillColor(vg, nvgRGBA(avgR, avgG, avgB, 255))
+    nvgFill(vg)
 
+    -- 只对颜色/法线有显著差异的像素做覆盖绘制
     for r = 1, PIXEL_CELLS do
         for c = 1, PIXEL_CELLS do
-            local cx = px + (c - 1) * cellSize
-            local cy = py + (r - 1) * cellSize
-
-            local baseColor = SEWER_BASE_COLORS[r][c]
-            local normal = SEWER_NORMAL_MAP[r][c]
+            local baseColor = colorMap[r][c]
+            local normal = normalMap[r][c]
 
             local br = baseColor[1] + colorShift
             local bg = baseColor[2] + colorShift
             local bb = baseColor[3] + colorShift
 
             local normalIntensity = 0.5
-            if lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0) then
+            if hasLight then
                 normalIntensity = CalcNormalLighting(lightDirX, lightDirY, normal[1], normal[2])
             end
 
-            DrawPixelBlock(vg, cx, cy, cellSize, br, bg, bb, normalIntensity, lighting)
+            local normalMod = (normalIntensity - 0.5) * 2.0
+            local brightBoost = normalMod * HIGHLIGHT_BOOST * lighting
+
+            local fr = math.floor(math.max(0, math.min(255, br * lit + brightBoost)))
+            local fg = math.floor(math.max(0, math.min(255, bg * lit + brightBoost)))
+            local fb = math.floor(math.max(0, math.min(255, bb * lit + brightBoost)))
+
+            -- 跳过与底色差异小于 8 的像素（视觉不可辨）
+            if math.abs(fr - avgR) > 8 or math.abs(fg - avgG) > 8 or math.abs(fb - avgB) > 8 then
+                local cx = px + (c - 1) * cellSize
+                local cy = py + (r - 1) * cellSize
+                nvgBeginPath(vg)
+                nvgRect(vg, cx, cy, cellSize, cellSize)
+                nvgFillColor(vg, nvgRGBA(fr, fg, fb, 255))
+                nvgFill(vg)
+            end
         end
     end
 
-    -- 裂纹（比普通砖块稍多）
-    if col > 0 and row > 0 then
-        local crackChance = HashFloat(col, row, 200)
-        if crackChance < 0.55 then
-            local crackIdx = (HashPos(col, row, 789) % 5) + 1
-            DrawCrack(vg, px, py, gridSize, crackIdx, lighting)
-        end
+    -- 简化的整体边缘阴影（替代逐像素阴影）
+    local shadowSize = math.max(1, math.floor(cellSize * 0.2))
+    local shadowA = math.floor(SHADOW_DARKEN * 0.7)
+    if shadowA > 3 then
+        -- 右边缘
+        nvgBeginPath(vg)
+        nvgRect(vg, px + gridSize - shadowSize, py, shadowSize, gridSize)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, shadowA))
+        nvgFill(vg)
+        -- 下边缘
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + gridSize - shadowSize, gridSize - shadowSize, shadowSize)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, shadowA))
+        nvgFill(vg)
+    end
+end
+
+-- ====================================================================
+-- DrawSewerMortar - 绘制砖缝/灰浆线（石砌感）
+-- ====================================================================
+local function DrawSewerMortar(vg, px, py, gridSize, col, row, lighting, vertical)
+    local cellSize = gridSize / PIXEL_CELLS
+    local mortarA = math.floor(math.max(20, 55 * (lighting * 0.4 + 0.6)))
+
+    -- 水平灰浆线（砖缝）
+    local hLine = HashFloat(col, row, 301)
+    if hLine < 0.7 then
+        local yOff = (HashPos(col, row, 302) % 2 == 0) and 2 or 1
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + yOff * cellSize - math.max(1, cellSize * 0.15),
+                gridSize, math.max(1, cellSize * 0.3))
+        nvgFillColor(vg, nvgRGBA(18, 20, 24, mortarA))
+        nvgFill(vg)
     end
 
-    -- 边缘水渍（替代青苔）
-    if neighbors and col > 0 and row > 0 then
-        if not neighbors.top then
-            DrawSewerStainEdge(vg, px, py, gridSize, "top", col, row, lighting, lightDirX, lightDirY)
+    -- 垂直灰浆线（交错砌法）
+    if vertical ~= false then
+        local vLine = HashFloat(col, row, 303)
+        if vLine < 0.6 then
+            local xOff = (HashPos(col, row, 304) % 2 == 0) and 1 or 3
+            local yStart = (HashPos(col, row, 305) % 2 == 0) and 0 or 2
+            nvgBeginPath(vg)
+            nvgRect(vg, px + xOff * cellSize - math.max(1, cellSize * 0.15),
+                    py + yStart * cellSize,
+                    math.max(1, cellSize * 0.3), 2 * cellSize)
+            nvgFillColor(vg, nvgRGBA(18, 20, 24, mortarA))
+            nvgFill(vg)
         end
-        if not neighbors.bottom then
-            DrawSewerStainEdge(vg, px, py, gridSize, "bottom", col, row, lighting, lightDirX, lightDirY)
+    end
+end
+
+-- ====================================================================
+-- DrawSewerCrack - 深层裂纹（比普通砖块更暗、更宽）
+-- ====================================================================
+local function DrawSewerCrack(vg, px, py, gridSize, col, row, lighting)
+    local crackChance = HashFloat(col, row, 200)
+    if crackChance > 0.60 then return end
+
+    local crackIdx = (HashPos(col, row, 789) % 5) + 1
+    local pattern = CRACK_PATTERNS[crackIdx]
+    if not pattern then return end
+
+    local cellSize = gridSize / 4.0
+    local alpha = math.floor(math.max(40, 80 * (lighting * 0.4 + 0.6)))
+
+    -- 裂纹主线（暗色）
+    nvgBeginPath(vg)
+    for _, seg in ipairs(pattern.lines) do
+        local x1 = px + seg[1] * cellSize
+        local y1 = py + seg[2] * cellSize
+        local x2 = px + seg[3] * cellSize
+        local y2 = py + seg[4] * cellSize
+        nvgMoveTo(vg, x1, y1)
+        nvgLineTo(vg, x2, y2)
+    end
+    nvgStrokeColor(vg, nvgRGBA(10, 12, 16, alpha))
+    nvgStrokeWidth(vg, math.max(0.8, gridSize / 16))
+    nvgStroke(vg)
+
+    -- 裂纹内发暗（深度感）
+    nvgBeginPath(vg)
+    for _, seg in ipairs(pattern.lines) do
+        nvgMoveTo(vg, px + seg[1] * cellSize + 0.5, py + seg[2] * cellSize + 0.5)
+        nvgLineTo(vg, px + seg[3] * cellSize + 0.5, py + seg[4] * cellSize + 0.5)
+    end
+    nvgStrokeColor(vg, nvgRGBA(5, 5, 8, math.floor(alpha * 0.5)))
+    nvgStrokeWidth(vg, math.max(0.3, gridSize / 28))
+    nvgStroke(vg)
+end
+
+-- ====================================================================
+-- DrawSewerMoss - 苔藓和腐败根须（跨块连接）
+-- ====================================================================
+local function DrawSewerMoss(vg, px, py, gridSize, edge, col, row, lighting, lightDirX, lightDirY)
+    local cellSize = gridSize / 4.0
+    local normals = MOSS_NORMALS[edge]
+    local litMul = lighting * 0.45 + 0.55
+    local hasLight = lighting > 0.05 and (lightDirX ~= 0 or lightDirY ~= 0)
+
+    for i = 1, 4 do
+        local h = HashFloat(col * 13 + i, row * 19, edge:byte(1) + 70)
+        if h < 0.70 then
+            local depth = 1 + math.floor(HashFloat(col + i * 3, row * 7, 88) * 2.2)
+            local isRoot = HashFloat(col * 5 + i, row * 3, 555) < 0.25
+            local colorIdx = (HashPos(col, row, i + 20) % 4) + 1
+            local mossColor = isRoot and SEWER_ROOT_COLORS[colorIdx] or SEWER_MOSS_COLORS[colorIdx]
+
+            local mossLit = 0.5
+            if hasLight then
+                local nx, ny = normals[i][1], normals[i][2]
+                mossLit = CalcNormalLighting(lightDirX, lightDirY, nx, ny)
+            end
+            local normalBoost = (mossLit - 0.5) * 2.0 * HIGHLIGHT_BOOST * lighting * 0.7
+            local mr = math.floor(math.max(0, math.min(255, mossColor[1] * litMul + normalBoost * 0.5)))
+            local mg = math.floor(math.max(0, math.min(255, mossColor[2] * litMul + normalBoost)))
+            local mb = math.floor(math.max(0, math.min(255, mossColor[3] * litMul + normalBoost * 0.3)))
+
+            -- 优化：将多层深度合并为一个矩形（用最外层alpha）
+            -- 视觉上逐层渐淡差异不大，改为单个矩形 + 深度决定覆盖面积
+            local totalDepth = depth * cellSize
+            local w, hh, mx, my
+            if edge == "top" then
+                mx = px + (i - 1) * cellSize
+                my = py
+                w = isRoot and math.max(1, cellSize * 0.5) or cellSize
+                hh = totalDepth
+            elseif edge == "bottom" then
+                mx = px + (i - 1) * cellSize
+                my = py + gridSize - totalDepth
+                w = isRoot and math.max(1, cellSize * 0.5) or cellSize
+                hh = totalDepth
+            elseif edge == "left" then
+                mx = px
+                my = py + (i - 1) * cellSize
+                w = totalDepth
+                hh = isRoot and math.max(1, cellSize * 0.5) or cellSize
+            else -- right
+                mx = px + gridSize - totalDepth
+                my = py + (i - 1) * cellSize
+                w = totalDepth
+                hh = isRoot and math.max(1, cellSize * 0.5) or cellSize
+            end
+
+            -- 整体渐变用中间alpha值模拟
+            local avgAlpha = math.floor(220 - (depth - 1) * 27)
+            nvgBeginPath(vg)
+            nvgRect(vg, mx, my, w, hh)
+            nvgFillColor(vg, nvgRGBA(mr, mg, mb, avgAlpha))
+            nvgFill(vg)
         end
-        if not neighbors.left then
-            DrawSewerStainEdge(vg, px, py, gridSize, "left", col, row, lighting, lightDirX, lightDirY)
+    end
+end
+
+-- ====================================================================
+-- DrawSewerWaterStain - 黑水侵蚀效果（从边缘向内蔓延）
+-- ====================================================================
+local function DrawSewerWaterStain(vg, px, py, gridSize, edge, col, row, lighting)
+    local cellSize = gridSize / 4.0
+    local litMul = lighting * 0.35 + 0.65
+    local showSpec = lighting > 0.25
+    local specA = showSpec and math.floor(25 * lighting) or 0
+
+    for i = 1, 4 do
+        local h = HashFloat(col * 9 + i, row * 23, edge:byte(1) + 100)
+        if h < 0.55 then
+            local depth = 1 + math.floor(HashFloat(col + i * 7, row * 11, 111) * 2.5)
+            local colorIdx = (HashPos(col, row, i + 30) % 4) + 1
+            local stainColor = SEWER_WATER_STAIN_COLORS[colorIdx]
+
+            local sr = math.floor(math.max(0, math.min(255, stainColor[1] * litMul)))
+            local sg = math.floor(math.max(0, math.min(255, stainColor[2] * litMul)))
+            local sb = math.floor(math.max(0, math.min(255, stainColor[3] * litMul)))
+
+            -- 优化：合并深度层为单个矩形
+            local totalDepth = depth * cellSize
+            local mx, my, w, hh
+            if edge == "top" then
+                mx = px + (i - 1) * cellSize; my = py
+                w = cellSize; hh = totalDepth
+            elseif edge == "bottom" then
+                mx = px + (i - 1) * cellSize; my = py + gridSize - totalDepth
+                w = cellSize; hh = totalDepth
+            elseif edge == "left" then
+                mx = px; my = py + (i - 1) * cellSize
+                w = totalDepth; hh = cellSize
+            else -- right
+                mx = px + gridSize - totalDepth; my = py + (i - 1) * cellSize
+                w = totalDepth; hh = cellSize
+            end
+
+            local avgAlpha = math.floor(160 - (depth - 1) * 22)
+            nvgBeginPath(vg)
+            nvgRect(vg, mx, my, w, hh)
+            nvgFillColor(vg, nvgRGBA(sr, sg, sb, avgAlpha))
+            nvgFill(vg)
+
+            -- 湿润反光（冷色高光）— 仅首层位置
+            if specA > 3 then
+                local sx, sy
+                if edge == "top" then
+                    sx = mx + cellSize * 0.2; sy = py + cellSize * 0.2
+                elseif edge == "bottom" then
+                    sx = mx + cellSize * 0.2; sy = py + gridSize - cellSize * 0.8
+                elseif edge == "left" then
+                    sx = px + cellSize * 0.2; sy = my + cellSize * 0.2
+                else
+                    sx = px + gridSize - cellSize * 0.8; sy = my + cellSize * 0.2
+                end
+                nvgBeginPath(vg)
+                nvgRect(vg, sx, sy, math.max(1, cellSize * 0.4), math.max(1, cellSize * 0.4))
+                nvgFillColor(vg, nvgRGBA(SEWER_WET_HIGHLIGHT[1], SEWER_WET_HIGHLIGHT[2], SEWER_WET_HIGHLIGHT[3], specA))
+                nvgFill(vg)
+            end
         end
-        if not neighbors.right then
-            DrawSewerStainEdge(vg, px, py, gridSize, "right", col, row, lighting, lightDirX, lightDirY)
+    end
+end
+
+-- ====================================================================
+-- DrawSewerEdgeShadow - 边缘连续阴影（跨块自然衔接）
+-- ====================================================================
+local function DrawSewerEdgeShadow(vg, px, py, gridSize, edge, lighting)
+    local cellSize = gridSize / PIXEL_CELLS
+    local shadowDepth = math.max(1, cellSize * 0.6)
+    local shadowA = math.floor(math.max(30, 70 * (1.0 - lighting * 0.4)))
+
+    if edge == "top" then
+        -- 上边缘向下投射阴影（从暴露面向内）
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, gridSize, shadowDepth)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    elseif edge == "bottom" then
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + gridSize - shadowDepth, gridSize, shadowDepth)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    elseif edge == "left" then
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, shadowDepth, gridSize)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    elseif edge == "right" then
+        nvgBeginPath(vg)
+        nvgRect(vg, px + gridSize - shadowDepth, py, shadowDepth, gridSize)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    end
+end
+
+-- ====================================================================
+-- DrawSewerFracturedEdge - 断裂边缘效果
+-- ====================================================================
+local function DrawSewerFracturedEdge(vg, px, py, gridSize, col, row, lighting)
+    local cellSize = gridSize / 4.0
+    -- 不规则缺口
+    for i = 1, 4 do
+        local broken = HashFloat(col * 17 + i, row * 29, 777)
+        if broken < 0.4 then
+            -- 缺失一个像素格（露出黑暗深渊）
+            local bx = px + (i - 1) * cellSize
+            local by = py  -- 顶部
+            nvgBeginPath(vg)
+            nvgRect(vg, bx, by, cellSize, cellSize)
+            nvgFillColor(vg, nvgRGBA(8, 8, 12, math.floor(200 * (lighting * 0.3 + 0.7))))
+            nvgFill(vg)
+        end
+    end
+    -- 底边断裂
+    for i = 1, 4 do
+        local broken = HashFloat(col * 13 + i, row * 31, 888)
+        if broken < 0.35 then
+            local bx = px + (i - 1) * cellSize
+            local by = py + gridSize - cellSize
+            nvgBeginPath(vg)
+            nvgRect(vg, bx, by, cellSize, cellSize)
+            nvgFillColor(vg, nvgRGBA(8, 8, 12, math.floor(180 * (lighting * 0.3 + 0.7))))
+            nvgFill(vg)
+        end
+    end
+end
+
+-- ====================================================================
+-- DrawSewerInnerCorner - 内角暗影（L形阴影）
+-- ====================================================================
+local function DrawSewerInnerCorner(vg, px, py, gridSize, col, row, lighting, neighbors)
+    local cellSize = gridSize / PIXEL_CELLS
+    local shadowA = math.floor(math.max(40, 90 * (1.0 - lighting * 0.3)))
+
+    -- 检查哪个对角缺失，在对应角落绘制L形阴影
+    if neighbors.topLeft == false then
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, cellSize, cellSize * 2)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, cellSize * 2, cellSize)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    end
+    if neighbors.topRight == false then
+        nvgBeginPath(vg)
+        nvgRect(vg, px + gridSize - cellSize, py, cellSize, cellSize * 2)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+        nvgBeginPath(vg)
+        nvgRect(vg, px + gridSize - cellSize * 2, py, cellSize * 2, cellSize)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    end
+    if neighbors.bottomLeft == false then
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + gridSize - cellSize * 2, cellSize, cellSize * 2)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + gridSize - cellSize, cellSize * 2, cellSize)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    end
+    if neighbors.bottomRight == false then
+        nvgBeginPath(vg)
+        nvgRect(vg, px + gridSize - cellSize, py + gridSize - cellSize * 2, cellSize, cellSize * 2)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+        nvgBeginPath(vg)
+        nvgRect(vg, px + gridSize - cellSize * 2, py + gridSize - cellSize, cellSize * 2, cellSize)
+        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
+        nvgFill(vg)
+    end
+end
+
+-- ====================================================================
+-- DrawSewerWetSurface - 潮湿表面反光（全局湿润感）
+-- ====================================================================
+local function DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
+    if lighting < 0.2 then return end
+    local cellSize = gridSize / PIXEL_CELLS
+    local specSize = math.max(1, cellSize * 0.35)
+    local hr, hg, hb = SEWER_WET_HIGHLIGHT[1], SEWER_WET_HIGHLIGHT[2], SEWER_WET_HIGHLIGHT[3]
+
+    -- 随机散布几个湿润反光点（最多1-2个可见）
+    for i = 1, 3 do
+        local h = HashFloat(col * 7 + i, row * 11, 444)
+        if h < 0.30 then
+            local specA = math.floor(18 * lighting * (0.5 + h))
+            if specA > 2 then
+                local wx = px + (HashPos(col, row, i * 100) % 3) * cellSize + cellSize * 0.3
+                local wy = py + (HashPos(col, row, i * 200) % 3) * cellSize + cellSize * 0.3
+                nvgBeginPath(vg)
+                nvgRect(vg, wx, wy, specSize, specSize)
+                nvgFillColor(vg, nvgRGBA(hr, hg, hb, specA))
+                nvgFill(vg)
+            end
+        end
+    end
+end
+
+-- ====================================================================
+-- DrawSewer - 绘制旧王城地下水渠风格砖块（主入口）
+-- ====================================================================
+function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, neighbors)
+    lighting = lighting or 0.5
+    lightDirX = lightDirX or 0
+    lightDirY = lightDirY or 0
+    col = col or 0
+    row = row or 0
+
+    -- 判定瓦片类型
+    local tileClass = ClassifySewerTile(neighbors)
+
+    -- 根据类型选择基色和法线
+    local colorMap, normalMap
+
+    if tileClass == SEWER_TYPE_WALL or tileClass == SEWER_TYPE_WALL_FLOOR then
+        colorMap = SEWER_WALL_COLORS
+        normalMap = SEWER_WALL_NORMAL
+    elseif tileClass == SEWER_TYPE_TOP_EDGE or tileClass == SEWER_TYPE_OUTER_CORNER then
+        colorMap = SEWER_TOP_COLORS
+        normalMap = SEWER_NORMAL_MAP
+    elseif tileClass == SEWER_TYPE_BOTTOM_EDGE or tileClass == SEWER_TYPE_WATER_EDGE then
+        colorMap = SEWER_BOTTOM_COLORS
+        normalMap = SEWER_NORMAL_MAP
+    else
+        colorMap = SEWER_BASE_COLORS
+        normalMap = SEWER_NORMAL_MAP
+    end
+
+    -- 1. 绘制石砖基底
+    DrawSewerBase(vg, px, py, gridSize, colorMap, normalMap, lighting, lightDirX, lightDirY, col, row)
+
+    -- 2. 绘制砖缝灰浆线
+    DrawSewerMortar(vg, px, py, gridSize, col, row, lighting,
+        tileClass ~= SEWER_TYPE_WALL)  -- 墙体只画水平线
+
+    -- 3. 绘制裂纹
+    DrawSewerCrack(vg, px, py, gridSize, col, row, lighting)
+
+    -- 4. 根据瓦片类型绘制特殊效果
+    if tileClass == SEWER_TYPE_CENTER then
+        -- 中心块：潮湿表面 + 偶尔苔藓斑
+        DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
+
+    elseif tileClass == SEWER_TYPE_TOP_EDGE then
+        -- 上边缘：苔藓从顶部垂下 + 边缘阴影
+        DrawSewerMoss(vg, px, py, gridSize, "top", col, row, lighting, lightDirX, lightDirY)
+        DrawSewerEdgeShadow(vg, px, py, gridSize, "top", lighting)
+        DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
+
+    elseif tileClass == SEWER_TYPE_SIDE_EDGE then
+        -- 侧边：水渍从侧面流下 + 苔藓
+        if neighbors and not neighbors.left then
+            DrawSewerMoss(vg, px, py, gridSize, "left", col, row, lighting, lightDirX, lightDirY)
+            DrawSewerEdgeShadow(vg, px, py, gridSize, "left", lighting)
+        end
+        if neighbors and not neighbors.right then
+            DrawSewerMoss(vg, px, py, gridSize, "right", col, row, lighting, lightDirX, lightDirY)
+            DrawSewerEdgeShadow(vg, px, py, gridSize, "right", lighting)
+        end
+        DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
+
+    elseif tileClass == SEWER_TYPE_BOTTOM_EDGE then
+        -- 底部边缘：黑水侵蚀 + 暗影
+        DrawSewerWaterStain(vg, px, py, gridSize, "bottom", col, row, lighting)
+        DrawSewerEdgeShadow(vg, px, py, gridSize, "bottom", lighting)
+
+    elseif tileClass == SEWER_TYPE_INNER_CORNER then
+        -- 内角：L形暗影 + 湿润
+        DrawSewerInnerCorner(vg, px, py, gridSize, col, row, lighting, neighbors)
+        DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
+
+    elseif tileClass == SEWER_TYPE_OUTER_CORNER then
+        -- 外角：两面苔藓 + 边缘阴影 + 圆角裁切
+        if neighbors then
+            if not neighbors.top then
+                DrawSewerMoss(vg, px, py, gridSize, "top", col, row, lighting, lightDirX, lightDirY)
+                DrawSewerEdgeShadow(vg, px, py, gridSize, "top", lighting)
+            end
+            if not neighbors.bottom then
+                DrawSewerWaterStain(vg, px, py, gridSize, "bottom", col, row, lighting)
+                DrawSewerEdgeShadow(vg, px, py, gridSize, "bottom", lighting)
+            end
+            if not neighbors.left then
+                DrawSewerMoss(vg, px, py, gridSize, "left", col, row, lighting, lightDirX, lightDirY)
+                DrawSewerEdgeShadow(vg, px, py, gridSize, "left", lighting)
+            end
+            if not neighbors.right then
+                DrawSewerMoss(vg, px, py, gridSize, "right", col, row, lighting, lightDirX, lightDirY)
+                DrawSewerEdgeShadow(vg, px, py, gridSize, "right", lighting)
+            end
+        end
+        -- 外角圆角裁切
+        local cellSize = gridSize / PIXEL_CELLS
+        if neighbors and not neighbors.top and not neighbors.left then
+            DrawPillarRoundedCorner(vg, px, py, cellSize, "tl", lighting)
+        end
+        if neighbors and not neighbors.top and not neighbors.right then
+            DrawPillarRoundedCorner(vg, px, py, cellSize, "tr", lighting)
+        end
+        if neighbors and not neighbors.bottom and not neighbors.left then
+            DrawPillarRoundedCorner(vg, px, py, cellSize, "bl", lighting)
+        end
+        if neighbors and not neighbors.bottom and not neighbors.right then
+            DrawPillarRoundedCorner(vg, px, py, cellSize, "br", lighting)
+        end
+
+    elseif tileClass == SEWER_TYPE_FRACTURED then
+        -- 断裂平台：不规则缺口 + 暴露暗面
+        DrawSewerFracturedEdge(vg, px, py, gridSize, col, row, lighting)
+        if neighbors and not neighbors.top then
+            DrawSewerMoss(vg, px, py, gridSize, "top", col, row, lighting, lightDirX, lightDirY)
+        end
+        if neighbors and not neighbors.bottom then
+            DrawSewerWaterStain(vg, px, py, gridSize, "bottom", col, row, lighting)
+        end
+        if neighbors and not neighbors.left then
+            DrawSewerEdgeShadow(vg, px, py, gridSize, "left", lighting)
+        end
+        if neighbors and not neighbors.right then
+            DrawSewerEdgeShadow(vg, px, py, gridSize, "right", lighting)
+        end
+
+    elseif tileClass == SEWER_TYPE_WALL then
+        -- 墙体：垂直纹理强调 + 水渍向下流淌
+        DrawSewerWaterStain(vg, px, py, gridSize, "top", col, row, lighting)
+        DrawSewerEdgeShadow(vg, px, py, gridSize, "top", lighting)
+        DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
+
+    elseif tileClass == SEWER_TYPE_WALL_FLOOR then
+        -- 墙地衔接：上方水渍流到地面 + 底部边缘高光
+        DrawSewerWaterStain(vg, px, py, gridSize, "bottom", col, row, lighting)
+        DrawSewerEdgeShadow(vg, px, py, gridSize, "bottom", lighting)
+        -- 衔接线（墙体到地面过渡）
+        local cellSize = gridSize / PIXEL_CELLS
+        local lineA = math.floor(math.max(30, 65 * (lighting * 0.5 + 0.5)))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + gridSize - math.max(1, cellSize * 0.4),
+                gridSize, math.max(1, cellSize * 0.4))
+        nvgFillColor(vg, nvgRGBA(12, 14, 18, lineA))
+        nvgFill(vg)
+
+    elseif tileClass == SEWER_TYPE_WATER_EDGE then
+        -- 水边衔接：仅底部薄阴影过渡，不覆盖水方块表现
+        local cellSize = gridSize / PIXEL_CELLS
+        local edgeA = math.floor(50 * (lighting * 0.3 + 0.7))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py + gridSize - math.max(1, cellSize * 0.3),
+                gridSize, math.max(1, cellSize * 0.3))
+        nvgFillColor(vg, nvgRGBA(10, 14, 18, edgeA))
+        nvgFill(vg)
+    end
+
+    -- 5. 绿色荧光苔藓点（像素块风格，少量随机亮起）
+    local cellSize = gridSize / PIXEL_CELLS
+    -- 只有约30%的瓦片有荧光苔藓
+    local glowSeed = HashFloat(col * 13 + 7, row * 17 + 3, 999)
+    if glowSeed < 0.30 then
+        local phase = glowSeed * 6.2832 * 5.0 + col * 2.31 + row * 3.17
+        -- 慢周期明暗变化（约 8~16 秒一轮）
+        local onOffFreq = 0.06 + HashFloat(col * 3, row * 7, 123) * 0.065
+        local onOffWave = math.sin(_animTime * onOffFreq * 6.2832 + phase)
+        if onOffWave > 0.3 then
+            local brightness = (onOffWave - 0.3) * 1.43  -- 0~1
+
+            -- 固定像素位置（苔藓风格，贴在砖块上）
+            local cx = (HashPos(col, row, 777) % 4)
+            local cy = (HashPos(col, row, 888) % 4)
+            local gx = px + cx * cellSize
+            local gy = py + cy * cellSize
+            local alpha = math.floor(140 * brightness + 40)
+
+            nvgBeginPath(vg)
+            nvgRect(vg, gx, gy, cellSize, cellSize)
+            nvgFillColor(vg, nvgRGBA(60, 180, 80, alpha))
+            nvgFill(vg)
         end
     end
 end

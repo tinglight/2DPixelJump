@@ -185,6 +185,30 @@ S.lightZoneStartRow = 0
 S.lightZoneEndCol = 0
 S.lightZoneEndRow = 0
 
+-- ====================================================================
+-- 装饰物
+-- ====================================================================
+S.decorations = {}               -- { {col, row, typeId, brightness, scale}, ... }
+S.selectedDecorationIndex = 0    -- 当前选中的装饰物索引（0=无）
+S.currentDecorationType = 1      -- 当前选择的装饰物类型索引（对应 C.DECORATION_TYPES）
+
+-- 装饰物拖拽状态
+S.decoDragging = false           -- 是否正在拖拽装饰物
+S.decoDragIndex = 0              -- 正在拖拽的装饰物索引
+S.decoDragStartCol = 0
+S.decoDragStartRow = 0
+
+-- 装饰物弹窗状态
+S.decoDialogCol = 0              -- 弹窗关联的地图位置
+S.decoDialogRow = 0
+S.decoDialogEditIndex = 0        -- 编辑已有装饰（0=新建）
+S.decoDialogBrightness = 100     -- 明暗度 0-100
+S.decoDialogScale = 100          -- 缩放比例 0-1000
+S.decoDialogBrightnessInput = "100"  -- 明暗度输入框文本
+S.decoDialogScaleInput = "100"       -- 缩放输入框文本
+S.decoDialogFocusField = 0           -- 0=无焦点, 1=明暗度, 2=缩放
+S.decoDialogCursor = 0               -- 输入框光标位置
+
 
 -- ====================================================================
 -- 交互模式 & 选取
@@ -267,6 +291,7 @@ S.currentDifficulty = 1
 -- ====================================================================
 S.backgroundImage = ""        -- 选中的背景图路径（如 "image/xxx.png"）
 S.bgImageAlpha = 0.5          -- 背景图明暗度（0.0~1.0，越大越亮）
+S.bgStretchToCanvas = false   -- 是否拉伸背景图为画布大小（false=铺满相机边界）
 S.bgImageHandle = nil         -- NanoVG 图片句柄（运行时缓存）
 S.bgDialogSelected = 0        -- 背景对话框中选中的索引
 S.bgAlphaInput = "50"         -- 对话框中明暗度输入框的文本
@@ -280,6 +305,15 @@ S.viewportCache = {}
 -- 顶栏按钮列表（由 Toolbar 模块填充）
 -- ====================================================================
 S.topBarButtons = {}
+
+-- ====================================================================
+-- 云端同步面板状态
+-- ====================================================================
+S.cloudPanelOpen = false       -- 面板是否展开
+S.cloudBtnRect = nil           -- 按钮位置 { x, y, w, h }
+S.cloudDialogMode = nil        -- "export" | "import" | nil
+S.cloudExportName = ""         -- 导出自定义名称
+S.cloudImportList = {}         -- 可导入文件列表
 
 -- ====================================================================
 -- 试玩模式状态

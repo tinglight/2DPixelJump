@@ -473,6 +473,21 @@ local function GetLanternColor(pixelType, flickerT)
     return 0, 0, 0, 0
 end
 
+local function GetUnlitLanternColor(pixelType)
+    if pixelType == 1 then
+        return 50, 40, 30, 255       -- 灯框：暗褐色
+    elseif pixelType == 2 then
+        return 30, 25, 20, 255       -- 灯芯位置：熄灭的黑色
+    elseif pixelType == 3 then
+        return 40, 35, 30, 180       -- 玻璃灯罩：暗灰不透光
+    elseif pixelType == 4 then
+        return 60, 55, 45, 255       -- 挂环：暗灰金属
+    elseif pixelType == 5 then
+        return 40, 35, 30, 255       -- 底座：深灰
+    end
+    return 0, 0, 0, 0
+end
+
 -- ====================================================================
 -- 编辑模式：绘制光源标记（像素提灯风格）
 -- ====================================================================
@@ -493,7 +508,11 @@ function FogOfWar.DrawLightMarkers(vg, params)
 
     for i, light in ipairs(lightSources) do
         local isSelected = (i == selectedIndex)
-        local radius = light.diameter * 0.5
+        local isExtinguished = light.extinguished == true
+
+        -- 熄灭灯用 targetDiameter 显示预期范围（虚线风格）
+        local displayDiameter = isExtinguished and (light.targetDiameter or 6) or light.diameter
+        local radius = displayDiameter * 0.5
         local innerRadius = radius * (1.0 - light.feather)
         local ri = math.floor(radius + 0.5)
         local iri = math.floor(innerRadius + 0.5)
@@ -501,7 +520,12 @@ function FogOfWar.DrawLightMarkers(vg, params)
         -- 绘制外圈像素圆边框（用方块描边）
         local outerScan = GetCircleScanlines(radius)
         local outerAlpha = isSelected and 180 or 80
-        nvgFillColor(vg, nvgRGBA(255, 200, 50, outerAlpha))
+        if isExtinguished then
+            -- 熄灭灯用暗灰色边框
+            nvgFillColor(vg, nvgRGBA(100, 80, 50, isSelected and 140 or 50))
+        else
+            nvgFillColor(vg, nvgRGBA(255, 200, 50, outerAlpha))
+        end
         for dy = -ri, ri do
             local hw = outerScan[dy]
             if hw then
@@ -565,7 +589,11 @@ function FogOfWar.DrawLightMarkers(vg, params)
         if light.feather > 0.01 and iri >= 1 then
             local innerScan = GetCircleScanlines(innerRadius)
             local innerAlpha = isSelected and 120 or 50
-            nvgFillColor(vg, nvgRGBA(200, 200, 100, innerAlpha))
+            if isExtinguished then
+                nvgFillColor(vg, nvgRGBA(80, 60, 40, isSelected and 90 or 30))
+            else
+                nvgFillColor(vg, nvgRGBA(200, 200, 100, innerAlpha))
+            end
             for dy = -iri, iri do
                 local hw = innerScan[dy]
                 if hw then
@@ -596,38 +624,45 @@ function FogOfWar.DrawLightMarkers(vg, params)
         local lx = cx + (zGrid - lanternW) * 0.5
         local ly = cy + (zGrid - lanternH) * 0.5
 
-        -- 发光光晕（从灯内向外辐射的暖光）
-        local glowCx = lx + lanternW * 0.5
-        local glowCy = ly + lanternH * 0.45  -- 偏上对齐灯芯
-        local glowRadius = zGrid * 1.2
-        local glowFlicker = 0.7 + 0.3 * math.sin(flickerT * 4.0 + i * 1.7)
-        local glowAlpha = math.floor((isSelected and 100 or 70) * glowFlicker)
+        -- 发光光晕（从灯内向外辐射的暖光）—— 熄灭灯不绘制光晕
+        if not isExtinguished then
+            local glowCx = lx + lanternW * 0.5
+            local glowCy = ly + lanternH * 0.45  -- 偏上对齐灯芯
+            local glowRadius = zGrid * 1.2
+            local glowFlicker = 0.7 + 0.3 * math.sin(flickerT * 4.0 + i * 1.7)
+            local glowAlpha = math.floor((isSelected and 100 or 70) * glowFlicker)
 
-        -- 外层大光晕
-        nvgBeginPath(vg)
-        nvgCircle(vg, glowCx, glowCy, glowRadius)
-        local outerGlow = nvgRadialGradient(vg, glowCx, glowCy, lanternPixel * 2, glowRadius,
-            nvgRGBA(255, 180, 50, math.min(255, glowAlpha)),
-            nvgRGBA(255, 100, 0, 0))
-        nvgFillPaint(vg, outerGlow)
-        nvgFill(vg)
+            -- 外层大光晕
+            nvgBeginPath(vg)
+            nvgCircle(vg, glowCx, glowCy, glowRadius)
+            local outerGlow = nvgRadialGradient(vg, glowCx, glowCy, lanternPixel * 2, glowRadius,
+                nvgRGBA(255, 180, 50, math.min(255, glowAlpha)),
+                nvgRGBA(255, 100, 0, 0))
+            nvgFillPaint(vg, outerGlow)
+            nvgFill(vg)
 
-        -- 内层强光（灯芯附近）
-        local innerAlpha2 = math.min(255, math.floor(glowAlpha * 1.2))
-        nvgBeginPath(vg)
-        nvgCircle(vg, glowCx, glowCy, lanternPixel * 3)
-        local innerGlow = nvgRadialGradient(vg, glowCx, glowCy, 0, lanternPixel * 3,
-            nvgRGBA(255, 240, 150, innerAlpha2),
-            nvgRGBA(255, 180, 50, 0))
-        nvgFillPaint(vg, innerGlow)
-        nvgFill(vg)
+            -- 内层强光（灯芯附近）
+            local innerAlpha2 = math.min(255, math.floor(glowAlpha * 1.2))
+            nvgBeginPath(vg)
+            nvgCircle(vg, glowCx, glowCy, lanternPixel * 3)
+            local innerGlow = nvgRadialGradient(vg, glowCx, glowCy, 0, lanternPixel * 3,
+                nvgRGBA(255, 240, 150, innerAlpha2),
+                nvgRGBA(255, 180, 50, 0))
+            nvgFillPaint(vg, innerGlow)
+            nvgFill(vg)
+        end
 
-        -- 逐像素绘制提灯主体
+        -- 逐像素绘制提灯主体（熄灭灯用暗色）
         for row = 1, LANTERN_ROWS do
             for col = 1, LANTERN_COLS do
                 local pType = LANTERN_SHAPE[row][col]
                 if pType > 0 then
-                    local r, g, b, a = GetLanternColor(pType, flickerT + i * 0.5)
+                    local r, g, b, a
+                    if isExtinguished then
+                        r, g, b, a = GetUnlitLanternColor(pType)
+                    else
+                        r, g, b, a = GetLanternColor(pType, flickerT + i * 0.5)
+                    end
                     local px = lx + (col - 1) * lanternPixel
                     local py = ly + (row - 1) * lanternPixel
                     nvgBeginPath(vg)
@@ -668,6 +703,7 @@ function FogOfWar.DrawLanterns(vg, params)
 
     for i, light in ipairs(lightSources) do
         if light.noLantern then goto continue_lantern end
+        if light.extinguished then goto continue_lantern end  -- 熄灭灯由 DrawUnlitLanterns 绘制
         local cx = mapX + (light.col - 1) * zGrid - offsetX
         local cy = mapY + (light.row - 1) * zGrid - offsetY
 
@@ -724,6 +760,55 @@ function FogOfWar.DrawLanterns(vg, params)
 end
 
 -- ====================================================================
+-- 游戏模式：绘制熄灭的像素提灯（暗色调，无光晕）
+-- ====================================================================
+--- 在游戏/试玩模式下绘制熄灭状态的提灯（仅灯笼模型，无光晕）
+---@param vg userdata NanoVG context
+---@param params table { gridSize, offsetX, offsetY, zoomLevel?, mapX?, mapY? }
+function FogOfWar.DrawUnlitLanterns(vg, params)
+    local gridSize = params.gridSize or 16
+    local offsetX = params.offsetX or 0
+    local offsetY = params.offsetY or 0
+    local zoomLevel = params.zoomLevel or 1.0
+    local mapX = params.mapX or 0
+    local mapY = params.mapY or 0
+
+    local zGrid = gridSize * zoomLevel
+
+    for _, light in ipairs(lightSources) do
+        if not light.extinguished then goto continue_unlit end
+
+        local cx = mapX + (light.col - 1) * zGrid - offsetX
+        local cy = mapY + (light.row - 1) * zGrid - offsetY
+
+        -- 提灯像素大小
+        local lanternPixel = zGrid / 7.0
+        local lanternW = LANTERN_COLS * lanternPixel
+        local lanternH = LANTERN_ROWS * lanternPixel
+        local lx = cx + (zGrid - lanternW) * 0.5
+        local ly = cy + (zGrid - lanternH) * 0.5
+
+        -- 逐像素绘制熄灭的提灯主体（暗色，无光晕）
+        for row = 1, LANTERN_ROWS do
+            for col = 1, LANTERN_COLS do
+                local pType = LANTERN_SHAPE[row][col]
+                if pType > 0 then
+                    local r, g, b, a = GetUnlitLanternColor(pType)
+                    local px = lx + (col - 1) * lanternPixel
+                    local py = ly + (row - 1) * lanternPixel
+                    nvgBeginPath(vg)
+                    nvgRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5)
+                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                    nvgFill(vg)
+                end
+            end
+        end
+
+        ::continue_unlit::
+    end
+end
+
+-- ====================================================================
 -- 光源管理 API
 -- ====================================================================
 
@@ -744,6 +829,56 @@ function FogOfWar.AddLight(col, row, diameter, feather, group)
     }
     table.insert(lightSources, light)
     return #lightSources
+end
+
+--- 在指定格子放置熄灭的光源（有灯模型但不发光，可被火球点亮）
+---@param col number
+---@param row number
+---@param diameter number 点亮后的目标直径（格数），默认 6
+---@param feather number 羽化程度 0.0~1.0，默认 0.5
+---@param group number|nil 光源编组，0=默认/未编组
+---@return number index 新光源的索引
+function FogOfWar.AddUnlitLight(col, row, diameter, feather, group)
+    local light = {
+        col = col,
+        row = row,
+        diameter = 0,               -- 初始不发光
+        feather = feather or 0.5,
+        group = group or 0,
+        extinguished = true,        -- 标记为熄灭状态
+        targetDiameter = diameter or 6,  -- 点亮后的目标直径
+    }
+    table.insert(lightSources, light)
+    return #lightSources
+end
+
+--- 点亮指定位置的熄灭光源（带渐入动画）
+---@param col number
+---@param row number
+---@return boolean ignited 是否成功点亮
+function FogOfWar.IgniteLight(col, row)
+    for _, light in ipairs(lightSources) do
+        if light.col == col and light.row == row and light.extinguished then
+            light.extinguished = false
+            local target = light.targetDiameter or 6
+            TweenLightIn(light, target)
+            return true
+        end
+    end
+    return false
+end
+
+--- 查找指定位置是否有熄灭的光源
+---@param col number
+---@param row number
+---@return boolean
+function FogOfWar.HasUnlitLight(col, row)
+    for _, light in ipairs(lightSources) do
+        if light.col == col and light.row == row and light.extinguished then
+            return true
+        end
+    end
+    return false
 end
 
 --- 带渐入动画的光源添加（diameter 从 0 渐变到目标值，0.4 秒）
@@ -839,7 +974,15 @@ end
 function FogOfWar.UpdateLight(index, diameter, feather, group)
     local light = lightSources[index]
     if not light then return end
-    if diameter then light.diameter = math.max(2, math.min(100, diameter)) end
+    if diameter then
+        local clamped = math.max(2, math.min(100, diameter))
+        if light.extinguished then
+            -- 熄灭灯：只更新 targetDiameter，diameter 保持 0（点亮后才生效）
+            light.targetDiameter = clamped
+        else
+            light.diameter = clamped
+        end
+    end
     if feather then light.feather = math.max(0, math.min(1.0, feather)) end
     if group ~= nil then light.group = math.max(0, math.floor(group)) end
 end
@@ -874,11 +1017,14 @@ function FogOfWar.Serialize()
         local entry = {
             col = light.col,
             row = light.row,
-            diameter = light.diameter,
+            diameter = light.extinguished and (light.targetDiameter or 6) or light.diameter,
             feather = light.feather,
         }
         if light.group and light.group > 0 then
             entry.group = light.group
+        end
+        if light.extinguished then
+            entry.extinguished = true
         end
         table.insert(data, entry)
     end
@@ -891,13 +1037,18 @@ function FogOfWar.Deserialize(data)
     lightSources = {}
     if not data then return end
     for _, d in ipairs(data) do
-        table.insert(lightSources, {
+        local light = {
             col = d.col or 1,
             row = d.row or 1,
-            diameter = d.diameter or 6,
+            diameter = d.extinguished and 0 or (d.diameter or 6),
             feather = d.feather or 0.5,
             group = d.group or 0,
-        })
+        }
+        if d.extinguished then
+            light.extinguished = true
+            light.targetDiameter = d.diameter or 6
+        end
+        table.insert(lightSources, light)
     end
 end
 

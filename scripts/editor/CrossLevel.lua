@@ -9,12 +9,13 @@ local TileUtils = require("editor.TileUtils")
 local M = {}
 
 -- 依赖注入
-local CloudStorage, WorldMapEditor, cjson
+local CloudStorage, WorldMapEditor, FogOfWar, cjson
 
----@param deps table { CloudStorage, WorldMapEditor, cjson }
+---@param deps table { CloudStorage, WorldMapEditor, FogOfWar, cjson }
 function M.Inject(deps)
     CloudStorage = deps.CloudStorage
     WorldMapEditor = deps.WorldMapEditor
+    FogOfWar = deps.FogOfWar
     cjson = deps.cjson
 end
 
@@ -104,6 +105,16 @@ function M.UpdateOneProjectile(proj, dt)
                 end
             end
             return true
+        end
+    end
+
+    -- 火球点亮熄灭的灯
+    if FogOfWar and col >= 1 and col <= S.MAP_COLS and row >= 1 and row <= S.MAP_ROWS then
+        if FogOfWar.HasUnlitLight(col, row) then
+            FogOfWar.IgniteLight(col, row)
+            S.lightSources = FogOfWar.GetLightSources()
+            S.SetMessage("灯被点亮了!", 1.5)
+            return true  -- 火球消耗
         end
     end
 

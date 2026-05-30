@@ -117,6 +117,7 @@ M.TOOL_GROUPS = {
     { id = "trap",    name = "陷阱", color = {220, 60, 60} },
     { id = "puzzle",  name = "机关", color = {130, 80, 220} },
     { id = "pickup",  name = "补给", color = {60, 200, 100} },
+    { id = "decoration", name = "装饰", color = {160, 140, 200} },
 }
 
 -- ====================================================================
@@ -127,7 +128,7 @@ M.TOOLS = {
         submenu = "collision" },
     { id = "SOLID_PILLAR", tile = M.TILE.SOLID_PILLAR, name = "柱子", color = {90, 80, 110, 255}, group = "terrain",
         submenu = "collision" },
-    { id = "SOLID_SEWER", tile = M.TILE.SOLID_SEWER, name = "下水道", color = {45, 55, 38, 255}, group = "terrain",
+    { id = "SOLID_SEWER", tile = M.TILE.SOLID_SEWER, name = "下水道", color = {35, 38, 44, 255}, group = "terrain",
         submenu = "collision" },
     { id = "SPAWN",       tile = M.TILE.SPAWN,       name = "主角", color = {255, 200, 50, 255},  group = "player" },
     { id = "FUEL",        tile = M.TILE.FUEL,        name = "火焰", color = {255, 100, 20, 255},  group = "pickup" },
@@ -146,13 +147,17 @@ M.TOOLS = {
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
     { id = "LADDER",      tile = M.TILE.LADDER,      name = "梯子", color = {160, 110, 50, 255},  group = "terrain" },
     { id = "CHECKPOINT",  tile = M.TILE.CHECKPOINT,   name = "篝火", color = {255, 140, 30, 255},  group = "pickup" },
-    { id = "FRAGILE",     tile = M.TILE.FRAGILE,     name = "脆台", color = {180, 150, 100, 255}, group = "terrain" },
+    { id = "FRAGILE",     tile = M.TILE.FRAGILE,     name = "脆台", color = {110, 85, 60, 255}, group = "terrain" },
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
     { id = "LIGHT_ZONE", tile = -2,                 name = "光域", color = {255, 160, 40, 255},  group = "terrain" },
+    { id = "UNLIT_LIGHT", tile = -4, name = "无光", color = {100, 80, 50, 255}, group = "terrain" },
+    { id = "DECORATION", tile = -3, name = "装饰", color = {160, 155, 140, 255}, group = "decoration" },
 }
 
 M.LIGHT_TOOL_INDEX = 18
 M.LIGHT_ZONE_TOOL_INDEX = 19
+M.UNLIT_LIGHT_TOOL_INDEX = 20
+M.DECORATION_TOOL_INDEX = 21
 M.HIDDEN_WALL_TOOL_INDEX = 14
 
 -- ====================================================================
@@ -168,6 +173,7 @@ M.SUBMENU_GROUPS = {
         label = "砖块",
         tools = {},  -- 在初始化时自动填充
     },
+
 }
 
 -- 初始化子菜单工具索引
@@ -178,6 +184,14 @@ for i, tool in ipairs(M.TOOLS) do
 end
 
 -- ====================================================================
+-- 装饰物类型列表
+-- ====================================================================
+M.DECORATION_TYPES = {
+    { id = "goddess1", name = "女神像", color = {160, 155, 140}, sprite = "image/edited_女神像_无底座_20260530153654.png", size = {w = 10, h = 10} },
+    { id = "broken_lantern", name = "破损灯", color = {90, 70, 40}, sprite = "image/broken_lantern_deco_20260530155851.png", size = {w = 3, h = 3} },
+}
+
+-- ====================================================================
 -- 水方块物理常量
 -- ====================================================================
 M.WATER_ENERGY_DRAIN_PER_SEC = 10    -- 普通水：每秒消耗能量（像素数）
@@ -186,8 +200,8 @@ M.BLACK_WATER_SPEED_MULT = 2.5       -- 黑水：移动tick乘数（越大越慢
 -- ====================================================================
 -- 管道系统常量
 -- ====================================================================
-M.PIPE_WIDTH  = 5              -- 管道宽度(格)
-M.PIPE_HEIGHT = 5              -- 管道高度(格)
+M.PIPE_WIDTH  = 7              -- 管道宽度(格)
+M.PIPE_HEIGHT = 7              -- 管道高度(格)
 M.PIPE_EMIT_RATE    = 55       -- 粒子发射速率(个/秒)
 M.PIPE_PARTICLE_MAX = 120      -- 最大粒子数
 M.PIPE_GRAVITY      = 280      -- 粒子重力加速度(px/s²)

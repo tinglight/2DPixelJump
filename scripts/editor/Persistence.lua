@@ -65,6 +65,7 @@ function M.SerializeLevel()
         -- playerParams 不再保存到单个关卡（全局配置，统一由 CloudStorage 管理）
         lightSources = FogOfWar.Serialize(),
         lightZones = FogOfWar.SerializeZones(),
+        decorations = M.SerializeDecorations(),
     }
     -- 保留关卡显示名称（确保云端保存后不丢失）
     if S.currentLevelDisplayName ~= "" then
@@ -76,6 +77,9 @@ function M.SerializeLevel()
     end
     if S.bgImageAlpha and S.bgImageAlpha ~= 0.5 then
         data.bgImageAlpha = S.bgImageAlpha
+    end
+    if S.bgStretchToCanvas then
+        data.bgStretchToCanvas = true
     end
     for row = 1, S.MAP_ROWS do
         for col = 1, S.MAP_COLS do
@@ -211,9 +215,14 @@ function M.ApplyLevelData(data)
     S.lightZones = FogOfWar.GetLightZones()
     S.selectedLightZoneIndex = 0
 
+    -- 装饰物
+    M.DeserializeDecorations(data.decorations)
+
     -- 背景图和明暗度
-    S.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    local bgImg = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    S.backgroundImage = bgImg
     S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
+    S.bgStretchToCanvas = (data.bgStretchToCanvas == true)
     S.bgImageHandle = nil  -- 清除缓存，加载关卡时重新加载图片
 end
 
@@ -250,6 +259,51 @@ function M.ApplyPlayerParams(params)
         S.playerParams.maxJumpGrids = 0
         S.playerParams.defaultLightDiameter = 12
         S.playerParams.cameraZoom = 2.0
+    end
+end
+
+-- ====================================================================
+-- 装饰物序列化/反序列化
+-- ====================================================================
+
+--- 将装饰物列表序列化为可存储的 table
+---@return table[]
+function M.SerializeDecorations()
+    local result = {}
+    for _, deco in ipairs(S.decorations) do
+        local entry = {
+            col = deco.col,
+            row = deco.row,
+            typeId = deco.typeId,
+        }
+        -- 只保存非默认值（节省空间）
+        if deco.brightness and deco.brightness ~= 100 then
+            entry.brightness = deco.brightness
+        end
+        if deco.scale and deco.scale ~= 100 then
+            entry.scale = deco.scale
+        end
+        table.insert(result, entry)
+    end
+    return result
+end
+
+--- 从存储数据恢复装饰物列表
+---@param data table[]|nil
+function M.DeserializeDecorations(data)
+    S.decorations = {}
+    S.selectedDecorationIndex = 0
+    if not data then return end
+    for _, d in ipairs(data) do
+        if d.col and d.row and d.typeId then
+            table.insert(S.decorations, {
+                col = d.col,
+                row = d.row,
+                typeId = d.typeId,
+                brightness = d.brightness or 100,
+                scale = d.scale or 100,
+            })
+        end
     end
 end
 

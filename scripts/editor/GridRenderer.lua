@@ -42,6 +42,18 @@ local function IsPillarAt(row, col)
     return base == TILE.SOLID_PILLAR
 end
 
+-- 检查某格是否为水体（用于下水道水边衔接检测）
+local function IsWaterAt(row, col)
+    if row < 1 or row > S.MAP_ROWS or col < 1 or col > S.MAP_COLS then
+        return false
+    end
+    if not S.levelData[row] then return false end
+    local val = S.levelData[row][col]
+    if not val or val == TILE.EMPTY then return false end
+    local base = TileUtils.GetTileType(val)
+    return base == TILE.WATER or base == TILE.POISON_WATER or base == TILE.BLACK_WATER
+end
+
 -- ====================================================================
 -- 内部：计算地图区域
 -- ====================================================================
@@ -107,6 +119,14 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             pillarLeft   = IsPillarAt(row, col - 1),
             pillarRight  = IsPillarAt(row, col + 1),
         }
+        -- 下水道瓦片额外检测：对角邻居 + 水体邻接
+        if base == TILE.SOLID_SEWER then
+            neighbors.topLeft     = IsSolidAt(row - 1, col - 1)
+            neighbors.topRight    = IsSolidAt(row - 1, col + 1)
+            neighbors.bottomLeft  = IsSolidAt(row + 1, col - 1)
+            neighbors.bottomRight = IsSolidAt(row + 1, col + 1)
+            neighbors.water = IsWaterAt(row + 1, col) or IsWaterAt(row, col - 1) or IsWaterAt(row, col + 1)
+        end
         SolidRenderer.DrawSolid(vg, base, px, py, zGrid, lighting, ldx, ldy, col, row, neighbors)
 
     elseif base == TILE.SPAWN then
@@ -370,7 +390,7 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
         ::skipLadder::
 
     elseif base == TILE.PIPE then
-        -- 5x5 管道：只由左上角锚点绘制整体
+        -- 7x7 管道：只由左上角锚点绘制整体
         local isAnchor = true
         if col > 1 then
             local leftVal = S.levelData[row][col - 1]
@@ -391,52 +411,70 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             local cx = px + PW * 0.5
             local cy = py + PH * 0.5
             local outerR = math.min(PW, PH) * 0.45
+            local innerR = outerR * 0.62
 
-            -- 管壁外圈（大圆形金属管，无底板背景）
-            nvgBeginPath(vg)
-            nvgCircle(vg, cx, cy, outerR)
-            nvgFillColor(vg, nvgRGBA(65, 70, 80, 255))
-            nvgFill(vg)
+            -- 像素块尺寸随缩放适配
+            local PS = math.max(1, math.floor(zGrid * 0.25))
 
-            -- 管壁中圈（立体层次）
-            nvgBeginPath(vg)
-            nvgCircle(vg, cx, cy, outerR * 0.88)
-            nvgFillColor(vg, nvgRGBA(80, 85, 98, 255))
-            nvgFill(vg)
+            -- 像素圆环：外圆减内圆
+            local startX = math.floor((cx - outerR) / PS) * PS
+            local startY = math.floor((cy - outerR) / PS) * PS
+            local endX = math.floor((cx + outerR) / PS) * PS
+            local endY = math.floor((cy + outerR) / PS) * PS
 
-            -- 顶部高光弧线（金属光泽）
-            nvgBeginPath(vg)
-            nvgArc(vg, cx, cy, outerR * 0.82, -2.5, -0.6, 1)
-            nvgStrokeColor(vg, nvgRGBA(140, 145, 160, 180))
-            nvgStrokeWidth(vg, 2.0 * S.zoomLevel)
-            nvgStroke(vg)
+            for by = startY, endY, PS do
+                for bx = startX, endX, PS do
+                    local dx = (bx + PS * 0.5) - cx
+                    local dy = (by + PS * 0.5) - cy
+                    local d2 = dx * dx + dy * dy
+                    if d2 <= outerR * outerR then
+                        local r, g, b, a = 0, 0, 0, 255
+                        if d2 <= innerR * innerR then
+                            -- 管口黑洞
+                            r, g, b = 8, 10, 12
+                            -- 底部积水（下半部分）
+                            if dy > 0 and d2 <= (innerR * 0.9) * (innerR * 0.9) then
+                                r, g, b, a = wColor[1], wColor[2], wColor[3], 160
+                            end
+                        elseif d2 <= (outerR * 0.85) * (outerR * 0.85) then
+                            -- 中圈管壁（深灰）
+                            r, g, b = 48, 52, 50
+                            -- 顶部墨绿高光（上方像素）
+                            if dy < -innerR * 0.3 and dx > -outerR * 0.5 and dx < outerR * 0.3 then
+                                r, g, b, a = 45, 85, 62, 200
+                            end
+                        else
+                            -- 外圈管壁（黑灰）
+                            r, g, b = 32, 34, 36
+                        end
+                        nvgBeginPath(vg)
+                        nvgRect(vg, bx, by, PS, PS)
+                        nvgFillColor(vg, nvgRGBA(r, g, b, a))
+                        nvgFill(vg)
+                    end
+                end
+            end
 
-            -- 管口黑洞（圆形深洞）
-            nvgBeginPath(vg)
-            nvgCircle(vg, cx, cy, outerR * 0.62)
-            nvgFillColor(vg, nvgRGBA(10, 12, 18, 255))
-            nvgFill(vg)
+            -- 墨绿苔痕像素点（伪随机）
+            local seed = row * 137 + col * 53
+            for i = 0, 2 do
+                local angle = (seed * (i + 1) * 2.17) % (math.pi * 2)
+                local dist = outerR * (0.72 + ((seed * (i + 3)) % 15) * 0.012)
+                local mx = math.floor((cx + math.cos(angle) * dist) / PS) * PS
+                local my = math.floor((cy + math.sin(angle) * dist) / PS) * PS
+                nvgBeginPath(vg)
+                nvgRect(vg, mx, my, PS, PS)
+                nvgFillColor(vg, nvgRGBA(30, 70, 48, 180))
+                nvgFill(vg)
+            end
 
-            -- 管口内静态水面（底部积水弧）
-            local waterR = outerR * 0.55
-            nvgBeginPath(vg)
-            nvgArc(vg, cx, cy, waterR, 0.5, 2.64, 1)
-            nvgClosePath(vg)
-            nvgFillColor(vg, nvgRGBA(wColor[1], wColor[2], wColor[3], 160))
-            nvgFill(vg)
-
-            -- 外圈轮廓
-            nvgBeginPath(vg)
-            nvgCircle(vg, cx, cy, outerR)
-            nvgStrokeColor(vg, nvgRGBA(35, 38, 45, 255))
-            nvgStrokeWidth(vg, 1.5 * S.zoomLevel)
-            nvgStroke(vg)
-
-            -- 开关组指示器
+            -- 开关组指示器（像素方块）
             if switchGroup > 0 then
                 local gc = C.GROUP_COLORS[switchGroup] or C.GROUP_COLORS[1]
+                local ix = math.floor((px + PW - 5 * S.zoomLevel) / PS) * PS
+                local iy = math.floor((py + 3 * S.zoomLevel) / PS) * PS
                 nvgBeginPath(vg)
-                nvgCircle(vg, px + PW - 5 * S.zoomLevel, py + 5 * S.zoomLevel, 3 * S.zoomLevel)
+                nvgRect(vg, ix, iy, PS * 2, PS * 2)
                 nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], 220))
                 nvgFill(vg)
             end
@@ -444,28 +482,50 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
         ::skipPipe::
 
     elseif base == TILE.FRAGILE then
-        -- 编辑器预览：沙土色方块 + 裂纹标记
+        -- 编辑器预览：暗灰破损方块
         nvgBeginPath(vg)
         nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
-        nvgFillColor(vg, nvgRGBA(175, 145, 95, 255))
+        nvgFillColor(vg, nvgRGBA(75, 60, 45, 255))
         nvgFill(vg)
-        -- 顶部高光
+        -- 顶部微弱高光（暗淡）
         nvgBeginPath(vg)
-        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, 2)
-        nvgFillColor(vg, nvgRGBA(215, 190, 135, 255))
+        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, 1)
+        nvgFillColor(vg, nvgRGBA(110, 90, 65, 200))
         nvgFill(vg)
-        -- X 标记表示脆弱
-        nvgStrokeColor(vg, nvgRGBA(100, 65, 20, 180))
-        nvgStrokeWidth(vg, 1.0)
-        local m = 3
+        -- 底部阴影边
         nvgBeginPath(vg)
-        nvgMoveTo(vg, px + m, py + m)
-        nvgLineTo(vg, px + zGrid - m, py + zGrid - m)
+        nvgRect(vg, px + 0.5, py + zGrid - 2, zGrid - 1, 1.5)
+        nvgFillColor(vg, nvgRGBA(40, 30, 20, 180))
+        nvgFill(vg)
+        -- 裂纹网络（多条不规则裂痕）
+        nvgStrokeColor(vg, nvgRGBA(30, 20, 10, 200))
+        nvgStrokeWidth(vg, 0.8)
+        local cx = px + zGrid * 0.5
+        local cy = py + zGrid * 0.5
+        -- 主裂纹：从左上到右下的锯齿线
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + 2, py + 3)
+        nvgLineTo(vg, cx - 1, cy - 2)
+        nvgLineTo(vg, cx + 2, cy + 1)
+        nvgLineTo(vg, px + zGrid - 3, py + zGrid - 2)
+        nvgStroke(vg)
+        -- 分叉裂纹
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx - 1, cy - 2)
+        nvgLineTo(vg, cx + 3, cy - 4)
         nvgStroke(vg)
         nvgBeginPath(vg)
-        nvgMoveTo(vg, px + zGrid - m, py + m)
-        nvgLineTo(vg, px + m, py + zGrid - m)
+        nvgMoveTo(vg, cx + 2, cy + 1)
+        nvgLineTo(vg, cx - 2, cy + 4)
         nvgStroke(vg)
+        -- 缺角效果（右上角小三角）
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + zGrid - 4, py + 0.5)
+        nvgLineTo(vg, px + zGrid - 1, py + 0.5)
+        nvgLineTo(vg, px + zGrid - 1, py + 3)
+        nvgClosePath(vg)
+        nvgFillColor(vg, nvgRGBA(30, 22, 15, 200))
+        nvgFill(vg)
     end
 end
 
@@ -760,8 +820,94 @@ local function DrawSingleMoveDragPreview(vg, zGrid)
 end
 
 -- ====================================================================
--- 内部：绘制悬停指示器
+-- 内部：装饰物贴图缓存
 -- ====================================================================
+local decoImageCache = {}  -- { [spritePath] = nvgImageHandle }
+
+-- ====================================================================
+-- 内部：绘制装饰物标记
+-- ====================================================================
+local function DrawDecorations(vg, mapX, mapY, zGrid, startCol, endCol, startRow, endRow)
+    if #S.decorations == 0 then return end
+
+    for i, deco in ipairs(S.decorations) do
+        -- 只绘制可见范围内的装饰物
+        if deco.col >= startCol and deco.col <= endCol and deco.row >= startRow and deco.row <= endRow then
+            local dx = mapX + (deco.col - 1) * C.GRID * S.zoomLevel - S.cameraX
+            local dy = mapY + (deco.row - 1) * C.GRID * S.zoomLevel - S.cameraY
+
+            local decoType = C.DECORATION_TYPES[deco.typeId]
+            local color = decoType and decoType.color or {180, 140, 220}
+            local name = decoType and decoType.name or "?"
+
+            -- 读取装饰物属性（明暗度和缩放）
+            local brightness = (deco.brightness or 100) / 100  -- 0~1
+            local scalePct = (deco.scale or 100) / 100          -- 0~1
+
+            -- 如果装饰物有贴图且有 size，渲染贴图
+            if decoType and decoType.sprite and decoType.size then
+                local sizeW = decoType.size.w or 1
+                local sizeH = decoType.size.h or 1
+                local drawW = sizeW * zGrid * scalePct
+                local drawH = sizeH * zGrid * scalePct
+                -- 锚点在中心：放置格的中心 = 装饰物图片的中心
+                local imgX = dx + zGrid * 0.5 - drawW * 0.5
+                local imgY = dy + zGrid * 0.5 - drawH * 0.5
+
+                -- 加载/缓存贴图
+                if not decoImageCache[decoType.sprite] then
+                    local handle = nvgCreateImage(vg, decoType.sprite, 0)
+                    decoImageCache[decoType.sprite] = handle or -1
+                end
+
+                local imgHandle = decoImageCache[decoType.sprite]
+                if imgHandle and imgHandle > 0 then
+                    local paint = nvgImagePattern(vg, imgX, imgY, drawW, drawH, 0, imgHandle, brightness)
+                    nvgBeginPath(vg)
+                    nvgRect(vg, imgX, imgY, drawW, drawH)
+                    nvgFillPaint(vg, paint)
+                    nvgFill(vg)
+                else
+                    -- 贴图不可用，fallback 到颜色块
+                    nvgBeginPath(vg)
+                    nvgRect(vg, dx + 1, dy + 1, zGrid - 2, zGrid - 2)
+                    nvgFillColor(vg, nvgRGBA(color[1], color[2], color[3], math.floor(100 * brightness)))
+                    nvgFill(vg)
+                end
+
+
+            else
+                -- 无贴图：使用颜色格子渲染（支持缩放和明暗度）
+                local drawSize = (zGrid - 2) * scalePct
+                local offset = (zGrid - drawSize) * 0.5
+                -- 背景填充
+                nvgBeginPath(vg)
+                nvgRect(vg, dx + offset, dy + offset, drawSize, drawSize)
+                nvgFillColor(vg, nvgRGBA(color[1], color[2], color[3], math.floor(100 * brightness)))
+                nvgFill(vg)
+
+                -- 边框
+                nvgBeginPath(vg)
+                nvgRect(vg, dx + offset, dy + offset, drawSize, drawSize)
+                nvgStrokeColor(vg, nvgRGBA(color[1], color[2], color[3], math.floor(200 * brightness)))
+                nvgStrokeWidth(vg, 1.0)
+                nvgStroke(vg)
+
+                -- 装饰物名称标签
+                if zGrid >= 10 then
+                    local fontSize = math.max(7, math.min(10, zGrid * 0.5))
+                    nvgFontFace(vg, "sans")
+                    nvgFontSize(vg, fontSize)
+                    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                    nvgFillColor(vg, nvgRGBA(255, 255, 255, 220))
+                    local label = string.sub(name, 1, 3)
+                    nvgText(vg, dx + zGrid * 0.5, dy + zGrid * 0.5, label)
+                end
+            end
+        end
+    end
+end
+
 local function DrawHoverIndicator(vg, mapW, zGrid)
     local mx = input:GetMousePosition().x / S.dpr / S.scaleF
     local my = input:GetMousePosition().y / S.dpr / S.scaleF
@@ -802,6 +948,9 @@ function M.Draw()
     local mapX, mapY, mapW, mapH = GetMapArea()
     local zGrid = C.GRID * S.zoomLevel
 
+    -- 传入动画时间驱动萤火虫闪烁
+    SolidRenderer.SetTime(S.editorClock)
+
     nvgSave(vg)
     nvgScissor(vg, mapX, mapY, mapW, mapH)
 
@@ -818,11 +967,20 @@ function M.Draw()
             S.bgImageHandle = nvgCreateImage(vg, S.backgroundImage, 0)
         end
         if S.bgImageHandle and S.bgImageHandle > 0 then
-            -- 计算 camBound 在屏幕上的位置
-            local bx1 = mapX + (S.camBound.left - 1) * zGrid - S.cameraX
-            local by1 = mapY + (S.camBound.top - 1) * zGrid - S.cameraY
-            local bw = (S.camBound.right - S.camBound.left + 1) * zGrid
-            local bh = (S.camBound.bottom - S.camBound.top + 1) * zGrid
+            local bx1, by1, bw, bh
+            if S.bgStretchToCanvas then
+                -- 拉伸为整个画布（地图）大小
+                bx1 = mapX - S.cameraX
+                by1 = mapY - S.cameraY
+                bw = S.MAP_COLS * zGrid
+                bh = S.MAP_ROWS * zGrid
+            else
+                -- 铺满 camBound 区域
+                bx1 = mapX + (S.camBound.left - 1) * zGrid - S.cameraX
+                by1 = mapY + (S.camBound.top - 1) * zGrid - S.cameraY
+                bw = (S.camBound.right - S.camBound.left + 1) * zGrid
+                bh = (S.camBound.bottom - S.camBound.top + 1) * zGrid
+            end
             local imgPaint = nvgImagePattern(vg, bx1, by1, bw, bh, 0, S.bgImageHandle, S.bgImageAlpha or 1.0)
             nvgBeginPath(vg)
             nvgRect(vg, bx1, by1, bw, bh)
@@ -892,6 +1050,9 @@ function M.Draw()
             selectedIndex = S.selectedLightIndex,
         })
     end
+
+    -- 装饰物标记
+    DrawDecorations(vg, mapX, mapY, zGrid, startCol, endCol, startRow, endRow)
 
     -- 战争迷雾（独立于 gizmos 开关）
     if FogOfWar and S.fogShowInEditor then

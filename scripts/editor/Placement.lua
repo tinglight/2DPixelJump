@@ -122,7 +122,7 @@ function M.PlaceLadder(col, row)
     end
 end
 
---- 放置管道（5x5区域）
+--- 放置管道（7x7区域）
 ---@param col number
 ---@param row number
 function M.PlacePipe(col, row)
@@ -145,16 +145,49 @@ function M.PlacePipe(col, row)
     end
 end
 
---- 擦除地块
+--- 擦除地块（同时检查并删除装饰物）
 ---@param col number
 ---@param row number
 function M.EraseTile(col, row)
     if col < 1 or col > S.MAP_COLS then return end
     if row < 1 or row > S.MAP_ROWS then return end
+
+    -- 尝试删除该位置的装饰物
+    local decoIdx = M.FindDecoration(col, row)
+    if decoIdx then
+        table.remove(S.decorations, decoIdx)
+        Undo.dirty = true
+        Undo.saveTimer = Undo.saveDelay
+    end
+
     if S.levelData[row][col] == TILE.SPAWN then return end
     local oldVal = S.levelData[row][col]
+    if oldVal == TILE.EMPTY then return end
     S.levelData[row][col] = TILE.EMPTY
     Undo.RecordTileChange(col, row, oldVal, TILE.EMPTY)
+end
+
+--- 查找指定格子上的装饰物（支持区域命中，锚点在中心）
+---@param col number
+---@param row number
+---@return number|nil 索引或 nil
+function M.FindDecoration(col, row)
+    for i, deco in ipairs(S.decorations) do
+        local decoType = C.DECORATION_TYPES[deco.typeId]
+        if decoType then
+            local halfW = math.ceil(decoType.size.w / 2)
+            local halfH = math.ceil(decoType.size.h / 2)
+            if col >= deco.col - halfW and col <= deco.col + halfW
+               and row >= deco.row - halfH and row <= deco.row + halfH then
+                return i
+            end
+        else
+            if deco.col == col and deco.row == row then
+                return i
+            end
+        end
+    end
+    return nil
 end
 
 return M

@@ -1154,8 +1154,10 @@ function M.ApplyWorldLevelData(data)
     -- （全局 playerParams 已在 StartWorldPlayMode 时从 data/player_params.json 加载）
 
     -- 背景图和明暗度
-    S.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    local bgImg = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    S.backgroundImage = bgImg
     S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
+    S.bgStretchToCanvas = (data.bgStretchToCanvas == true)
     S.bgImageHandle = nil  -- 切换关卡时清除缓存
 
     FogOfWar.Deserialize(data.lightSources)
@@ -1721,9 +1723,12 @@ end
 
 function M.Draw()
     local vg = S.vg
+    -- 传入动画时间驱动萤火虫闪烁
+    SolidRenderer.SetTime(S.editorClock)
     M.DrawBackground(vg)
     local startCol, endCol = M.DrawGrid(vg)
     M.DrawTiles(vg, startCol, endCol)
+    M.DrawDecorations(vg, startCol, endCol)
     M.DrawFragileParticles(vg)
     PipeSystem.DrawParticles(vg, S.playCameraX, S.playCameraY)
     FlameRenderer.UpdateFlameAnim()
@@ -1769,10 +1774,18 @@ function M.DrawBackground(vg)
             S.bgImageHandle = nvgCreateImage(vg, S.backgroundImage, 0)
         end
         if S.bgImageHandle and S.bgImageHandle > 0 then
-            local bx = (S.camBound.left - 1) * C.GRID - S.playCameraX
-            local by = (S.camBound.top - 1) * C.GRID - (S.playCameraY or 0)
-            local bw = (S.camBound.right - S.camBound.left + 1) * C.GRID
-            local bh = (S.camBound.bottom - S.camBound.top + 1) * C.GRID
+            local bx, by, bw, bh
+            if S.bgStretchToCanvas then
+                bx = -S.playCameraX
+                by = -(S.playCameraY or 0)
+                bw = S.MAP_COLS * C.GRID
+                bh = S.MAP_ROWS * C.GRID
+            else
+                bx = (S.camBound.left - 1) * C.GRID - S.playCameraX
+                by = (S.camBound.top - 1) * C.GRID - (S.playCameraY or 0)
+                bw = (S.camBound.right - S.camBound.left + 1) * C.GRID
+                bh = (S.camBound.bottom - S.camBound.top + 1) * C.GRID
+            end
             local imgPaint = nvgImagePattern(vg, bx, by, bw, bh, 0, S.bgImageHandle, S.bgImageAlpha or 1.0)
             nvgBeginPath(vg)
             nvgRect(vg, bx, by, bw, bh)
@@ -2519,6 +2532,16 @@ function M.DrawFogOfWar(vg, startCol, endCol)
         mapX = 0,
         mapY = 0,
     })
+
+    -- 绘制熄灭的提灯（暗色调，等待被火球点亮）
+    FogOfWar.DrawUnlitLanterns(vg, {
+        gridSize = C.GRID,
+        offsetX = S.playCameraX,
+        offsetY = S.playCameraY,
+        zoomLevel = 1.0,
+        mapX = 0,
+        mapY = 0,
+    })
 end
 
 ------------------------------------------------------------
@@ -3008,7 +3031,7 @@ function M.DrawCheckpointTile(vg, px, py, row, col)
 end
 
 -- ====================================================================
--- 管道渲染（5x5 锚点检测 + PipeSystem 绘制）
+-- 管道渲染（7x7 锚点检测 + PipeSystem 绘制）
 -- ====================================================================
 function M.DrawPipeTile(vg, px, py, row, col)
     -- 只由左上角锚点绘制整体
@@ -3042,37 +3065,133 @@ function M.DrawFragileTile(vg, px, py, row, col)
         onIt = true
     end
 
-    -- 基底色块（站在上面时颜色微变，表示即将碎裂）
-    local r1 = onIt and 155 or 175
-    local g1 = onIt and 125 or 145
-    local b1 = onIt and 75 or 95
+    -- 基底色块（暗色基调，站在上面时更暗更红）
+    local r1 = onIt and 55 or 75
+    local g1 = onIt and 38 or 60
+    local b1 = onIt and 28 or 45
     nvgBeginPath(vg)
     nvgRect(vg, px + 0.5, py + 0.5, G - 1, G - 1)
     nvgFillColor(vg, nvgRGBA(r1, g1, b1, 255))
     nvgFill(vg)
 
-    -- 顶部高光
+    -- 顶部微弱高光（暗淡残留的边缘光）
     nvgBeginPath(vg)
-    nvgRect(vg, px + 0.5, py + 0.5, G - 1, 2)
-    nvgFillColor(vg, nvgRGBA(215, 190, 135, 255))
+    nvgRect(vg, px + 0.5, py + 0.5, G - 1, 1)
+    nvgFillColor(vg, nvgRGBA(110, 90, 65, 180))
     nvgFill(vg)
 
-    -- 站在上面时显示裂纹
+    -- 底部阴影边
+    nvgBeginPath(vg)
+    nvgRect(vg, px + 0.5, py + G - 2, G - 1, 1.5)
+    nvgFillColor(vg, nvgRGBA(30, 20, 12, 180))
+    nvgFill(vg)
+
+    -- 始终显示破损裂纹（脆台本身就是残破的）
+    local cx = px + G * 0.5
+    local cy = py + G * 0.5
+    nvgStrokeColor(vg, nvgRGBA(30, 20, 10, 190))
+    nvgStrokeWidth(vg, 0.8)
+    -- 主裂纹
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, px + 2, py + 3)
+    nvgLineTo(vg, cx - 1, cy - 2)
+    nvgLineTo(vg, cx + 2, cy + 1)
+    nvgLineTo(vg, px + G - 3, py + G - 2)
+    nvgStroke(vg)
+    -- 分叉
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, cx - 1, cy - 2)
+    nvgLineTo(vg, cx + 3, cy - 4)
+    nvgStroke(vg)
+
+    -- 缺角效果（右上角）
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, px + G - 4, py + 0.5)
+    nvgLineTo(vg, px + G - 1, py + 0.5)
+    nvgLineTo(vg, px + G - 1, py + 3)
+    nvgClosePath(vg)
+    nvgFillColor(vg, nvgRGBA(20, 15, 10, 200))
+    nvgFill(vg)
+
+    -- 站在上面时显示更密集的碎裂纹络
     if onIt then
-        local cx = px + G * 0.5
-        local cy = py + G * 0.5
-        nvgStrokeColor(vg, nvgRGBA(70, 45, 10, 210))
+        nvgStrokeColor(vg, nvgRGBA(180, 50, 20, 220))
         nvgStrokeWidth(vg, 1.0)
+        -- 额外放射状裂纹（从中心向外扩散）
         nvgBeginPath(vg)
-        nvgMoveTo(vg, cx, py + 2)
-        nvgLineTo(vg, cx - 3, cy)
-        nvgLineTo(vg, cx + 2, cy + 4)
-        nvgLineTo(vg, cx, py + G - 2)
+        nvgMoveTo(vg, cx, cy)
+        nvgLineTo(vg, px + 1, cy - 3)
         nvgStroke(vg)
         nvgBeginPath(vg)
-        nvgMoveTo(vg, cx - 4, cy - 1)
-        nvgLineTo(vg, cx + 4, cy + 2)
+        nvgMoveTo(vg, cx, cy)
+        nvgLineTo(vg, px + G - 2, cy + 2)
         nvgStroke(vg)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx, cy)
+        nvgLineTo(vg, cx + 1, py + G - 1)
+        nvgStroke(vg)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx, cy)
+        nvgLineTo(vg, cx - 2, py + 1)
+        nvgStroke(vg)
+    end
+end
+
+-- ====================================================================
+-- 装饰物渲染（试玩模式）
+-- ====================================================================
+local playDecoImageCache = {}  -- { [spritePath] = nvgImageHandle }
+
+function M.DrawDecorations(vg, startCol, endCol)
+    if #S.decorations == 0 then return end
+
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local visibleH = S.playViewH * zoom
+    local startRow = math.max(1, math.floor(S.playCameraY / C.GRID) + 1)
+    local endRow = math.min(S.MAP_ROWS, startRow + math.ceil(visibleH / C.GRID) + 2)
+
+    for _, deco in ipairs(S.decorations) do
+        if deco.col >= startCol and deco.col <= endCol and deco.row >= startRow and deco.row <= endRow then
+            local decoType = C.DECORATION_TYPES[deco.typeId]
+            if not decoType then goto continuePlay end
+
+            local px = (deco.col - 1) * C.GRID - S.playCameraX
+            local py = (deco.row - 1) * C.GRID - S.playCameraY
+
+            if decoType.sprite and decoType.size then
+                local sizeW = decoType.size.w or 1
+                local sizeH = decoType.size.h or 1
+                local drawW = sizeW * C.GRID
+                local drawH = sizeH * C.GRID
+                -- 锚点在中心：放置格的中心 = 装饰物图片的中心
+                local imgX = px + C.GRID * 0.5 - drawW * 0.5
+                local imgY = py + C.GRID * 0.5 - drawH * 0.5
+
+                -- 加载/缓存贴图
+                if not playDecoImageCache[decoType.sprite] then
+                    local handle = nvgCreateImage(vg, decoType.sprite, 0)
+                    playDecoImageCache[decoType.sprite] = handle or -1
+                end
+
+                local imgHandle = playDecoImageCache[decoType.sprite]
+                if imgHandle and imgHandle > 0 then
+                    local paint = nvgImagePattern(vg, imgX, imgY, drawW, drawH, 0, imgHandle, 1.0)
+                    nvgBeginPath(vg)
+                    nvgRect(vg, imgX, imgY, drawW, drawH)
+                    nvgFillPaint(vg, paint)
+                    nvgFill(vg)
+                end
+            else
+                -- 无贴图：简单颜色方块
+                local color = decoType.color or {180, 140, 220}
+                nvgBeginPath(vg)
+                nvgRect(vg, px, py, C.GRID, C.GRID)
+                nvgFillColor(vg, nvgRGBA(color[1], color[2], color[3], 150))
+                nvgFill(vg)
+            end
+
+            ::continuePlay::
+        end
     end
 end
 

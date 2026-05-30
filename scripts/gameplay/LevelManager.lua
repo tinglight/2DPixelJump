@@ -39,6 +39,9 @@ M.collectedItems = {}
 M.coinCount = 0
 M.fuelCount = 0
 
+-- 装饰物
+M.decorations = {}  -- { {col, row, typeId}, ... }
+
 -- 存档点（篝火）状态
 M.checkpointActivated = {}
 M.checkpointCol = nil
@@ -185,7 +188,8 @@ function M.LoadLevelFromFile(filename, player)
     M.currentTemplateName = data.levelName or filename
 
     -- 背景图和明暗度
-    Config.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    local bgImg = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    Config.backgroundImage = bgImg
     Config.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
 
     -- 重置开关/门状态
@@ -193,6 +197,16 @@ function M.LoadLevelFromFile(filename, player)
     M.switchCollected = {}
     M.hiddenWallRevealed = {}
     M.collectedItems = {}
+
+    -- 加载装饰物
+    M.decorations = {}
+    if data.decorations then
+        for _, d in ipairs(data.decorations) do
+            if d.col and d.row and d.typeId then
+                table.insert(M.decorations, { col = d.col, row = d.row, typeId = d.typeId })
+            end
+        end
+    end
 
     -- 玩家参数为全局配置（从 data/player_params.json 加载），不再从关卡数据读取
 
