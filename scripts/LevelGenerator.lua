@@ -29,6 +29,7 @@ local TILE = {
     HIDDEN_WALL  = 8,
     CHECKPOINT   = 14,
     SOLID_PILLAR = 13,
+    SOLID_SEWER  = 17,
 }
 
 local BASE_JUMP = 3          -- 满火跳跃高度（格）

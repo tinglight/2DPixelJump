@@ -484,7 +484,7 @@ local function IsSolidAt(row, col)
     local val = LevelManager.levelData[row][col]
     if not val or val == 0 then return false end
     local base = Physics.GetTileType(val)
-    return base == 1 or base == 13  -- SOLID or SOLID_PILLAR
+    return base == 1 or base == 13 or base == 17  -- SOLID or SOLID_PILLAR or SOLID_SEWER
 end
 
 -- 检查某格是否为柱子（专门用于柱子拼接检测）
@@ -515,7 +515,7 @@ function M.DrawMap()
             local px = (col - 1) * GRID - M.cameraX
             local py = (row - 1) * GRID
 
-            if base == TILE.SOLID or base == TILE.SOLID_PILLAR then
+            if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER then
                 -- 计算玩家光源对该格子的光照
                 local player = PlayerController.player
                 local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)

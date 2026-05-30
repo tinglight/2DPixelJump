@@ -162,7 +162,7 @@ M.SUBMENU_GROUPS = {
         tools = {},  -- 在初始化时自动填充
     },
     collision = {
-        label = "碰撞",
+        label = "砖块",
         tools = {},  -- 在初始化时自动填充
     },
 }

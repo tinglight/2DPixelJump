@@ -220,7 +220,7 @@ function M.Update(dt)
                     local val = S.levelData[prow] and S.levelData[prow][pcol]
                     if val then
                         local base = TileUtils.GetTileType(val)
-                        if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then
+                        if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER then
                             hitSolid = true
                         elseif base == C.TILE.WATER or base == C.TILE.POISON_WATER or base == C.TILE.BLACK_WATER then
                             hitWater = true

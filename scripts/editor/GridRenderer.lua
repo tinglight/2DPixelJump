@@ -27,7 +27,7 @@ local function IsSolidAt(row, col)
     local val = S.levelData[row][col]
     if not val or val == TILE.EMPTY then return false end
     local base = TileUtils.GetTileType(val)
-    return base == TILE.SOLID or base == TILE.SOLID_PILLAR
+    return base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER
 end
 
 -- 检查某格是否为柱子（专门用于柱子拼接检测）
@@ -92,7 +92,7 @@ end
 -- 内部：绘制单个地块
 -- ====================================================================
 local function DrawTile(vg, base, group, px, py, zGrid, row, col)
-    if base == TILE.SOLID or base == TILE.SOLID_PILLAR then
+    if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER then
         -- 像素风格碰撞方块渲染（编辑器中以中等亮度展示，带轻微光照方向）
         local lighting = 0.7
         local ldx, ldy = 0.3, -0.5  -- 编辑器预览：固定的左上角光源方向
@@ -270,7 +270,7 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
         nvgFill(vg)
 
     elseif base == TILE.LADDER then
-        -- 2格宽梯子：只由左半格绘制整体
+        -- 2格宽梯子：只由左半格绘制整体（像素风+魂类腐朽风格）
         -- 如果左邻格也是梯子，则当前格是右半部分，跳过
         if col > 1 then
             local leftVal = S.levelData[row][col - 1]
@@ -278,31 +278,94 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             if leftBase == TILE.LADDER then goto skipLadder end
         end
         do
-            local W = zGrid * 2  -- 2格宽
-            local railW = 2 * S.zoomLevel
-            local railL = px + 1 * S.zoomLevel
-            local railR = px + W - 3 * S.zoomLevel
-            -- 侧柱（深棕色）
-            nvgBeginPath(vg)
-            nvgRect(vg, railL, py, railW, zGrid)
-            nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
-            nvgFill(vg)
-            nvgBeginPath(vg)
-            nvgRect(vg, railR, py, railW, zGrid)
-            nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
-            nvgFill(vg)
-            -- 横档（浅棕色，2根，跨越2格宽）
-            local rungH = 1.5 * S.zoomLevel
-            local rungY1 = py + zGrid * 0.3
-            local rungY2 = py + zGrid * 0.7
-            nvgBeginPath(vg)
-            nvgRect(vg, railL, rungY1, railR + railW - railL, rungH)
-            nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
-            nvgFill(vg)
-            nvgBeginPath(vg)
-            nvgRect(vg, railL, rungY2, railR + railW - railL, rungH)
-            nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
-            nvgFill(vg)
+            local Z = S.zoomLevel
+            local P = 2 * Z      -- 像素块单元（2px基础×缩放），让格子感明显
+
+            -- 颜色定义（暗色系、腐朽木质）
+            local darkWood   = nvgRGBA(58, 40, 22, 255)
+            local midWood    = nvgRGBA(82, 55, 30, 255)
+            local hiWood     = nvgRGBA(105, 72, 38, 255)
+            local rungMain   = nvgRGBA(95, 65, 35, 255)
+            local rungHi     = nvgRGBA(120, 85, 48, 255)
+            local shadowWood = nvgRGBA(35, 24, 12, 255)
+            local moss1      = nvgRGBA(40, 85, 30, 255)
+            local moss2      = nvgRGBA(58, 110, 42, 220)
+            local vine       = nvgRGBA(32, 70, 28, 240)
+            local decay      = nvgRGBA(50, 45, 25, 200)
+
+            local lx = px
+            local ly = py
+
+            -- 辅助：画一个像素块
+            local function pix(cx, cy, color)
+                nvgBeginPath(vg) nvgRect(vg, lx + cx * P, ly + cy * P, P, P)
+                nvgFillColor(vg, color) nvgFill(vg)
+            end
+
+            -- == 左侧柱（col 1-2, row 0-7）==
+            for r = 0, 7 do
+                pix(1, r, midWood)
+                pix(2, r, darkWood)
+            end
+            pix(1, 0, hiWood)
+            pix(1, 2, hiWood)
+            pix(1, 5, hiWood)
+            pix(2, 3, shadowWood)
+            pix(1, 6, shadowWood)
+
+            -- == 右侧柱（col 13-14, row 0-7）==
+            for r = 0, 7 do
+                pix(13, r, darkWood)
+                pix(14, r, midWood)
+            end
+            pix(14, 1, hiWood)
+            pix(14, 4, hiWood)
+            pix(14, 6, hiWood)
+            pix(13, 2, shadowWood)
+            pix(14, 5, shadowWood)
+
+            -- == 上横档（row 2, col 3-12）==
+            for c = 3, 12 do
+                pix(c, 2, rungMain)
+            end
+            pix(4, 2, rungHi)
+            pix(6, 2, rungHi)
+            pix(9, 2, rungHi)
+            pix(11, 2, rungHi)
+            for c = 3, 12 do
+                pix(c, 3, shadowWood)
+            end
+
+            -- == 下横档（row 5, col 3-12）==
+            for c = 3, 12 do
+                pix(c, 5, rungMain)
+            end
+            pix(3, 5, rungHi)
+            pix(5, 5, rungHi)
+            pix(8, 5, rungHi)
+            pix(10, 5, rungHi)
+            for c = 3, 12 do
+                pix(c, 6, shadowWood)
+            end
+
+            -- === 魂类细节 ===
+            pix(0, 0, moss1)
+            pix(1, 0, moss2)
+            pix(0, 1, moss2)
+
+            pix(15, 6, vine)
+            pix(15, 7, vine)
+            pix(14, 7, moss2)
+
+            pix(5, 2, moss1)
+            pix(7, 5, moss1)
+
+            pix(9, 5, decay)
+            pix(2, 4, decay)
+            pix(13, 6, decay)
+
+            pix(0, 4, vine)
+            pix(0, 5, moss2)
         end
         ::skipLadder::
 

@@ -32,7 +32,7 @@ function M.Inject(deps)
         local val = S.levelData[row] and S.levelData[row][col]
         if not val or val == 0 then return false end
         local base = TileUtils.GetTileType(val)
-        return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR
+        return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
     end
     FogOfWar.SetCollisionChecker(isSolidForLight)
     SolidRenderer.SetCollisionChecker(isSolidForLight)
@@ -117,7 +117,7 @@ function M.IsSolid(col, row)
     if row > S.MAP_ROWS then return true end
     local val = S.levelData[row][col]
     local base, group = TileUtils.GetTileType(val)
-    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then return true end
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER then return true end
     if base == C.TILE.GATE and not S.play.switchState[group] then return true end
     if base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then return true end
     if base == C.TILE.FRAGILE and not S.play.fragileGone[row .. "_" .. col] then return true end
@@ -132,7 +132,7 @@ function M.IsSolidAt(row, col)
     local val = S.levelData[row][col]
     if not val or val == 0 then return false end
     local base = TileUtils.GetTileType(val)
-    return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR
+    return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER
 end
 
 --- 检测玩家是否在梯子上（任意身体格子重叠梯子）
@@ -661,7 +661,7 @@ function M.AgeFallParticles(dt)
 end
 
 function M.HandleMovementInput(dt)
-    -- 攀爬中：允许水平移动（留在梯子范围内自由移动，移到有地面的位置则退出攀爬）
+    -- 攀爬中：只能在梯子范围内左右移动，不能移出梯子
     if S.play.isClimbing then
         local curLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
         local curRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
@@ -670,14 +670,9 @@ function M.HandleMovementInput(dt)
         elseif curRight and not curLeft then dir = 1 end
         if dir ~= 0 then
             local newX = S.play.gridX + dir
-            if not M.Collides(newX, S.play.gridY) then
+            if not M.Collides(newX, S.play.gridY) and M.IsOnLadder(newX, S.play.gridY) then
                 S.play.gridX = newX
                 S.play.facingRight = (dir > 0)
-                -- 移动后如果脚下有地面或离开梯子范围，退出攀爬
-                if M.OnGround(newX, S.play.gridY) or not M.IsOnLadder(newX, S.play.gridY) then
-                    S.play.isClimbing = false
-                    S.play.climbTimer = 0
-                end
             end
         end
         S.play.isMoving = false
@@ -1854,7 +1849,7 @@ function M.DrawTiles(vg, startCol, endCol)
 end
 
 function M.DrawOneTile(vg, px, py, base, group, row, col)
-    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then
+    if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR or base == C.TILE.SOLID_SEWER then
         M.DrawSolidTileWithLight(vg, px, py, base, row, col)
     elseif base == C.TILE.FUEL then
         M.DrawFuelTile(vg, px, py, row, col)
@@ -2368,95 +2363,109 @@ function M.DrawLadderTile(vg, px, py, row, col)
 
     local G = C.GRID          -- 16
     local W = G * 2            -- 32 (2格宽)
-    local P = 1                -- 像素单位
+    local P = 2                -- 像素块单元=2px，让格子感明显
 
-    -- === 像素风魂类腐朽梯子 ===
+    -- === 像素风魂类腐朽梯子（8x8像素网格内绘制） ===
     -- 颜色定义（暗色系、腐朽木质）
-    local darkWood   = nvgRGBA(62, 43, 25, 255)    -- 深腐木色（侧柱主色）
-    local midWood    = nvgRGBA(85, 58, 32, 255)    -- 中间木色（侧柱高光）
-    local lightWood  = nvgRGBA(110, 78, 42, 255)   -- 浅木色（横档主色）
-    local shadowWood = nvgRGBA(40, 28, 15, 255)    -- 阴影色（横档暗面）
-    local moss1      = nvgRGBA(45, 90, 35, 255)    -- 苔藓深绿
-    local moss2      = nvgRGBA(65, 120, 50, 200)   -- 苔藓亮绿
-    local vine       = nvgRGBA(35, 75, 30, 230)    -- 藤蔓暗绿
-    local decay      = nvgRGBA(55, 50, 30, 180)    -- 腐败斑点
+    local darkWood   = nvgRGBA(58, 40, 22, 255)    -- 深腐木（侧柱暗面）
+    local midWood    = nvgRGBA(82, 55, 30, 255)    -- 中木色（侧柱主色）
+    local hiWood     = nvgRGBA(105, 72, 38, 255)   -- 高光木色（像素高光块）
+    local rungMain   = nvgRGBA(95, 65, 35, 255)    -- 横档主色
+    local rungHi     = nvgRGBA(120, 85, 48, 255)   -- 横档高光
+    local shadowWood = nvgRGBA(35, 24, 12, 255)    -- 阴影/描边
+    local moss1      = nvgRGBA(40, 85, 30, 255)    -- 苔藓深绿
+    local moss2      = nvgRGBA(58, 110, 42, 220)   -- 苔藓亮绿
+    local vine       = nvgRGBA(32, 70, 28, 240)    -- 藤蔓暗绿
+    local decay      = nvgRGBA(50, 45, 25, 200)    -- 腐败斑
 
-    -- 侧柱参数
-    local railW = 3 * P
-    local railL = px + 2 * P
-    local railR = px + W - 5 * P
+    -- 像素网格：16×32区域 = 8行×16列（每格P=2px）
+    -- 侧柱：各占2列宽(4px)，左柱col0-1，右柱col14-15
+    local lx = px           -- 左侧起点
+    local ly = py           -- 顶部起点
 
-    -- 左侧柱（像素逐行绘制效果）
-    -- 主体
-    nvgBeginPath(vg) nvgRect(vg, railL, py, railW, G)
-    nvgFillColor(vg, darkWood) nvgFill(vg)
-    -- 高光边（左侧1px）
-    nvgBeginPath(vg) nvgRect(vg, railL, py, P, G)
-    nvgFillColor(vg, midWood) nvgFill(vg)
-    -- 腐朽缺口（中部像素块缺失效果）
-    nvgBeginPath(vg) nvgRect(vg, railL + P, py + 5 * P, P, 2 * P)
-    nvgFillColor(vg, shadowWood) nvgFill(vg)
+    -- 辅助：画一个像素块
+    local function pix(cx, cy, color)
+        nvgBeginPath(vg) nvgRect(vg, lx + cx * P, ly + cy * P, P, P)
+        nvgFillColor(vg, color) nvgFill(vg)
+    end
 
-    -- 右侧柱
-    nvgBeginPath(vg) nvgRect(vg, railR, py, railW, G)
-    nvgFillColor(vg, darkWood) nvgFill(vg)
-    -- 高光边（右侧1px）
-    nvgBeginPath(vg) nvgRect(vg, railR + railW - P, py, P, G)
-    nvgFillColor(vg, midWood) nvgFill(vg)
-    -- 腐朽缺口
-    nvgBeginPath(vg) nvgRect(vg, railR + P, py + 10 * P, P, 2 * P)
-    nvgFillColor(vg, shadowWood) nvgFill(vg)
+    -- == 左侧柱（col 1-2, row 0-7）==
+    for r = 0, 7 do
+        pix(1, r, midWood)
+        pix(2, r, darkWood)
+    end
+    -- 像素高光（交替行左边缘亮一个块）
+    pix(1, 0, hiWood)
+    pix(1, 2, hiWood)
+    pix(1, 5, hiWood)
+    -- 腐朽暗块
+    pix(2, 3, shadowWood)
+    pix(1, 6, shadowWood)
 
-    -- 横档（2根，像素风带阴影）
-    local rungH = 2 * P
-    local rungY1 = py + 3 * P
-    local rungY2 = py + 10 * P
-    local rungL = railL + railW
-    local rungR = railR
-    local rungW = rungR - rungL
+    -- == 右侧柱（col 13-14, row 0-7）==
+    for r = 0, 7 do
+        pix(13, r, darkWood)
+        pix(14, r, midWood)
+    end
+    -- 像素高光
+    pix(14, 1, hiWood)
+    pix(14, 4, hiWood)
+    pix(14, 6, hiWood)
+    -- 腐朽暗块
+    pix(13, 2, shadowWood)
+    pix(14, 5, shadowWood)
 
-    -- 上横档
-    nvgBeginPath(vg) nvgRect(vg, rungL, rungY1, rungW, rungH)
-    nvgFillColor(vg, lightWood) nvgFill(vg)
-    -- 横档底部阴影（1px）
-    nvgBeginPath(vg) nvgRect(vg, rungL, rungY1 + rungH, rungW, P)
-    nvgFillColor(vg, shadowWood) nvgFill(vg)
+    -- == 上横档（row 2, col 3-12）==
+    for c = 3, 12 do
+        pix(c, 2, rungMain)
+    end
+    -- 横档高光（顶行交替亮块）
+    pix(4, 2, rungHi)
+    pix(6, 2, rungHi)
+    pix(9, 2, rungHi)
+    pix(11, 2, rungHi)
+    -- 横档底部阴影行
+    for c = 3, 12 do
+        pix(c, 3, shadowWood)
+    end
 
-    -- 下横档
-    nvgBeginPath(vg) nvgRect(vg, rungL, rungY2, rungW, rungH)
-    nvgFillColor(vg, lightWood) nvgFill(vg)
-    -- 横档底部阴影
-    nvgBeginPath(vg) nvgRect(vg, rungL, rungY2 + rungH, rungW, P)
-    nvgFillColor(vg, shadowWood) nvgFill(vg)
+    -- == 下横档（row 5, col 3-12）==
+    for c = 3, 12 do
+        pix(c, 5, rungMain)
+    end
+    -- 横档高光
+    pix(3, 5, rungHi)
+    pix(5, 5, rungHi)
+    pix(8, 5, rungHi)
+    pix(10, 5, rungHi)
+    -- 横档底部阴影行
+    for c = 3, 12 do
+        pix(c, 6, shadowWood)
+    end
 
-    -- === 魂类细节：苔藓与藤蔓 ===
-    -- 左侧柱顶部苔藓（2-3个像素块）
-    nvgBeginPath(vg) nvgRect(vg, railL - P, py, 2 * P, P)
-    nvgFillColor(vg, moss1) nvgFill(vg)
-    nvgBeginPath(vg) nvgRect(vg, railL, py + P, P, P)
-    nvgFillColor(vg, moss2) nvgFill(vg)
+    -- === 魂类细节：苔藓/藤蔓/腐败 ===
+    -- 左柱顶部苔藓
+    pix(0, 0, moss1)
+    pix(1, 0, moss2)  -- 覆盖在高光上形成苔藓
+    pix(0, 1, moss2)
 
-    -- 右侧柱底部藤蔓垂挂（像素锯齿状）
-    nvgBeginPath(vg) nvgRect(vg, railR + P, py + G - 3 * P, P, 3 * P)
-    nvgFillColor(vg, vine) nvgFill(vg)
-    nvgBeginPath(vg) nvgRect(vg, railR + 2 * P, py + G - 2 * P, P, 2 * P)
-    nvgFillColor(vg, moss2) nvgFill(vg)
+    -- 右柱底部藤蔓垂挂
+    pix(15, 6, vine)
+    pix(15, 7, vine)
+    pix(14, 7, moss2)
 
-    -- 上横档苔藓点缀
-    nvgBeginPath(vg) nvgRect(vg, rungL + 3 * P, rungY1, 2 * P, P)
-    nvgFillColor(vg, moss1) nvgFill(vg)
+    -- 横档上苔藓斑
+    pix(5, 2, moss1)
+    pix(7, 5, moss1)
 
-    -- 下横档腐败斑点
-    nvgBeginPath(vg) nvgRect(vg, rungL + 6 * P, rungY2 + P, P, P)
-    nvgFillColor(vg, decay) nvgFill(vg)
-    nvgBeginPath(vg) nvgRect(vg, rungL + 10 * P, rungY2, P, P)
-    nvgFillColor(vg, decay) nvgFill(vg)
+    -- 腐败斑点（散布在横档/柱上）
+    pix(9, 5, decay)
+    pix(2, 4, decay)
+    pix(13, 6, decay)
 
-    -- 左侧柱中部小藤蔓分支
-    nvgBeginPath(vg) nvgRect(vg, railL - P, py + 7 * P, P, 2 * P)
-    nvgFillColor(vg, vine) nvgFill(vg)
-    nvgBeginPath(vg) nvgRect(vg, railL - 2 * P, py + 8 * P, P, P)
-    nvgFillColor(vg, moss2) nvgFill(vg)
+    -- 左柱中部藤蔓枝
+    pix(0, 4, vine)
+    pix(0, 5, moss2)
 end
 
 ------------------------------------------------------------

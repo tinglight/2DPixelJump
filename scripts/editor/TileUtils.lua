@@ -44,7 +44,7 @@ function M.IsTileSelectable(levelData, col, row, mapCols, mapRows)
     if col < 1 or col > mapCols then return false end
     if row < 1 or row > mapRows then return false end
     local val = levelData[row][col]
-    if val == TILE.EMPTY or val == TILE.SOLID or val == TILE.SOLID_PILLAR then
+    if val == TILE.EMPTY or val == TILE.SOLID or val == TILE.SOLID_PILLAR or val == TILE.SOLID_SEWER then
         return false
     end
     return true

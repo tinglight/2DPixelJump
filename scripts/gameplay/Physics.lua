@@ -50,7 +50,7 @@ function M.IsSolid(col, row)
     if row > Config.MAP_ROWS then return false end
     local val = levelData[row][col]
     local base, group = M.GetTileType(val)
-    if base == TILE.SOLID or base == TILE.SOLID_PILLAR then return true end
+    if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER then return true end
     if base == TILE.GATE then
         if not switchState[group] then return true end
     end
@@ -67,7 +67,7 @@ function M.IsSolidForLight(col, row)
     local val = levelData[row][col]
     if not val or val == 0 then return false end
     local base = M.GetTileType(val)
-    return base == TILE.SOLID or base == TILE.SOLID_PILLAR
+    return base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER
 end
 
 --- 判断某格是否为平台（当前无平台类型）
