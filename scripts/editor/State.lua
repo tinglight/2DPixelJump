@@ -35,6 +35,9 @@ S.playViewH = C.DESIGN_W * 9 / 16  -- 480 * 0.5625 = 270
 -- ====================================================================
 S.fromMainMenu = false
 
+-- 编辑器激活标记（返回主菜单时置 false，阻止所有渲染和事件处理）
+S.editorActive = true
+
 -- ====================================================================
 -- 编辑器核心状态
 -- ====================================================================
@@ -286,6 +289,9 @@ S.play = {
     inWater = false,
     inBlackWater = false,
     waterDrainAccum = 0,
+    fragilePrevPlatform = nil,  -- 上一帧站立的脆弱平台连通集合
+    fragileGone = {},           -- {["row_col"] = true} 已消失的脆弱格子
+    fragileParticles = {},      -- 碎裂粒子列表
 }
 
 -- 像素状态

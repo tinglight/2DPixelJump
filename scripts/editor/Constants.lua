@@ -50,6 +50,7 @@ M.TILE = {
     SOLID_PILLAR = 13,
     CHECKPOINT   = 14,
     PIPE         = 15,
+    FRAGILE      = 16,
 }
 
 -- ====================================================================
@@ -142,10 +143,11 @@ M.TOOLS = {
     { id = "HIDDEN_WALL", tile = M.TILE.HIDDEN_WALL, name = "隐墙", color = {100, 180, 200, 255}, group = "puzzle" },
     { id = "LADDER",      tile = M.TILE.LADDER,      name = "梯子", color = {160, 110, 50, 255},  group = "terrain" },
     { id = "CHECKPOINT",  tile = M.TILE.CHECKPOINT,   name = "篝火", color = {255, 140, 30, 255},  group = "pickup" },
+    { id = "FRAGILE",     tile = M.TILE.FRAGILE,     name = "脆台", color = {180, 150, 100, 255}, group = "terrain" },
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
 }
 
-M.LIGHT_TOOL_INDEX = 16
+M.LIGHT_TOOL_INDEX = 17
 M.HIDDEN_WALL_TOOL_INDEX = 13
 
 -- ====================================================================

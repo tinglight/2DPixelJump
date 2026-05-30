@@ -362,6 +362,30 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             end
         end
         ::skipPipe::
+
+    elseif base == TILE.FRAGILE then
+        -- 编辑器预览：沙土色方块 + 裂纹标记
+        nvgBeginPath(vg)
+        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, zGrid - 1)
+        nvgFillColor(vg, nvgRGBA(175, 145, 95, 255))
+        nvgFill(vg)
+        -- 顶部高光
+        nvgBeginPath(vg)
+        nvgRect(vg, px + 0.5, py + 0.5, zGrid - 1, 2)
+        nvgFillColor(vg, nvgRGBA(215, 190, 135, 255))
+        nvgFill(vg)
+        -- X 标记表示脆弱
+        nvgStrokeColor(vg, nvgRGBA(100, 65, 20, 180))
+        nvgStrokeWidth(vg, 1.0)
+        local m = 3
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + m, py + m)
+        nvgLineTo(vg, px + zGrid - m, py + zGrid - m)
+        nvgStroke(vg)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, px + zGrid - m, py + m)
+        nvgLineTo(vg, px + m, py + zGrid - m)
+        nvgStroke(vg)
     end
 end
 

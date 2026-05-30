@@ -108,6 +108,7 @@ function M.IsSolid(col, row)
     if base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR then return true end
     if base == C.TILE.GATE and not S.play.switchState[group] then return true end
     if base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then return true end
+    if base == C.TILE.FRAGILE and not S.play.fragileGone[row .. "_" .. col] then return true end
     return false
 end
 
@@ -323,38 +324,18 @@ function M.Update(dt)
         return
     end
 
-    -- F2 快捷键：快速进入关卡编辑器（无论是否暂停）
-    if S.fromMainMenu and input:GetKeyPress(KEY_F2) then
-        PauseMenu.Close()
-        S.fromMainMenu = false
-        return
-    end
+    -- ESC 统一由 InputHandler.HandleKeyDown 处理返回主菜单
 
-    -- F3 快捷键：退出编辑器模式回到主菜单（无论是否暂停）
-    if S.fromMainMenu and input:GetKeyPress(KEY_F3) then
-        PauseMenu.Close()
-        S.fromMainMenu = false
-        -- 触发回到主菜单回调
-        local PauseMenuMod = require("PauseMenu")
-        PauseMenuMod.BackToMenu()
-        return
-    end
-
-    -- 暂停时仅处理 ESC 切换，跳过游戏逻辑
+    -- 暂停时跳过游戏逻辑
     if PauseMenu.IsPaused() then
-        if input:GetKeyPress(KEY_ESCAPE) then
-            PauseMenu.Close()
-        end
         return
     end
 
-    if input:GetKeyPress(KEY_ESCAPE) then
+    if false then -- ESC 已由 InputHandler 统一处理，此分支保留结构但不执行
         if S.fromMainMenu then
-            -- 从主菜单进入：ESC 切换暂停菜单
             PauseMenu.Toggle()
             return
         else
-            -- 从编辑器进入：ESC 退回编辑模式
             CleanupCheckpointLight()
             PipeSystem.StopSound()
             if S.editorMode == C.MODE_PLAY then
@@ -381,6 +362,7 @@ function M.Update(dt)
     M.HandleProjectileInput()
     M.UpdateVerticalPhysics(dt)
     M.UpdateGroundRecovery(dt)
+    M.UpdateFragilePlatform(dt)
     CrossLevel.Update(dt)
     M.UpdateBonfireMessage(dt)
 
@@ -828,6 +810,168 @@ function M.UpdateGroundRecovery(dt)
     end
 end
 
+------------------------------------------------------------
+-- 脆弱平台系统
+------------------------------------------------------------
+
+--- 从一个格子出发，用 BFS 找到所有连通的脆弱格子
+local function FloodFillFragile(startRow, startCol)
+    local visited = {}
+    local queue = { { startRow, startCol } }
+    visited[startRow .. "_" .. startCol] = true
+    local idx = 1
+    while idx <= #queue do
+        local r, c = queue[idx][1], queue[idx][2]
+        idx = idx + 1
+        -- 检查四邻
+        local neighbors = { {r-1, c}, {r+1, c}, {r, c-1}, {r, c+1} }
+        for _, nb in ipairs(neighbors) do
+            local nr, nc = nb[1], nb[2]
+            local key = nr .. "_" .. nc
+            if nr >= 1 and nr <= S.MAP_ROWS and nc >= 1 and nc <= S.MAP_COLS
+               and not visited[key] and not S.play.fragileGone[key] then
+                local val = S.levelData[nr][nc]
+                if val and TileUtils.GetTileType(val) == C.TILE.FRAGILE then
+                    visited[key] = true
+                    queue[#queue + 1] = { nr, nc }
+                end
+            end
+        end
+    end
+    return visited  -- set of "row_col" keys
+end
+
+--- 获取玩家脚下的脆弱平台连通集合（如果站在脆弱格子上）
+local function GetFragilePlatformUnderFeet()
+    if not S.play.isOnGround then return nil end
+    local s = M.PlayerGridSize()
+    local feetRow = S.play.gridY + s
+    for dx = 0, s - 1 do
+        local col = S.play.gridX + dx
+        if col >= 1 and col <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
+            local val = S.levelData[feetRow][col]
+            if val then
+                local base = TileUtils.GetTileType(val)
+                local key = feetRow .. "_" .. col
+                if base == C.TILE.FRAGILE and not S.play.fragileGone[key] then
+                    -- 找到一个脆弱格子，flood fill 整个连通平台
+                    return FloodFillFragile(feetRow, col)
+                end
+            end
+        end
+    end
+    return nil
+end
+
+--- 碎裂音效用独立 Scene 承载
+local fragileAudioScene = nil
+
+--- 播放碎裂音效
+local function PlayFragileCrumbleSound()
+    local sound = cache:GetResource("Sound", "audio/sfx/fragile_crumble.ogg")
+    if not sound then return end
+    sound.looped = false
+    if not fragileAudioScene then
+        fragileAudioScene = Scene()
+        fragileAudioScene:CreateComponent("Octree")
+    end
+    local node = fragileAudioScene:CreateChild("FragileSfx")
+    local src = node:CreateComponent("SoundSource")
+    src.soundType = "Effect"
+    src:Play(sound)
+    src.autoRemoveMode = REMOVE_NODE
+end
+
+--- 销毁一个脆弱平台（生成碎裂粒子）
+local function DestroyFragilePlatform(platformSet)
+    PlayFragileCrumbleSound()
+    for key, _ in pairs(platformSet) do
+        S.play.fragileGone[key] = true
+        -- 解析 row_col
+        local sep = key:find("_")
+        local row = tonumber(key:sub(1, sep - 1))
+        local col = tonumber(key:sub(sep + 1))
+        -- 为每个格子生成碎裂粒子
+        local cx = (col - 1) * C.GRID + C.GRID * 0.5
+        local cy = (row - 1) * C.GRID + C.GRID * 0.5
+        for _ = 1, 6 do
+            table.insert(S.play.fragileParticles, {
+                x = cx + (math.random() - 0.5) * C.GRID * 0.6,
+                y = cy + (math.random() - 0.5) * C.GRID * 0.6,
+                vx = (math.random() - 0.5) * 80,
+                vy = -(30 + math.random() * 50),
+                size = 1.5 + math.random() * 2.0,
+                life = 0.6 + math.random() * 0.4,
+                maxLife = 1.0,
+                gravity = 200 + math.random() * 60,
+                rot = math.random() * 6.28,
+                rotSpeed = (math.random() - 0.5) * 8,
+            })
+        end
+    end
+end
+
+--- 每帧检测脆弱平台状态（站上后离开即触发销毁）
+function M.UpdateFragilePlatform(dt)
+    -- 更新粒子
+    local i = 1
+    while i <= #S.play.fragileParticles do
+        local p = S.play.fragileParticles[i]
+        p.life = p.life - dt
+        if p.life <= 0 then
+            table.remove(S.play.fragileParticles, i)
+        else
+            p.vy = p.vy + p.gravity * dt
+            p.x = p.x + p.vx * dt
+            p.y = p.y + p.vy * dt
+            p.rot = p.rot + p.rotSpeed * dt
+            i = i + 1
+        end
+    end
+
+    -- 检测玩家脚下脆弱平台
+    local currentPlatform = GetFragilePlatformUnderFeet()
+
+    if S.play.fragilePrevPlatform and not currentPlatform then
+        -- 玩家离开了之前站的脆弱平台 → 销毁它
+        DestroyFragilePlatform(S.play.fragilePrevPlatform)
+        S.play.fragilePrevPlatform = nil
+    elseif S.play.fragilePrevPlatform and currentPlatform then
+        -- 检查是否还在同一个平台上（通过判断是否有交集）
+        local sameplatform = false
+        for key, _ in pairs(currentPlatform) do
+            if S.play.fragilePrevPlatform[key] then
+                sameplatform = true
+                break
+            end
+        end
+        if not sameplatform then
+            -- 离开旧平台跳到了新平台 → 销毁旧平台
+            DestroyFragilePlatform(S.play.fragilePrevPlatform)
+        end
+        S.play.fragilePrevPlatform = currentPlatform
+    else
+        S.play.fragilePrevPlatform = currentPlatform
+    end
+end
+
+--- 绘制脆弱平台碎裂粒子
+function M.DrawFragileParticles(vg)
+    for _, p in ipairs(S.play.fragileParticles) do
+        local alpha = math.floor(255 * (p.life / p.maxLife))
+        local px = p.x - S.playCameraX
+        local py = p.y - S.playCameraY
+        nvgSave(vg)
+        nvgTranslate(vg, px, py)
+        nvgRotate(vg, p.rot)
+        nvgBeginPath(vg)
+        nvgRect(vg, -p.size * 0.5, -p.size * 0.5, p.size, p.size)
+        nvgFillColor(vg, nvgRGBA(160, 130, 80, alpha))
+        nvgFill(vg)
+        nvgRestore(vg)
+    end
+end
+
 function M.UpdateCamera(dt)
     local zoom = S.playerParams.cameraZoom or 1.0
 
@@ -1066,6 +1210,9 @@ function M.UpdateTransition(dt)
                     S.play.collected = {}
                     S.play.switchState = {}
                     S.play.hiddenWallRevealed = {}
+                    S.play.fragilePrevPlatform = nil
+                    S.play.fragileGone = {}
+                    S.play.fragileParticles = {}
                     -- 在 switchState 重置后，重新应用跨关卡开关状态
                     CrossLevel.ApplyCrossSwitches(S.worldPlayCurrentFile)
                     S.SetMessage("进入: " .. t.pendingFile, 1.5)
@@ -1143,6 +1290,9 @@ local function ResetPlayState()
     S.play.switchState = {}
     S.play.collected = {}
     S.play.hiddenWallRevealed = {}
+    S.play.fragilePrevPlatform = nil
+    S.play.fragileGone = {}
+    S.play.fragileParticles = {}
     S.play.inWater = false
     S.play.inBlackWater = false
     S.play.waterDrainAccum = 0
@@ -1265,6 +1415,10 @@ function M.Respawn()
     S.tipPixels = {}
     S.tipSpawnTimer = 0
     S.playFallParticles = {}
+    -- 重置脆弱平台
+    S.play.fragilePrevPlatform = nil
+    S.play.fragileGone = {}
+    S.play.fragileParticles = {}
     -- 相机立即跟随到重生点
     M.SnapCameraToPlayer()
 end
@@ -1351,6 +1505,7 @@ function M.Draw()
     M.DrawBackground(vg)
     local startCol, endCol = M.DrawGrid(vg)
     M.DrawTiles(vg, startCol, endCol)
+    M.DrawFragileParticles(vg)
     PipeSystem.DrawParticles(vg, S.playCameraX, S.playCameraY)
     FlameRenderer.UpdateFlameAnim()
     FlameRenderer.Draw()
@@ -1484,6 +1639,8 @@ function M.DrawOneTile(vg, px, py, base, group, row, col)
         M.DrawCheckpointTile(vg, px, py, row, col)
     elseif base == C.TILE.PIPE then
         M.DrawPipeTile(vg, px, py, row, col)
+    elseif base == C.TILE.FRAGILE then
+        M.DrawFragileTile(vg, px, py, row, col)
     end
 end
 
@@ -2362,6 +2519,55 @@ function M.DrawPipeTile(vg, px, py, row, col)
     local switchGroup, waterTypeIndex = TileUtils.ParsePipeValue(val)
     local pipe = { switchGroup = switchGroup, waterTypeIndex = waterTypeIndex, col = col, row = row }
     PipeSystem.DrawPipe(vg, px, py, pipe)
+end
+
+------------------------------------------------------------
+-- 脆弱平台绘制（试玩模式）
+------------------------------------------------------------
+
+function M.DrawFragileTile(vg, px, py, row, col)
+    local key = row .. "_" .. col
+    if S.play.fragileGone[key] then return end  -- 已消失则不绘制
+
+    local G = C.GRID
+    -- 判断玩家是否正站在此平台上（给视觉反馈）
+    local onIt = false
+    if S.play.fragilePrevPlatform and S.play.fragilePrevPlatform[key] then
+        onIt = true
+    end
+
+    -- 基底色块（站在上面时颜色微变，表示即将碎裂）
+    local r1 = onIt and 155 or 175
+    local g1 = onIt and 125 or 145
+    local b1 = onIt and 75 or 95
+    nvgBeginPath(vg)
+    nvgRect(vg, px + 0.5, py + 0.5, G - 1, G - 1)
+    nvgFillColor(vg, nvgRGBA(r1, g1, b1, 255))
+    nvgFill(vg)
+
+    -- 顶部高光
+    nvgBeginPath(vg)
+    nvgRect(vg, px + 0.5, py + 0.5, G - 1, 2)
+    nvgFillColor(vg, nvgRGBA(215, 190, 135, 255))
+    nvgFill(vg)
+
+    -- 站在上面时显示裂纹
+    if onIt then
+        local cx = px + G * 0.5
+        local cy = py + G * 0.5
+        nvgStrokeColor(vg, nvgRGBA(70, 45, 10, 210))
+        nvgStrokeWidth(vg, 1.0)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx, py + 2)
+        nvgLineTo(vg, cx - 3, cy)
+        nvgLineTo(vg, cx + 2, cy + 4)
+        nvgLineTo(vg, cx, py + G - 2)
+        nvgStroke(vg)
+        nvgBeginPath(vg)
+        nvgMoveTo(vg, cx - 4, cy - 1)
+        nvgLineTo(vg, cx + 4, cy + 2)
+        nvgStroke(vg)
+    end
 end
 
 return M
