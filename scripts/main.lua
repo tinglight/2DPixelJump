@@ -87,6 +87,10 @@ function Start()
     SampleStart()
     SampleInitMouseMode(MM_FREE)
 
+    -- [临时] 云端关卡数据恢复诊断
+    local Recovery = require "cloud_recovery"
+    Recovery.RestoreAll()
+
     MainMenu.Init({
         onStartGame = LaunchGame,
         onContinue = LaunchGame,

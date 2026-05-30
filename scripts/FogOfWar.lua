@@ -298,6 +298,8 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
 
     local maxLight = 0
     for _, light in ipairs(lightSources) do
+        if light.diameter <= 0 then goto continueLight end
+
         local dx = cellCol - light.col
         local dy = cellRow - light.row
 
@@ -1045,33 +1047,30 @@ local function StartZoneTransition(oldZone, newZone)
     for _, light in ipairs(lightSources) do
         local lightZone = GetLightZoneIndex(light.col, light.row)
 
-        if lightZone == 0 then
-            -- 不在任何区域内的光源：始终可见，不处理
-
-        elseif newZone == 0 then
+        if newZone == 0 then
             -- 玩家离开所有区域 → 恢复所有被隐藏的光源
             if light._originalDiameter then
                 zoneState.fadeInDiameters[light] = light._originalDiameter
-                -- diameter 当前是 0，将渐入
             end
 
         elseif oldZone == 0 then
-            -- 玩家从无区域进入区域 → 隐藏不属于新区域的光
+            -- 玩家从无区域进入区域 → 只保留新区域的光，其他全灭
             if lightZone ~= newZone then
                 zoneState.fadeOutDiameters[light] = light.diameter
             end
 
         else
-            -- 玩家从区域A切换到区域B
-            if lightZone == oldZone then
-                -- 旧区域的光：淡出
-                zoneState.fadeOutDiameters[light] = light.diameter
-            elseif lightZone == newZone then
+            -- 玩家从区域A切换到区域B → 旧区域灭，新区域亮
+            if lightZone == newZone then
                 -- 新区域的光：淡入
                 local target = light._originalDiameter or light.diameter
                 zoneState.fadeInDiameters[light] = target
-                light.diameter = 0.1  -- 从极小开始渐入
+                light.diameter = 0.1
+            elseif lightZone == oldZone then
+                -- 旧区域的光：淡出
+                zoneState.fadeOutDiameters[light] = light.diameter
             end
+            -- 其他区域和无区域的光保持当前状态（已经是灭的）
         end
     end
 end
@@ -1147,8 +1146,8 @@ function FogOfWar.UpdatePlayerZone(playerCol, playerRow, dt)
 end
 
 --- 初始化光源可见性（进入试玩模式时调用）
---- 根据玩家初始位置，只显示玩家所在区域的光源，隐藏其他区域的光源
---- 不在任何区域内的光源始终可见
+--- 玩家在区域X内 → 只有区域X内的光源亮，其他全灭
+--- 玩家不在任何区域 → 所有光源都亮
 ---@param playerCol number
 ---@param playerRow number
 function FogOfWar.InitZoneVisibility(playerCol, playerRow)
@@ -1161,11 +1160,13 @@ function FogOfWar.InitZoneVisibility(playerCol, playerRow)
     local initialZone = FogOfWar.DetectPlayerZone(playerCol, playerRow)
     zoneState.activeGroup = initialZone
 
-    -- 设置光源初始可见性：不在玩家所在区域内的光源隐藏
+    -- 玩家不在任何区域内，所有光源正常显示
+    if initialZone == 0 then return end
+
+    -- 玩家在某个区域内：只亮该区域的灯，其他全灭
     for _, light in ipairs(lightSources) do
         local lightZone = GetLightZoneIndex(light.col, light.row)
-        -- lightZone == 0 表示不在任何区域内，始终可见
-        if lightZone > 0 and lightZone ~= initialZone then
+        if lightZone ~= initialZone then
             light._originalDiameter = light.diameter
             light.diameter = 0
         end
