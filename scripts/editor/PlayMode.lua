@@ -290,8 +290,8 @@ function M.ProcessTileAt(col, row)
         M.SyncFallGridCount()
         S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
         M.ShowBonfireMessage()
-        -- 世界试玩模式：保存玩家进度到云端（不影响编辑器数据）
-        if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile then
+        -- 世界试玩模式：仅正式游戏时保存玩家进度到云端（编辑器试玩不保存）
+        if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile and S.fromMainMenu then
             M.SavePlayerProgress()
         end
     end
@@ -661,7 +661,7 @@ function M.AgeFallParticles(dt)
 end
 
 function M.HandleMovementInput(dt)
-    -- 攀爬中：仅允许水平移动到有地面支撑的位置（从梯子顶部走上平台）
+    -- 攀爬中：允许水平移动（留在梯子范围内自由移动，移到有地面的位置则退出攀爬）
     if S.play.isClimbing then
         local curLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
         local curRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
@@ -670,17 +670,20 @@ function M.HandleMovementInput(dt)
         elseif curRight and not curLeft then dir = 1 end
         if dir ~= 0 then
             local newX = S.play.gridX + dir
-            if not M.Collides(newX, S.play.gridY) and M.OnGround(newX, S.play.gridY) then
+            if not M.Collides(newX, S.play.gridY) then
                 S.play.gridX = newX
-                S.play.isClimbing = false
-                S.play.climbTimer = 0
                 S.play.facingRight = (dir > 0)
+                -- 移动后如果脚下有地面或离开梯子范围，退出攀爬
+                if M.OnGround(newX, S.play.gridY) or not M.IsOnLadder(newX, S.play.gridY) then
+                    S.play.isClimbing = false
+                    S.play.climbTimer = 0
+                end
             end
         end
         S.play.isMoving = false
         S.play.moveAnimTime = 0
-        S.prevPlayLeft = false
-        S.prevPlayRight = false
+        S.prevPlayLeft = curLeft
+        S.prevPlayRight = curRight
         return
     end
 
@@ -2363,32 +2366,97 @@ function M.DrawLadderTile(vg, px, py, row, col)
         if leftBase == C.TILE.LADDER then return end
     end
 
-    local G = C.GRID
-    local W = G * 2  -- 2格宽
-    -- 两根竖直侧柱（深棕色）
-    local railW = 2
-    local railL = px + 1
-    local railR = px + W - 3
-    nvgBeginPath(vg)
-    nvgRect(vg, railL, py, railW, G)
-    nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
-    nvgFill(vg)
-    nvgBeginPath(vg)
-    nvgRect(vg, railR, py, railW, G)
-    nvgFillColor(vg, nvgRGBA(120, 75, 30, 255))
-    nvgFill(vg)
-    -- 横档（浅棕色，2根，跨越2格宽）
-    local rungH = 2
-    local rungY1 = py + G * 0.3
-    local rungY2 = py + G * 0.7
-    nvgBeginPath(vg)
-    nvgRect(vg, railL, rungY1, railR + railW - railL, rungH)
-    nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
-    nvgFill(vg)
-    nvgBeginPath(vg)
-    nvgRect(vg, railL, rungY2, railR + railW - railL, rungH)
-    nvgFillColor(vg, nvgRGBA(180, 130, 60, 255))
-    nvgFill(vg)
+    local G = C.GRID          -- 16
+    local W = G * 2            -- 32 (2格宽)
+    local P = 1                -- 像素单位
+
+    -- === 像素风魂类腐朽梯子 ===
+    -- 颜色定义（暗色系、腐朽木质）
+    local darkWood   = nvgRGBA(62, 43, 25, 255)    -- 深腐木色（侧柱主色）
+    local midWood    = nvgRGBA(85, 58, 32, 255)    -- 中间木色（侧柱高光）
+    local lightWood  = nvgRGBA(110, 78, 42, 255)   -- 浅木色（横档主色）
+    local shadowWood = nvgRGBA(40, 28, 15, 255)    -- 阴影色（横档暗面）
+    local moss1      = nvgRGBA(45, 90, 35, 255)    -- 苔藓深绿
+    local moss2      = nvgRGBA(65, 120, 50, 200)   -- 苔藓亮绿
+    local vine       = nvgRGBA(35, 75, 30, 230)    -- 藤蔓暗绿
+    local decay      = nvgRGBA(55, 50, 30, 180)    -- 腐败斑点
+
+    -- 侧柱参数
+    local railW = 3 * P
+    local railL = px + 2 * P
+    local railR = px + W - 5 * P
+
+    -- 左侧柱（像素逐行绘制效果）
+    -- 主体
+    nvgBeginPath(vg) nvgRect(vg, railL, py, railW, G)
+    nvgFillColor(vg, darkWood) nvgFill(vg)
+    -- 高光边（左侧1px）
+    nvgBeginPath(vg) nvgRect(vg, railL, py, P, G)
+    nvgFillColor(vg, midWood) nvgFill(vg)
+    -- 腐朽缺口（中部像素块缺失效果）
+    nvgBeginPath(vg) nvgRect(vg, railL + P, py + 5 * P, P, 2 * P)
+    nvgFillColor(vg, shadowWood) nvgFill(vg)
+
+    -- 右侧柱
+    nvgBeginPath(vg) nvgRect(vg, railR, py, railW, G)
+    nvgFillColor(vg, darkWood) nvgFill(vg)
+    -- 高光边（右侧1px）
+    nvgBeginPath(vg) nvgRect(vg, railR + railW - P, py, P, G)
+    nvgFillColor(vg, midWood) nvgFill(vg)
+    -- 腐朽缺口
+    nvgBeginPath(vg) nvgRect(vg, railR + P, py + 10 * P, P, 2 * P)
+    nvgFillColor(vg, shadowWood) nvgFill(vg)
+
+    -- 横档（2根，像素风带阴影）
+    local rungH = 2 * P
+    local rungY1 = py + 3 * P
+    local rungY2 = py + 10 * P
+    local rungL = railL + railW
+    local rungR = railR
+    local rungW = rungR - rungL
+
+    -- 上横档
+    nvgBeginPath(vg) nvgRect(vg, rungL, rungY1, rungW, rungH)
+    nvgFillColor(vg, lightWood) nvgFill(vg)
+    -- 横档底部阴影（1px）
+    nvgBeginPath(vg) nvgRect(vg, rungL, rungY1 + rungH, rungW, P)
+    nvgFillColor(vg, shadowWood) nvgFill(vg)
+
+    -- 下横档
+    nvgBeginPath(vg) nvgRect(vg, rungL, rungY2, rungW, rungH)
+    nvgFillColor(vg, lightWood) nvgFill(vg)
+    -- 横档底部阴影
+    nvgBeginPath(vg) nvgRect(vg, rungL, rungY2 + rungH, rungW, P)
+    nvgFillColor(vg, shadowWood) nvgFill(vg)
+
+    -- === 魂类细节：苔藓与藤蔓 ===
+    -- 左侧柱顶部苔藓（2-3个像素块）
+    nvgBeginPath(vg) nvgRect(vg, railL - P, py, 2 * P, P)
+    nvgFillColor(vg, moss1) nvgFill(vg)
+    nvgBeginPath(vg) nvgRect(vg, railL, py + P, P, P)
+    nvgFillColor(vg, moss2) nvgFill(vg)
+
+    -- 右侧柱底部藤蔓垂挂（像素锯齿状）
+    nvgBeginPath(vg) nvgRect(vg, railR + P, py + G - 3 * P, P, 3 * P)
+    nvgFillColor(vg, vine) nvgFill(vg)
+    nvgBeginPath(vg) nvgRect(vg, railR + 2 * P, py + G - 2 * P, P, 2 * P)
+    nvgFillColor(vg, moss2) nvgFill(vg)
+
+    -- 上横档苔藓点缀
+    nvgBeginPath(vg) nvgRect(vg, rungL + 3 * P, rungY1, 2 * P, P)
+    nvgFillColor(vg, moss1) nvgFill(vg)
+
+    -- 下横档腐败斑点
+    nvgBeginPath(vg) nvgRect(vg, rungL + 6 * P, rungY2 + P, P, P)
+    nvgFillColor(vg, decay) nvgFill(vg)
+    nvgBeginPath(vg) nvgRect(vg, rungL + 10 * P, rungY2, P, P)
+    nvgFillColor(vg, decay) nvgFill(vg)
+
+    -- 左侧柱中部小藤蔓分支
+    nvgBeginPath(vg) nvgRect(vg, railL - P, py + 7 * P, P, 2 * P)
+    nvgFillColor(vg, vine) nvgFill(vg)
+    nvgBeginPath(vg) nvgRect(vg, railL - 2 * P, py + 8 * P, P, P)
+    nvgFillColor(vg, moss2) nvgFill(vg)
 end
 
 ------------------------------------------------------------
