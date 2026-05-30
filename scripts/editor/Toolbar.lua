@@ -725,6 +725,11 @@ end
 -- ====================================================================
 -- DrawBottomBar - 底部状态栏
 -- ====================================================================
+-- 回收站按钮布局常量
+local TRASH_BTN_W = 38
+local TRASH_BTN_H = 14
+local TRASH_BTN_MARGIN = 6
+
 function M.DrawBottomBar()
     local vg = S.vg
     local statusH = 16
@@ -749,6 +754,67 @@ function M.DrawBottomBar()
         nvgFillColor(vg, nvgRGBA(100, 255, 100, math.min(255, math.floor(S.msgTimer * 255))))
         nvgText(vg, S.screenDesignW - 6, by + statusH * 0.5, S.msgText)
     end
+
+    -- 回收站按钮（右下角，状态栏上方）
+    M.DrawTrashButton(vg)
+end
+
+--- 绘制回收站按钮（底部工具栏右下方）
+function M.DrawTrashButton(vg)
+    local statusH = 16
+    local btnX = S.screenDesignW - TRASH_BTN_W - TRASH_BTN_MARGIN
+    local btnY = S.screenDesignH - statusH - TRASH_BTN_H - 4
+
+    -- 存储位置供命中检测使用
+    S.trashBtnRect = { x = btnX, y = btnY, w = TRASH_BTN_W, h = TRASH_BTN_H }
+
+    -- 检查是否有回收站内容
+    local CloudStorage = require "CloudStorage"
+    local trashList = CloudStorage.ListTrash()
+    local hasItems = #trashList > 0
+
+    -- 鼠标悬停检测
+    local mx = input:GetMousePosition().x / S.dpr / S.scaleF
+    local my = input:GetMousePosition().y / S.dpr / S.scaleF
+    local isHover = mx >= btnX and mx < btnX + TRASH_BTN_W and my >= btnY and my < btnY + TRASH_BTN_H
+
+    -- 按钮背景
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, btnX, btnY, TRASH_BTN_W, TRASH_BTN_H, 3)
+    if isHover then
+        nvgFillColor(vg, nvgRGBA(80, 60, 60, 240))
+    else
+        nvgFillColor(vg, nvgRGBA(45, 35, 45, 220))
+    end
+    nvgFill(vg)
+
+    -- 边框
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, btnX, btnY, TRASH_BTN_W, TRASH_BTN_H, 3)
+    nvgStrokeColor(vg, hasItems and nvgRGBA(200, 100, 80, 180) or nvgRGBA(80, 80, 100, 150))
+    nvgStrokeWidth(vg, 0.8)
+    nvgStroke(vg)
+
+    -- 文字
+    nvgFontFace(vg, "sans")
+    nvgFontSize(vg, 8)
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, hasItems and nvgRGBA(255, 140, 120, 255) or nvgRGBA(150, 150, 160, 200))
+    local label = "回收站"
+    if hasItems then
+        label = "回收站(" .. #trashList .. ")"
+    end
+    nvgText(vg, btnX + TRASH_BTN_W * 0.5, btnY + TRASH_BTN_H * 0.5, label)
+end
+
+--- 命中检测：回收站按钮
+---@param mx number
+---@param my number
+---@return boolean
+function M.HitTestTrashButton(mx, my)
+    if not S.trashBtnRect then return false end
+    local r = S.trashBtnRect
+    return mx >= r.x and mx < r.x + r.w and my >= r.y and my < r.y + r.h
 end
 
 -- ====================================================================

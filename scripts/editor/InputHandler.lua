@@ -602,6 +602,12 @@ function M.HandleMouseDown(button, mx, my)
         return
     end
 
+    -- 回收站按钮（底部右下角）
+    if button == MOUSEB_LEFT and Toolbar.HitTestTrashButton(mx, my) then
+        Dialogs.OpenTrashDialog()
+        return
+    end
+
     -- 底部工具栏（barY 与渲染一致：减去状态栏16px）
     local barY = S.screenDesignH - BOTTOMBAR_H - 16
     if my >= barY and my < S.screenDesignH - 16 and button == MOUSEB_LEFT then

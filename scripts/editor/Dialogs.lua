@@ -168,6 +168,12 @@ function M.OpenDeleteDialog(lv)
     S.dialogTarget = lv
 end
 
+function M.OpenTrashDialog()
+    S.dialogMode = "trash"
+    S.trashDialogList = CloudStorage.ListTrash()
+    S.trashDialogScroll = 0
+end
+
 -- 可选的背景图列表（资源路径，相对于 assets/）
 local BG_IMAGE_OPTIONS = {
     { path = "image/传火祭祀场背景_20260530100114.png", name = "传火祭祀场(火光)" },
@@ -296,6 +302,10 @@ local function GetDialogSize()
     elseif S.dialogMode == "player" then w = 200; h = 190
     elseif S.dialogMode == "light" then h = 122
     elseif S.dialogMode == "background" then w = 200; h = 30 + (#BG_IMAGE_OPTIONS + 1) * 18 + 24 + 32
+    elseif S.dialogMode == "trash" then
+        local itemCount = S.trashDialogList and #S.trashDialogList or 0
+        local visibleItems = math.min(itemCount, 6)
+        w = 220; h = 30 + math.max(visibleItems, 1) * 20 + 36
     end
     return w, h
 end
@@ -646,6 +656,91 @@ local function DrawBackgroundDialog(vg, dlgX, dlgY, dlgW, dlgH)
     DrawButtons(vg, dlgX, dlgY, dlgW, dlgH, "确认", 40, 100, 140)
 end
 
+local function DrawTrashDialog(vg, dlgX, dlgY, dlgW, dlgH)
+    DrawTitle(vg, dlgX, dlgW, dlgY, "回收站", 255, 140, 120)
+
+    local list = S.trashDialogList or {}
+    local itemH = 20
+    local startY = dlgY + 26
+    local itemX = dlgX + 8
+    local itemW = dlgW - 16
+    local restoreBtnW = 28
+    local restoreBtnH = 12
+
+    -- 存储按钮区域供点击使用
+    S.trashDialogBtns = {}
+
+    if #list == 0 then
+        nvgFontSize(vg, 9)
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, nvgRGBA(140, 140, 160, 200))
+        nvgText(vg, dlgX + dlgW * 0.5, startY + 20, "回收站为空")
+    else
+        local visibleCount = math.min(#list, 6)
+        for i = 1, visibleCount do
+            local item = list[i]
+            local iy = startY + (i - 1) * itemH
+
+            -- 行背景（交替色）
+            nvgBeginPath(vg)
+            nvgRoundedRect(vg, itemX, iy, itemW, itemH - 2, 3)
+            if i % 2 == 0 then
+                nvgFillColor(vg, nvgRGBA(30, 28, 40, 255))
+            else
+                nvgFillColor(vg, nvgRGBA(25, 25, 35, 255))
+            end
+            nvgFill(vg)
+
+            -- 文件名
+            nvgFontSize(vg, 8)
+            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+            nvgFillColor(vg, nvgRGBA(200, 200, 210, 255))
+            local displayName = item.fname:gsub("%.json$", "")
+            nvgText(vg, itemX + 4, iy + itemH * 0.5 - 1, displayName)
+
+            -- 剩余时间
+            local hours = math.floor(item.remainSeconds / 3600)
+            local mins = math.floor((item.remainSeconds % 3600) / 60)
+            local timeStr = hours .. "h" .. mins .. "m"
+            nvgFontSize(vg, 7)
+            nvgTextAlign(vg, NVG_ALIGN_RIGHT + NVG_ALIGN_MIDDLE)
+            nvgFillColor(vg, nvgRGBA(120, 120, 140, 180))
+            nvgText(vg, itemX + itemW - restoreBtnW - 6, iy + itemH * 0.5 - 1, timeStr)
+
+            -- 还原按钮
+            local btnX = itemX + itemW - restoreBtnW - 2
+            local btnY = iy + (itemH - restoreBtnH) * 0.5 - 1
+            nvgBeginPath(vg)
+            nvgRoundedRect(vg, btnX, btnY, restoreBtnW, restoreBtnH, 2)
+            nvgFillColor(vg, nvgRGBA(40, 120, 80, 255))
+            nvgFill(vg)
+            nvgFontSize(vg, 7)
+            nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+            nvgFillColor(vg, nvgRGBA(230, 255, 230, 255))
+            nvgText(vg, btnX + restoreBtnW * 0.5, btnY + restoreBtnH * 0.5, "还原")
+
+            -- 记录按钮区域
+            S.trashDialogBtns[i] = { x = btnX, y = btnY, w = restoreBtnW, h = restoreBtnH, fname = item.fname }
+        end
+    end
+
+    -- 底部关闭按钮
+    local closeBtnW = 50
+    local closeBtnH = 16
+    local closeBtnX = dlgX + (dlgW - closeBtnW) * 0.5
+    local closeBtnY = dlgY + dlgH - closeBtnH - 8
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, closeBtnX, closeBtnY, closeBtnW, closeBtnH, 3)
+    nvgFillColor(vg, nvgRGBA(60, 55, 65, 255))
+    nvgFill(vg)
+    nvgFontSize(vg, 9)
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(220, 220, 220, 255))
+    nvgText(vg, closeBtnX + closeBtnW * 0.5, closeBtnY + closeBtnH * 0.5, "关闭")
+
+    S.trashDialogCloseBtn = { x = closeBtnX, y = closeBtnY, w = closeBtnW, h = closeBtnH }
+end
+
 -- ====================================================================
 -- 主渲染入口
 -- ====================================================================
@@ -678,6 +773,8 @@ function M.Draw()
         DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
     elseif S.dialogMode == "background" then
         DrawBackgroundDialog(vg, dlgX, dlgY, dlgW, dlgH)
+    elseif S.dialogMode == "trash" then
+        DrawTrashDialog(vg, dlgX, dlgY, dlgW, dlgH)
     end
 end
 
@@ -1057,6 +1154,34 @@ function M.HandleMouseDown(mx, my)
             local iy = startY + i * itemH
             if mx >= itemX and mx < itemX + itemW and my >= iy and my < iy + itemH - 2 then
                 S.bgDialogSelected = i
+                return true
+            end
+        end
+    end
+
+    -- 回收站对话框：还原按钮 + 关闭按钮
+    if S.dialogMode == "trash" then
+        -- 检查还原按钮
+        if S.trashDialogBtns then
+            for _, btn in ipairs(S.trashDialogBtns) do
+                if mx >= btn.x and mx < btn.x + btn.w and my >= btn.y and my < btn.y + btn.h then
+                    -- 执行还原
+                    Persistence.RestoreLevel(btn.fname)
+                    -- 刷新列表
+                    S.trashDialogList = CloudStorage.ListTrash()
+                    -- 如果回收站空了，关闭对话框
+                    if #S.trashDialogList == 0 then
+                        M.CancelDialog()
+                    end
+                    return true
+                end
+            end
+        end
+        -- 检查关闭按钮
+        if S.trashDialogCloseBtn then
+            local cb = S.trashDialogCloseBtn
+            if mx >= cb.x and mx < cb.x + cb.w and my >= cb.y and my < cb.y + cb.h then
+                M.CancelDialog()
                 return true
             end
         end
