@@ -208,6 +208,8 @@ S.decoDialogBrightnessInput = "100"  -- 明暗度输入框文本
 S.decoDialogScaleInput = "100"       -- 缩放输入框文本
 S.decoDialogFocusField = 0           -- 0=无焦点, 1=明暗度, 2=缩放
 S.decoDialogCursor = 0               -- 输入框光标位置
+S.decoDialogTouchTransform = false   -- 触碰变换勾选
+S.decoDialogTransformTarget = 0      -- 变换目标装饰类型索引（0=无）
 
 
 -- ====================================================================

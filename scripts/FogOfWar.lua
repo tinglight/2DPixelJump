@@ -405,6 +405,7 @@ end
 ---@param sources table[]
 function FogOfWar.SetLightSources(sources)
     lightSources = sources or {}
+    lightCacheDirty = true
 end
 
 --- 获取光源列表
@@ -1578,6 +1579,14 @@ function FogOfWar.InitZoneVisibility(playerCol, playerRow)
 
     -- 如果没有配置任何区域，所有光源都正常显示
     if #lightZones == 0 then return end
+
+    -- 先恢复所有光源到原始直径（确保幂等性：连续调用不会损坏 _originalDiameter）
+    for _, light in ipairs(lightSources) do
+        if light._originalDiameter then
+            light.diameter = light._originalDiameter
+            light._originalDiameter = nil
+        end
+    end
 
     -- 检测玩家初始所在区域
     local initialZone = FogOfWar.DetectPlayerZone(playerCol, playerRow)

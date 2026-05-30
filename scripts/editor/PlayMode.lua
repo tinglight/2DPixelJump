@@ -37,6 +37,7 @@ local function DeepCopyLightSources(sources)
             noLantern = light.noLantern,
             extinguished = light.extinguished,
             targetDiameter = light.targetDiameter,
+            _originalDiameter = light._originalDiameter,
         }
     end
     return copy
@@ -400,37 +401,42 @@ function M.ProcessTileAt(col, row)
         S.SetMessage("获得火球能力!", 1.5)
     elseif base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then
         S.play.hiddenWallRevealed[group] = S.play.gameTime
-    elseif base == C.TILE.CHECKPOINT and not S.checkpointActivated[key] then
-        -- 移除之前篝火的光源（带渐出动画）
-        if S.checkpointLightPos then
-            FogOfWar.RemoveLightAnimated(S.checkpointLightPos.col, S.checkpointLightPos.row)
-        end
-        -- 熄灭所有其他篝火，激活当前
-        S.checkpointActivated = {}
-        S.checkpointActivated[key] = true
-        S.checkpointCol = col
-        S.checkpointRow = row
-        -- 世界试玩模式记录关卡文件名
-        if S.editorMode == C.MODE_WORLDPLAY and S.worldPlayCurrentFile then
-            S.checkpointFile = S.worldPlayCurrentFile
-        else
-            S.checkpointFile = S.currentLevelName or nil
-        end
-        -- 为篝火添加战争迷雾光源（直径35，带渐入动画，不显示提灯图片）
-        local lightIdx = FogOfWar.AddLightAnimated(col, row, 35, 0.5)
-        local light = FogOfWar.GetLight(lightIdx)
-        if light then light.noLantern = true end
-        S.checkpointLightPos = { col = col, row = row }
-        S.lightSources = FogOfWar.GetLightSources()
-        -- 补满火焰值
-        M.RecoverPixels(S.playTotalPixels)
-        M.SyncFallGridCount()
-        S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
-        M.ShowBonfireMessage()
-        M.TriggerCampfireIgnite(key)
-        -- 世界试玩模式：仅正式游戏时保存玩家进度到云端（编辑器试玩不保存）
-        if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile and S.fromMainMenu then
-            M.SavePlayerProgress()
+    elseif base == C.TILE.CHECKPOINT then
+        local isNewBonfire = not S.checkpointActivated[key]
+        local isHealthNotFull = S.playAlivePixels < S.playTotalPixels
+
+        if isNewBonfire or isHealthNotFull then
+            -- 移除之前篝火的光源（带渐出动画）
+            if S.checkpointLightPos then
+                FogOfWar.RemoveLightAnimated(S.checkpointLightPos.col, S.checkpointLightPos.row)
+            end
+            -- 熄灭所有其他篝火，激活当前
+            S.checkpointActivated = {}
+            S.checkpointActivated[key] = true
+            S.checkpointCol = col
+            S.checkpointRow = row
+            -- 世界试玩模式记录关卡文件名
+            if S.editorMode == C.MODE_WORLDPLAY and S.worldPlayCurrentFile then
+                S.checkpointFile = S.worldPlayCurrentFile
+            else
+                S.checkpointFile = S.currentLevelName or nil
+            end
+            -- 为篝火添加战争迷雾光源（直径35，带渐入动画，不显示提灯图片）
+            local lightIdx = FogOfWar.AddLightAnimated(col, row, 35, 0.5)
+            local light = FogOfWar.GetLight(lightIdx)
+            if light then light.noLantern = true end
+            S.checkpointLightPos = { col = col, row = row }
+            S.lightSources = FogOfWar.GetLightSources()
+            -- 补满火焰值
+            M.RecoverPixels(S.playTotalPixels)
+            M.SyncFallGridCount()
+            S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
+            M.ShowBonfireMessage()
+            M.TriggerCampfireIgnite(key)
+            -- 世界试玩模式：仅正式游戏时保存玩家进度到云端（编辑器试玩不保存）
+            if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile and S.fromMainMenu then
+                M.SavePlayerProgress()
+            end
         end
     end
 end
@@ -476,6 +482,48 @@ end
 function M.CheckTiles()
     M.CheckTilesOverlap()
     M.CheckAdjacentHiddenWalls()
+    M.CheckDecorationTouch()
+end
+
+--- 检测玩家是否触碰了带"触碰变换"属性的装饰物
+function M.CheckDecorationTouch()
+    if #S.decorations == 0 then return end
+    local s = M.PlayerGridSize()
+    local px = S.play.gridX
+    local py = S.play.gridY
+
+    for _, deco in ipairs(S.decorations) do
+        if deco.touchTransform and deco.transformTarget and deco.transformTarget > 0 then
+            local decoType = C.DECORATION_TYPES[deco.typeId]
+            if not decoType then goto continueDeco end
+
+            -- 装饰物占据的区域（以放置格为中心展开）
+            local sw = (decoType.size and decoType.size.w) or 1
+            local sh = (decoType.size and decoType.size.h) or 1
+            local decoLeft = deco.col - math.floor((sw - 1) / 2)
+            local decoTop = deco.row - math.floor((sh - 1) / 2)
+            local decoRight = decoLeft + sw - 1
+            local decoBottom = decoTop + sh - 1
+
+            -- 玩家占据区域
+            local playerRight = px + s - 1
+            local playerBottom = py + s - 1
+
+            -- AABB 碰撞检测
+            if px <= decoRight and playerRight >= decoLeft and
+               py <= decoBottom and playerBottom >= decoTop then
+                -- 触碰！变换装饰类型
+                local targetType = C.DECORATION_TYPES[deco.transformTarget]
+                if targetType then
+                    deco.typeId = deco.transformTarget
+                    deco.touchTransform = false  -- 变换后不再触发
+                    deco.transformTarget = 0
+                end
+            end
+
+            ::continueDeco::
+        end
+    end
 end
 
 ------------------------------------------------------------
@@ -605,6 +653,28 @@ local function CleanupCheckpointLight()
     S.checkpointFile = nil
     S.checkpointCol = nil
     S.checkpointRow = nil
+end
+
+--- 恢复篝火光源（关卡加载/重生后临时光源丢失时调用）
+--- 注意：篝火光源是试玩模式的临时光源（noLantern=true），不会被序列化保存，
+--- 因此在 WorldPlayLoadLevel 反序列化关卡光源后需要重新创建。
+local function RestoreCampfireLight()
+    if not S.checkpointCol or not S.checkpointRow then return end
+    -- 只在当前关卡就是篝火所在关卡时恢复
+    if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile
+        and S.worldPlayCurrentFile ~= S.checkpointFile then
+        return
+    end
+    -- 移除可能的残留（避免重复添加）
+    if S.checkpointLightPos then
+        FogOfWar.RemoveLight(S.checkpointLightPos.col, S.checkpointLightPos.row)
+    end
+    -- 重新添加篝火光源（直径35，带渐入动画，不保存到关卡）
+    local lightIdx = FogOfWar.AddLightAnimated(S.checkpointCol, S.checkpointRow, 35, 0.5)
+    local light = FogOfWar.GetLight(lightIdx)
+    if light then light.noLantern = true end
+    S.checkpointLightPos = { col = S.checkpointCol, row = S.checkpointRow }
+    S.lightSources = FogOfWar.GetLightSources()
 end
 
 ------------------------------------------------------------
@@ -979,6 +1049,7 @@ end
 
 function M.HandleMovementInput(dt)
     -- 攀爬中：只能在梯子范围内左右移动，不能移出梯子
+    -- 例外：梯子顶端可以"翻上"旁边的平台（对角线上移+水平移动）
     if S.play.isClimbing then
         local curLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
         local curRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
@@ -987,9 +1058,31 @@ function M.HandleMovementInput(dt)
         elseif curRight and not curLeft then dir = 1 end
         if dir ~= 0 then
             local newX = S.play.gridX + dir
-            if not M.Collides(newX, S.play.gridY) and M.IsOnLadder(newX, S.play.gridY) then
-                S.play.gridX = newX
-                S.play.facingRight = (dir > 0)
+            if not M.Collides(newX, S.play.gridY) then
+                if M.IsOnLadder(newX, S.play.gridY) then
+                    -- 目标位置仍在梯子上，正常移动
+                    S.play.gridX = newX
+                    S.play.facingRight = (dir > 0)
+                elseif M.OnGround(newX, S.play.gridY) then
+                    -- 目标位置不在梯子上但有地面支撑：走上平台，退出攀爬
+                    S.play.gridX = newX
+                    S.play.facingRight = (dir > 0)
+                    S.play.isClimbing = false
+                    S.play.climbTimer = 0
+                    S.play.isOnGround = true
+                end
+            else
+                -- 水平方向被平台实体阻挡：尝试对角线上移（翻上平台）
+                local upY = S.play.gridY - 1
+                if not M.Collides(newX, upY) and M.OnGround(newX, upY) then
+                    -- 上移一格后可以水平移动且有地面支撑
+                    S.play.gridX = newX
+                    S.play.gridY = upY
+                    S.play.facingRight = (dir > 0)
+                    S.play.isClimbing = false
+                    S.play.climbTimer = 0
+                    S.play.isOnGround = true
+                end
             end
         end
         S.play.isMoving = false
@@ -1065,14 +1158,19 @@ function M.HandleClimbInput(dt)
             return
         end
 
-        -- 在梯子上且不在地面（或按了上键）：进入攀爬状态
+        -- 在梯子上且不在地面（或按了上键）：只有按上/下才进入攀爬
         if not S.play.isClimbing then
-            S.play.isClimbing = true
-            S.play.isJumping = false
-            S.play.jumpGridsRemain = 0
-            S.play.fallTickCurrent = C.PLAY_FALL_BASE
-            M.SyncFallGridCount()
-            S.play.climbTimer = 0
+            if pressUp or pressDown then
+                S.play.isClimbing = true
+                S.play.isJumping = false
+                S.play.jumpGridsRemain = 0
+                S.play.fallTickCurrent = C.PLAY_FALL_BASE
+                M.SyncFallGridCount()
+                S.play.climbTimer = 0
+            else
+                -- 没按方向键：不自动进入攀爬（站在梯子顶端可以正常站立）
+                return
+            end
         end
 
         -- 只有按上/下才移动
@@ -1084,10 +1182,17 @@ function M.HandleClimbInput(dt)
                 local newY = S.play.gridY + dir
                 if not M.Collides(S.play.gridX, newY) then
                     S.play.gridY = newY
-                    -- 移动后超出梯子范围：退出攀爬（走上平台）
+                    -- 移动后超出梯子范围：检查是否有地面支撑
                     if not M.IsOnLadder(S.play.gridX, newY) then
-                        S.play.isClimbing = false
-                        S.play.climbTimer = 0
+                        if M.OnGround(S.play.gridX, newY) then
+                            -- 有地面支撑：退出攀爬，站在平台上
+                            S.play.isClimbing = false
+                            S.play.climbTimer = 0
+                            S.play.isOnGround = true
+                        else
+                            -- 无地面支撑：保持攀爬状态，不要退出（否则重力会拉回）
+                            -- 玩家可以通过水平移动走上旁边的平台
+                        end
                     end
                 end
             end
@@ -1095,10 +1200,51 @@ function M.HandleClimbInput(dt)
             S.play.climbTimer = 0
         end
     else
-        -- 离开梯子区域，退出攀爬
+        -- 离开梯子区域
         if S.play.isClimbing then
+            -- 刚从攀爬退出（爬到梯子顶端上方）
             S.play.isClimbing = false
             S.play.climbTimer = 0
+            -- 检查脚下是否有梯子：梯子顶部作为地面支撑
+            local s = M.PlayerGridSize()
+            local feetRow = S.play.gridY + s
+            for dx = 0, s - 1 do
+                local col = S.play.gridX + dx
+                if col >= 1 and col <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
+                    local val = S.levelData[feetRow][col]
+                    local base = TileUtils.GetTileType(val)
+                    if base == C.TILE.LADDER then
+                        S.play.isOnGround = true
+                        break
+                    end
+                end
+            end
+        elseif pressDown and not S.play.isClimbing then
+            -- 站在梯子顶部上方按下键：向下移入梯子，进入攀爬
+            local s = M.PlayerGridSize()
+            local feetRow = S.play.gridY + s
+            local ladderBelow = false
+            for dx = 0, s - 1 do
+                local col = S.play.gridX + dx
+                if col >= 1 and col <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
+                    local val = S.levelData[feetRow][col]
+                    local base = TileUtils.GetTileType(val)
+                    if base == C.TILE.LADDER then ladderBelow = true; break end
+                end
+            end
+            if ladderBelow then
+                local newY = S.play.gridY + 1
+                if not M.Collides(S.play.gridX, newY) then
+                    S.play.gridY = newY
+                    S.play.isClimbing = true
+                    S.play.isJumping = false
+                    S.play.jumpGridsRemain = 0
+                    S.play.fallTickCurrent = C.PLAY_FALL_BASE
+                    M.SyncFallGridCount()
+                    S.play.climbTimer = 0
+                    S.play.isOnGround = false
+                end
+            end
         end
     end
 end
@@ -1132,15 +1278,34 @@ end
 
 function M.ProcessFallTick(dt)
     if not M.OnGround(S.play.gridX, S.play.gridY) then
-        -- 在梯子范围内：立即进入攀爬，不掉落
+        -- 在梯子范围内：
         if M.IsOnLadder(S.play.gridX, S.play.gridY) then
-            S.play.isClimbing = true
-            S.play.isJumping = false
-            S.play.fallTickCurrent = C.PLAY_FALL_BASE
-            M.SyncFallGridCount()
+            if S.play.isClimbing then
+                -- 已经在攀爬状态：保持攀爬，不掉落
+                return
+            end
+            -- 未在攀爬状态（如从平台走到梯子顶端上方）：视为站在梯子顶部，不掉落也不自动进入攀爬
+            S.play.isOnGround = true
             S.play.fallTimer = 0
             S.play.fallAnimTime = 0
-            S.play.climbTimer = 0
+            return
+        end
+        -- 脚下紧贴梯子顶部（玩家2x2区域在梯子正上方）：梯子顶部作为地面支撑
+        local s = M.PlayerGridSize()
+        local feetRow = S.play.gridY + s
+        local ladderBelow = false
+        for dx = 0, s - 1 do
+            local col = S.play.gridX + dx
+            if col >= 1 and col <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
+                local val = S.levelData[feetRow][col]
+                local base = TileUtils.GetTileType(val)
+                if base == C.TILE.LADDER then ladderBelow = true; break end
+            end
+        end
+        if ladderBelow then
+            S.play.isOnGround = true
+            S.play.fallTimer = 0
+            S.play.fallAnimTime = 0
             return
         end
         S.play.isOnGround = false
@@ -1578,6 +1743,11 @@ function M.ApplyWorldLevelData(data)
 
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
+
+    -- 加载新关卡的光域区域数据并重置区域状态
+    FogOfWar.DeserializeZones(data.lightZones)
+    S.lightZones = FogOfWar.GetLightZones()
+    FogOfWar.ResetZoneState()
 end
 
 function M.ApplyBound(bound)
@@ -1707,8 +1877,6 @@ function M.UpdateTransition(dt)
                 -- 保存跨关卡持久状态（跳跃能力）
                 local savedFallGridCount = S.play.fallGridCount or 0
                 if M.WorldPlayLoadLevel(t.pendingFile, t.pendingDir, t.pendingGx, t.pendingGy) then
-                    -- 切换关卡后更新光源快照（新关卡的光源数据）
-                    savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
                     CrossLevel.Clear()
                     S.tipPixels = {}
                     S.tipSpawnTimer = 0
@@ -1726,6 +1894,12 @@ function M.UpdateTransition(dt)
                     S.play.fragileParticles = {}
                     -- 在 switchState 重置后，重新应用跨关卡开关状态
                     CrossLevel.ApplyCrossSwitches(S.worldPlayCurrentFile)
+                    -- 保存新关卡的干净光源快照（必须在 zone/campfire 修改之前）
+                    savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
+                    -- 如果切换到的关卡是篝火所在关卡，恢复篝火光源
+                    RestoreCampfireLight()
+                    -- 初始化新关卡的光域可见性（根据玩家位置决定哪些灯亮/灭）
+                    FogOfWar.InitZoneVisibility(S.play.gridX + 1, S.play.gridY + 1)
                     S.SetMessage("进入: " .. t.pendingFile, 1.5)
                 end
             end
@@ -1979,13 +2153,12 @@ function M.AnyKeyPressed()
 end
 
 function M.Respawn()
-    -- 检查是否有篝火存档点（世界试玩模式）
+    -- 检查是否有篝火存档点（关卡试玩模式和世界试玩模式均适用）
     local useBonfire = false
-    if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile and S.checkpointCol and S.checkpointRow then
-        -- 如果篝火在其他关卡，先加载该关卡
-        if S.checkpointFile ~= S.worldPlayCurrentFile then
+    if S.checkpointFile and S.checkpointCol and S.checkpointRow then
+        -- 世界试玩模式下，如果篝火在其他关卡，先加载该关卡
+        if S.editorMode == C.MODE_WORLDPLAY and S.checkpointFile ~= S.worldPlayCurrentFile then
             if M.WorldPlayLoadLevel(S.checkpointFile, nil) then
-                savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
                 CrossLevel.Clear()
             end
         end
@@ -2033,12 +2206,19 @@ function M.Respawn()
     S.play.fragileGone = {}
     S.play.fragileParticles = {}
 
-    -- 如果从篝火复活，重新激活篝火状态（视觉上保持点亮）
+    -- 如果从篝火复活，重新激活篝火状态（视觉上保持点亮）并恢复光源
     if useBonfire then
         local key = S.checkpointRow .. "_" .. S.checkpointCol
         S.checkpointActivated = {}
         S.checkpointActivated[key] = true
+        -- 恢复篝火光源（跨关卡重生时 WorldPlayLoadLevel 会反序列化覆盖光源，临时光源丢失）
+        RestoreCampfireLight()
     end
+
+    -- 重生后重新检测玩家所在区域，刷新灯光可见性
+    FogOfWar.InitZoneVisibility(S.play.gridX + 1, S.play.gridY + 1)
+    -- 注意：不要在此处覆写 savedEditorLightSources！
+    -- 原始编辑器快照应在整个试玩期间保持不变，退出时才用来恢复。
 
     -- 相机立即跟随到重生点
     M.SnapCameraToPlayer()
@@ -2138,6 +2318,16 @@ function M.StartWorldPlayMode()
                 S.play.gridX = S.spawnCol
                 S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
                 M.SnapCameraToPlayer()
+                -- 注意：不重新保存 savedEditorLightSources！
+                -- 此时 FogOfWar 中的光源已被 ResetPlayState 内的 InitZoneVisibility 修改过，
+                -- 如果重新保存会导致 diameter=0 的脏数据写入快照，退出时恢复后永久损坏编辑器光源。
+                -- savedEditorLightSources 已在 ResetPlayState 之前正确保存，保持不变即可。
+
+                -- 恢复篝火光源（从云端存档加载，篝火光源是临时的不会被序列化）
+                local cpKey = S.checkpointRow .. "_" .. S.checkpointCol
+                S.checkpointActivated = {}
+                S.checkpointActivated[cpKey] = true
+                RestoreCampfireLight()
                 FogOfWar.InitZoneVisibility(S.play.gridX + 1, S.play.gridY + 1)
                 S.SetMessage("从篝火继续冒险...", 2.0)
                 return

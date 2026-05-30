@@ -1267,6 +1267,8 @@ function HandleDecorationToolClick(button, col, row)
             S.decoDialogEditIndex = 0
             S.decoDialogBrightness = 100
             S.decoDialogScale = 100
+            S.decoDialogTouchTransform = false
+            S.decoDialogTransformTarget = 0
             S.currentDecorationType = 1
             Dialogs.OpenDecorationDialog()
         end
@@ -1332,6 +1334,8 @@ function FinishDecoDrag(mx, my)
             S.decoDialogEditIndex = idx
             S.decoDialogBrightness = deco.brightness or 100
             S.decoDialogScale = deco.scale or 100
+            S.decoDialogTouchTransform = deco.touchTransform or false
+            S.decoDialogTransformTarget = deco.transformTarget or 0
             S.currentDecorationType = deco.typeId or 1
             Dialogs.OpenDecorationDialog()
         end

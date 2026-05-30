@@ -182,6 +182,7 @@ local BG_IMAGE_OPTIONS = {
     { path = "image/传火祭祀场背景_20260530100114.png", name = "传火祭祀场(火光)" },
     { path = "image/edited_传火祭祀场背景_无火光_20260530100627.png", name = "传火祭祀场(无火光)" },
     { path = "image/sewer_background_20260530144651.png", name = "下水道背景" },
+    { path = "image/废墟背景3_20260530181755.png", name = "废墟背景3" },
 }
 
 -- 可选的装饰资产图片列表
@@ -315,12 +316,21 @@ function M.ConfirmDialog()
         local scale = math.max(10, math.min(1000, math.floor(sVal)))
         S.decoDialogBrightness = brightness
         S.decoDialogScale = scale
+        local Undo = require "editor.UndoSystem"
+        local touchTransform = S.decoDialogTouchTransform
+        local transformTarget = S.decoDialogTransformTarget
+        if not touchTransform or transformTarget <= 0 then
+            touchTransform = false
+            transformTarget = 0
+        end
         if S.decoDialogEditIndex > 0 and S.decoDialogEditIndex <= #S.decorations then
             -- 编辑已有装饰
             local deco = S.decorations[S.decoDialogEditIndex]
             deco.typeId = typeId
             deco.brightness = brightness
             deco.scale = scale
+            deco.touchTransform = touchTransform
+            deco.transformTarget = transformTarget
         else
             -- 新建装饰
             table.insert(S.decorations, {
@@ -329,6 +339,8 @@ function M.ConfirmDialog()
                 typeId = typeId,
                 brightness = brightness,
                 scale = scale,
+                touchTransform = touchTransform,
+                transformTarget = transformTarget,
             })
         end
         Undo.dirty = true
@@ -367,7 +379,8 @@ local function GetDialogSize()
     elseif S.dialogMode == "decoProperty" then
         local typeCount = #C.DECORATION_TYPES
         local rows = math.ceil(typeCount / 3)
-        w = 210; h = 30 + rows * 22 + 60 + 36  -- title + type grid + sliders + buttons
+        local extraH = S.decoDialogTouchTransform and 36 or 16  -- 触碰变换区域高度
+        w = 210; h = 30 + rows * 22 + 60 + extraH + 36  -- title + type grid + sliders + touchTransform + buttons
     elseif S.dialogMode == "trash" then
         local itemCount = S.trashDialogList and #S.trashDialogList or 0
         local visibleItems = math.min(itemCount, 6)
@@ -830,6 +843,70 @@ local function DrawDecorationDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgFillColor(vg, nvgRGBA(140, 140, 160, 180))
     nvgText(vg, inputX + inputW + 6, fieldY2 + inputH * 0.5, "% (10~1000)")
 
+    -- 触碰变换勾选框
+    local checkY = fieldY2 + gap + 4
+    local checkSize = 10
+    local checkX = dlgX + 14
+
+    -- 勾选框
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, checkX, checkY, checkSize, checkSize, 2)
+    nvgStrokeColor(vg, nvgRGBA(160, 160, 180, 255))
+    nvgStrokeWidth(vg, 1)
+    nvgStroke(vg)
+    if S.decoDialogTouchTransform then
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, checkX + 2, checkY + 2, checkSize - 4, checkSize - 4, 1)
+        nvgFillColor(vg, nvgRGBA(100, 200, 140, 255))
+        nvgFill(vg)
+    end
+
+    nvgFontSize(vg, 9)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(200, 200, 220, 255))
+    nvgText(vg, checkX + checkSize + 6, checkY + checkSize * 0.5, "触碰变换")
+
+    -- 目标选择（仅当勾选时显示）
+    if S.decoDialogTouchTransform then
+        local targetY = checkY + 16
+        nvgFontSize(vg, 8)
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, nvgRGBA(160, 160, 180, 220))
+        nvgText(vg, checkX, targetY + 5, "变换为:")
+
+        -- 显示目标选项（小按钮列表）
+        local btnStartX = checkX + 38
+        local btnH = 12
+        local btnGap = 2
+        local btnY = targetY + 1
+        for i, dt in ipairs(types) do
+            if i ~= S.currentDecorationType then
+                local nameW = 8 * #dt.name + 8  -- 大致估算宽度
+                nameW = math.min(nameW, 52)
+                local selected = (S.decoDialogTransformTarget == i)
+                nvgBeginPath(vg)
+                nvgRoundedRect(vg, btnStartX, btnY, nameW, btnH, 2)
+                if selected then
+                    nvgFillColor(vg, nvgRGBA(80, 160, 120, 200))
+                else
+                    nvgFillColor(vg, nvgRGBA(60, 60, 80, 180))
+                end
+                nvgFill(vg)
+
+                nvgFontSize(vg, 7)
+                nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(vg, nvgRGBA(220, 220, 230, 255))
+                nvgText(vg, btnStartX + nameW * 0.5, btnY + btnH * 0.5, dt.name)
+
+                btnStartX = btnStartX + nameW + btnGap
+                if btnStartX > dlgX + dlgW - 20 then
+                    btnStartX = checkX + 38
+                    btnY = btnY + btnH + btnGap
+                end
+            end
+        end
+    end
+
     DrawButtons(vg, dlgX, dlgY, dlgW, dlgH, "确认", 60, 100, 160)
 end
 
@@ -1095,11 +1172,14 @@ function M.HandleKeyDown(key)
     end
 
     if key == KEY_TAB then
-        if S.dialogMode == "decoration" then
-            S.decoFocusField = (S.decoFocusField % 3) + 1
-            if S.decoFocusField == 1 then S.decoCursor = #S.decoWidthInput
-            elseif S.decoFocusField == 2 then S.decoCursor = #S.decoHeightInput
-            else S.decoCursor = #S.decoAlphaInput end
+        if S.dialogMode == "decoration" and S.decoDialogFocusField ~= nil then
+            if S.decoDialogFocusField == 1 then
+                S.decoDialogFocusField = 2
+                S.decoDialogCursor = #(S.decoDialogScaleInput or "")
+            else
+                S.decoDialogFocusField = 1
+                S.decoDialogCursor = #(S.decoDialogBrightnessInput or "")
+            end
             S.renameBlink = 0
         elseif S.dialogMode == "light" then
             if S.lightDialogFocus == 1 then
@@ -1126,28 +1206,14 @@ function M.HandleKeyDown(key)
                 S.canvasCursor = #S.canvasWidthInput
             end
             S.renameBlink = 0
-        elseif S.dialogMode == "decoProperty" then
-            if S.decoDialogFocusField == 1 then
-                S.decoDialogFocusField = 2
-                S.decoDialogCursor = #S.decoDialogScaleInput
-            else
-                S.decoDialogFocusField = 1
-                S.decoDialogCursor = #S.decoDialogBrightnessInput
-            end
-            S.renameBlink = 0
         end
         return true
     end
 
-    if S.dialogMode == "decoration" then
-        local cur
-        if S.decoFocusField == 1 then cur = S.decoWidthInput
-        elseif S.decoFocusField == 2 then cur = S.decoHeightInput
-        else cur = S.decoAlphaInput end
-        cur, S.decoCursor = HandleNumericFieldKey(key, cur, S.decoCursor or 0)
-        if S.decoFocusField == 1 then S.decoWidthInput = cur
-        elseif S.decoFocusField == 2 then S.decoHeightInput = cur
-        else S.decoAlphaInput = cur end
+    if S.dialogMode == "decoration" and S.decoDialogFocusField and S.decoDialogFocusField > 0 then
+        local cur = (S.decoDialogFocusField == 1) and S.decoDialogBrightnessInput or S.decoDialogScaleInput
+        cur, S.decoDialogCursor = HandleNumericFieldKey(key, cur, S.decoDialogCursor)
+        if S.decoDialogFocusField == 1 then S.decoDialogBrightnessInput = cur else S.decoDialogScaleInput = cur end
     elseif S.dialogMode == "canvas" then
         local cur = (S.canvasFocusField == 1) and S.canvasWidthInput or S.canvasHeightInput
         cur, S.canvasCursor = HandleNumericFieldKey(key, cur, S.canvasCursor)
@@ -1165,22 +1231,6 @@ function M.HandleKeyDown(key)
         if S.lightDialogFocus == 1 then S.lightDiameterInput = cur
         elseif S.lightDialogFocus == 2 then S.lightFeatherInput = cur
         else S.lightGroupInput = cur end
-    elseif S.dialogMode == "decoProperty" and S.decoDialogFocusField > 0 then
-        local cur = (S.decoDialogFocusField == 1) and S.decoDialogBrightnessInput or S.decoDialogScaleInput
-        cur, S.decoDialogCursor = HandleNumericFieldKey(key, cur, S.decoDialogCursor)
-        -- KeyDown digit fallback: 当 TextInput 未触发时，直接处理数字键
-        local digit = nil
-        if key >= KEY_0 and key <= KEY_9 then digit = tostring(key - KEY_0)
-        elseif key >= KEY_KP_0 and key <= KEY_KP_9 then digit = tostring(key - KEY_KP_0) end
-        if digit then
-            local maxLen = (S.decoDialogFocusField == 1) and 3 or 4
-            if #cur < maxLen then
-                cur = string.sub(cur, 1, S.decoDialogCursor) .. digit .. string.sub(cur, S.decoDialogCursor + 1)
-                S.decoDialogCursor = S.decoDialogCursor + 1
-                S.renameBlink = 0
-            end
-        end
-        if S.decoDialogFocusField == 1 then S.decoDialogBrightnessInput = cur else S.decoDialogScaleInput = cur end
     end
 
     return true
@@ -1216,21 +1266,16 @@ function M.HandleTextInput(text)
     S.imeComposition = ""
     S.imeCursor = 0
 
-    if S.dialogMode == "decoration" then
+    if S.dialogMode == "decoration" and S.decoDialogFocusField and S.decoDialogFocusField > 0 then
         local digits = text:match("%d+")
         if digits then
-            local cur
-            if S.decoFocusField == 1 then cur = S.decoWidthInput
-            elseif S.decoFocusField == 2 then cur = S.decoHeightInput
-            else cur = S.decoAlphaInput end
-            local maxLen = (S.decoFocusField == 3) and 3 or 2
+            local cur = (S.decoDialogFocusField == 1) and S.decoDialogBrightnessInput or S.decoDialogScaleInput
+            local maxLen = (S.decoDialogFocusField == 1) and 3 or 4  -- 明暗度最多3位(100)，缩放最多4位(1000)
             if #cur < maxLen then
-                cur = string.sub(cur, 1, S.decoCursor or 0) .. digits .. string.sub(cur, (S.decoCursor or 0) + 1)
-                S.decoCursor = (S.decoCursor or 0) + #digits
+                cur = string.sub(cur, 1, S.decoDialogCursor) .. digits .. string.sub(cur, S.decoDialogCursor + 1)
+                S.decoDialogCursor = S.decoDialogCursor + #digits
                 S.renameBlink = 0
-                if S.decoFocusField == 1 then S.decoWidthInput = cur
-                elseif S.decoFocusField == 2 then S.decoHeightInput = cur
-                else S.decoAlphaInput = cur end
+                if S.decoDialogFocusField == 1 then S.decoDialogBrightnessInput = cur else S.decoDialogScaleInput = cur end
             end
         end
     elseif S.dialogMode == "canvas" then
@@ -1288,9 +1333,6 @@ function M.HandleTextInput(text)
                 end
             end
         end
-    elseif S.dialogMode == "decoProperty" and S.decoDialogFocusField > 0 then
-        -- 装饰对话框数字输入由 HandleKeyDown 统一处理（避免 KeyDown+TextInput 重复插入）
-        -- 这里仅消费事件，不做插入
     end
 
     return true
@@ -1377,43 +1419,6 @@ function M.HandleMouseDown(mx, my)
         end
     end
 
-    -- 装饰对话框：点击列表项选中 + 输入框焦点
-    if S.dialogMode == "decoration" then
-        local itemH = 18
-        local startY = dlgY + 28
-        local itemX = dlgX + 12
-        local itemW = dlgW - 24
-        -- 图片选项
-        for i = 1, #DECO_IMAGE_OPTIONS do
-            local iy = startY + (i - 1) * itemH
-            if mx >= itemX and mx < itemX + itemW and my >= iy and my < iy + itemH - 2 then
-                S.decoDialogSelected = i
-                return true
-            end
-        end
-        -- 输入框焦点
-        local inputY = startY + #DECO_IMAGE_OPTIONS * itemH + 6
-        local inputW = 36
-        local inputH = 16
-        local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
-        if mx >= inputX and mx < inputX + inputW then
-            if my >= inputY and my < inputY + inputH then
-                S.decoFocusField = 1; S.decoCursor = #S.decoWidthInput; S.renameBlink = 0
-                return true
-            end
-            local inputY2 = inputY + 22
-            if my >= inputY2 and my < inputY2 + inputH then
-                S.decoFocusField = 2; S.decoCursor = #S.decoHeightInput; S.renameBlink = 0
-                return true
-            end
-            local inputY3 = inputY2 + 22
-            if my >= inputY3 and my < inputY3 + inputH then
-                S.decoFocusField = 3; S.decoCursor = #S.decoAlphaInput; S.renameBlink = 0
-                return true
-            end
-        end
-    end
-
     -- 背景对话框：点击列表项选中
     if S.dialogMode == "background" then
         local itemH = 18
@@ -1493,6 +1498,70 @@ function M.HandleMouseDown(mx, my)
             end
         end
 
+        -- 输入框区域
+        local typeRows = math.ceil(#types / cols)
+        local fieldStartY = startY + typeRows * itemH + 8
+        local inputW = 50
+        local inputH = 16
+        local gap = 22
+        local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
+        local fieldY1 = fieldStartY
+        local fieldY2 = fieldStartY + gap
+
+        -- 点击明暗度输入框
+        if mx >= inputX and mx < inputX + inputW and my >= fieldY1 and my < fieldY1 + inputH then
+            S.decoDialogFocusField = 1
+            S.decoDialogBrightnessInput = ""  -- 清空以便重新输入
+            S.decoDialogCursor = 0
+            S.renameBlink = 0
+            return true
+        end
+
+        -- 点击缩放输入框
+        if mx >= inputX and mx < inputX + inputW and my >= fieldY2 and my < fieldY2 + inputH then
+            S.decoDialogFocusField = 2
+            S.decoDialogScaleInput = ""  -- 清空以便重新输入
+            S.decoDialogCursor = 0
+            S.renameBlink = 0
+            return true
+        end
+
+        -- 触碰变换勾选框点击
+        local checkY = fieldY2 + gap + 4
+        local checkSize = 10
+        local checkX = dlgX + 14
+        local checkClickW = checkSize + 60
+        if mx >= checkX and mx < checkX + checkClickW and my >= checkY and my < checkY + checkSize + 4 then
+            S.decoDialogTouchTransform = not S.decoDialogTouchTransform
+            if not S.decoDialogTouchTransform then
+                S.decoDialogTransformTarget = 0
+            end
+            return true
+        end
+
+        -- 变换目标按钮点击
+        if S.decoDialogTouchTransform then
+            local targetY = checkY + 16
+            local btnStartX = checkX + 38
+            local btnH = 12
+            local btnGap = 2
+            local btnY = targetY + 1
+            for i, dt in ipairs(types) do
+                if i ~= S.currentDecorationType then
+                    local nameW = 8 * #dt.name + 8
+                    nameW = math.min(nameW, 52)
+                    if mx >= btnStartX and mx < btnStartX + nameW and my >= btnY and my < btnY + btnH then
+                        S.decoDialogTransformTarget = i
+                        return true
+                    end
+                    btnStartX = btnStartX + nameW + btnGap
+                    if btnStartX > dlgX + dlgW - 20 then
+                        btnStartX = checkX + 38
+                        btnY = btnY + btnH + btnGap
+                    end
+                end
+            end
+        end
     end
 
     -- 回收站对话框：还原按钮 + 关闭按钮

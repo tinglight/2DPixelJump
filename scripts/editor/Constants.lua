@@ -207,6 +207,10 @@ M.DECORATION_TYPES = {
     { id = "goddess1", name = "女神像", color = {160, 155, 140}, sprite = "image/edited_女神像_无底座_20260530153654.png", size = {w = 10, h = 10} },
     { id = "broken_lantern", name = "破损灯", color = {90, 70, 40}, sprite = "image/broken_lantern_deco_20260530155851.png", size = {w = 3, h = 3} },
     { id = "broken_pipe", name = "破败水管", color = {40, 50, 45}, sprite = "image/decorative_broken_pipe_pixel_20260530194030.png", size = {w = 7, h = 7} },
+    { id = "sign_move", name = "告示牌-移动", color = {139, 90, 43}, sprite = "image/sign_move_20260530190421.png", size = {w = 3, h = 3} },
+    { id = "sign_jump", name = "告示牌-跳跃", color = {139, 90, 43}, sprite = "image/sign_jump_20260530190401.png", size = {w = 3, h = 3} },
+    { id = "sign_jump_safe", name = "告示牌-跳吧", color = {139, 90, 43}, sprite = "image/sign_jump_safe_20260530192956.png", size = {w = 3, h = 3} },
+    { id = "sign_maybe", name = "告示牌-大概", color = {139, 90, 43}, sprite = "image/sign_maybe_20260530192859.png", size = {w = 3, h = 3} },
 }
 
 -- ====================================================================

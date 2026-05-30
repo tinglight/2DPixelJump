@@ -283,6 +283,10 @@ function M.SerializeDecorations()
         if deco.scale and deco.scale ~= 100 then
             entry.scale = deco.scale
         end
+        if deco.touchTransform and deco.transformTarget and deco.transformTarget > 0 then
+            entry.touchTransform = true
+            entry.transformTarget = deco.transformTarget
+        end
         table.insert(result, entry)
     end
     return result
@@ -302,6 +306,8 @@ function M.DeserializeDecorations(data)
                 typeId = d.typeId,
                 brightness = d.brightness or 100,
                 scale = d.scale or 100,
+                touchTransform = d.touchTransform or false,
+                transformTarget = d.transformTarget or 0,
             })
         end
     end
