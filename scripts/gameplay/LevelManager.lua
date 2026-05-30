@@ -184,8 +184,9 @@ function M.LoadLevelFromFile(filename, player)
     M.currentLevelFile = filename
     M.currentTemplateName = data.levelName or filename
 
-    -- 背景图
+    -- 背景图和明暗度
     Config.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    Config.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
 
     -- 重置开关/门状态
     M.switchState = {}
@@ -307,7 +308,61 @@ function M.UpdateTransition(dt, player, cameraState)
     end
 end
 
+local EDGE_THRESHOLD = 4  -- 最多允许 4 格厚的边界墙
+
+--- 检查玩家是否紧贴边缘实体墙（无法再靠近地图边缘）
+--- 条件：1) 玩家距离边缘较近（间距 <= EDGE_THRESHOLD 格）
+---       2) 玩家与边缘之间全部是实体方块
+---@param player table
+---@param direction string "left"|"right"|"up"|"down"
+---@param playerS number 玩家格子尺寸
+---@return boolean
+local function IsPlayerAgainstEdgeWall(player, direction, playerS)
+    if direction == "left" then
+        local gap = player.gridX - 1  -- 玩家左侧到 col=1 的距离
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for row = player.gridY, player.gridY + playerS - 1 do
+            for col = 1, player.gridX - 1 do
+                if not Physics.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    elseif direction == "right" then
+        local rightEdge = player.gridX + playerS  -- 玩家右侧第一个空格
+        local gap = Config.MAP_COLS - rightEdge + 1
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for row = player.gridY, player.gridY + playerS - 1 do
+            for col = rightEdge, Config.MAP_COLS do
+                if not Physics.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    elseif direction == "up" then
+        local gap = player.gridY - 1
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for col = player.gridX, player.gridX + playerS - 1 do
+            for row = 1, player.gridY - 1 do
+                if not Physics.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    elseif direction == "down" then
+        local bottomEdge = player.gridY + playerS
+        local gap = Config.MAP_ROWS - bottomEdge + 1
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for col = player.gridX, player.gridX + playerS - 1 do
+            for row = bottomEdge, Config.MAP_ROWS do
+                if not Physics.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    end
+    return false
+end
+
 --- 检查玩家是否触碰边界并触发切换
+--- 当画布边界（实体方块）与关卡边界重合时，玩家无法实际移动到最外格，
+--- 因此需要检测"紧贴边界"的情况：玩家与地图边缘之间全是实体方块。
 ---@param player table
 ---@return string|nil gameStateChange "gameover" if fell out
 function M.CheckBoundaryTransition(player)
@@ -315,9 +370,11 @@ function M.CheckBoundaryTransition(player)
     if M.transitionCooldown > 0 then return nil end
     if M.transition.active then return nil end
 
-    local playerH = Physics.PlayerGridSize()
+    local playerS = Physics.PlayerGridSize()
 
-    if player.gridX <= 1 then
+    -- 左边界：玩家已到达 col=1，或贴紧左侧边缘实体墙
+    local atLeft = player.gridX <= 1 or IsPlayerAgainstEdgeWall(player, "left", playerS)
+    if atLeft then
         local target = M.FindConnectedLevel("left")
         if target then
             M.StartLevelTransition(target, "left")
@@ -325,7 +382,10 @@ function M.CheckBoundaryTransition(player)
         end
     end
 
-    if player.gridX + playerH - 1 >= Config.MAP_COLS then
+    -- 右边界：玩家右端已到达 MAP_COLS，或贴紧右侧边缘实体墙
+    local atRight = player.gridX + playerS - 1 >= Config.MAP_COLS
+        or IsPlayerAgainstEdgeWall(player, "right", playerS)
+    if atRight then
         local target = M.FindConnectedLevel("right")
         if target then
             M.StartLevelTransition(target, "right")
@@ -333,7 +393,10 @@ function M.CheckBoundaryTransition(player)
         end
     end
 
-    if player.gridY <= 1 then
+    -- 上边界：玩家已到达 row=1，或正在跳跃时贴紧顶部实体
+    local atTop = player.gridY <= 1
+        or (player.isJumping and IsPlayerAgainstEdgeWall(player, "up", playerS))
+    if atTop then
         local target = M.FindConnectedLevel("up")
         if target then
             M.StartLevelTransition(target, "up")
@@ -341,7 +404,8 @@ function M.CheckBoundaryTransition(player)
         end
     end
 
-    if player.gridY + playerH - 1 >= Config.MAP_ROWS then
+    -- 下边界：玩家下端已到达 MAP_ROWS（掉落出底部由 UpdateVertical 的 "boundary" 返回处理）
+    if player.gridY + playerS - 1 >= Config.MAP_ROWS then
         local target = M.FindConnectedLevel("down")
         if target then
             M.StartLevelTransition(target, "down")

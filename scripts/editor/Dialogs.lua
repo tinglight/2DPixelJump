@@ -140,6 +140,7 @@ function M.OpenLightDialog(lightIdx)
     local light = FogOfWar.GetLight(lightIdx)
     S.lightDiameterInput = tostring(light.diameter)
     S.lightFeatherInput = tostring(light.feather)
+    S.lightGroupInput = tostring(light.group or 0)
     S.dialogMode = "light"
     S.lightDialogFocus = 1
     S.lightDialogCursor = #S.lightDiameterInput
@@ -174,6 +175,7 @@ local BG_IMAGE_OPTIONS = {
 }
 
 function M.OpenBackgroundDialog()
+    input:SetScreenKeyboardVisible(true)
     S.dialogMode = "background"
     -- 找到当前选中项索引
     S.bgDialogSelected = 0
@@ -241,7 +243,8 @@ function M.ConfirmDialog()
         if S.selectedLightIndex > 0 then
             local d = tonumber(S.lightDiameterInput) or 6
             local f = tonumber(S.lightFeatherInput) or 0.5
-            FogOfWar.UpdateLight(S.selectedLightIndex, d, f)
+            local g = tonumber(S.lightGroupInput) or 0
+            FogOfWar.UpdateLight(S.selectedLightIndex, d, f, g)
         end
     elseif S.dialogMode == "background" then
         local sel = S.bgDialogSelected
@@ -291,7 +294,7 @@ local function GetDialogSize()
     if S.dialogMode == "rename" then h = 80
     elseif S.dialogMode == "canvas" then h = 100
     elseif S.dialogMode == "player" then w = 200; h = 190
-    elseif S.dialogMode == "light" then h = 100
+    elseif S.dialogMode == "light" then h = 122
     elseif S.dialogMode == "background" then w = 200; h = 30 + (#BG_IMAGE_OPTIONS + 1) * 18 + 24 + 32
     end
     return w, h
@@ -505,12 +508,13 @@ local function DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgFontSize(vg, 8)
     nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
     nvgFillColor(vg, nvgRGBA(140, 140, 160, 200))
-    nvgText(vg, dlgX + dlgW * 0.5, dlgY + 26, "直径:2~30格  羽化:0.0~1.0")
+    nvgText(vg, dlgX + dlgW * 0.5, dlgY + 26, "直径:2~30格  羽化:0.0~1.0  编组:0~9")
 
     local inputW = 50
     local inputH = 16
     local fieldY1 = dlgY + 34
     local fieldY2 = dlgY + 56
+    local fieldY3 = dlgY + 78
     local dInputX = dlgX + dlgW * 0.5 - inputW * 0.5
 
     nvgFontSize(vg, 9)
@@ -518,6 +522,7 @@ local function DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgFillColor(vg, nvgRGBA(200, 200, 210, 255))
     nvgText(vg, dInputX - 6, fieldY1 + inputH * 0.5, "直径:")
     nvgText(vg, dInputX - 6, fieldY2 + inputH * 0.5, "羽化:")
+    nvgText(vg, dInputX - 6, fieldY3 + inputH * 0.5, "编组:")
 
     local focus1 = (S.lightDialogFocus == 1)
     nvgBeginPath(vg)
@@ -553,6 +558,24 @@ local function DrawLightDialog(vg, dlgX, dlgY, dlgW, dlgH)
     nvgText(vg, dInputX + inputW * 0.5, fieldY2 + inputH * 0.5, S.lightFeatherInput)
     if focus2 then
         DrawCursorCentered(vg, dInputX, fieldY2, inputW, inputH, S.lightFeatherInput, S.lightDialogCursor, 255, 220, 100)
+    end
+
+    local focus3 = (S.lightDialogFocus == 3)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, dInputX, fieldY3, inputW, inputH, 3)
+    nvgFillColor(vg, nvgRGBA(15, 15, 25, 255))
+    nvgFill(vg)
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, dInputX, fieldY3, inputW, inputH, 3)
+    nvgStrokeColor(vg, focus3 and nvgRGBA(100, 180, 255, 220) or nvgRGBA(60, 60, 80, 200))
+    nvgStrokeWidth(vg, 1)
+    nvgStroke(vg)
+    nvgFontSize(vg, 10)
+    nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(240, 240, 240, 255))
+    nvgText(vg, dInputX + inputW * 0.5, fieldY3 + inputH * 0.5, S.lightGroupInput)
+    if focus3 then
+        DrawCursorCentered(vg, dInputX, fieldY3, inputW, inputH, S.lightGroupInput, S.lightDialogCursor, 100, 180, 255)
     end
 
     nvgFontSize(vg, 8)
@@ -800,6 +823,9 @@ function M.HandleKeyDown(key)
             if S.lightDialogFocus == 1 then
                 S.lightDialogFocus = 2
                 S.lightDialogCursor = #S.lightFeatherInput
+            elseif S.lightDialogFocus == 2 then
+                S.lightDialogFocus = 3
+                S.lightDialogCursor = #S.lightGroupInput
             else
                 S.lightDialogFocus = 1
                 S.lightDialogCursor = #S.lightDiameterInput
@@ -831,9 +857,14 @@ function M.HandleKeyDown(key)
         cur, S.playerParamCursor = HandleNumericFieldKey(key, cur, S.playerParamCursor)
         S.playerParamInputs[S.playerParamFocus] = cur
     elseif S.dialogMode == "light" then
-        local cur = (S.lightDialogFocus == 1) and S.lightDiameterInput or S.lightFeatherInput
+        local cur
+        if S.lightDialogFocus == 1 then cur = S.lightDiameterInput
+        elseif S.lightDialogFocus == 2 then cur = S.lightFeatherInput
+        else cur = S.lightGroupInput end
         cur, S.lightDialogCursor = HandleNumericFieldKey(key, cur, S.lightDialogCursor)
-        if S.lightDialogFocus == 1 then S.lightDiameterInput = cur else S.lightFeatherInput = cur end
+        if S.lightDialogFocus == 1 then S.lightDiameterInput = cur
+        elseif S.lightDialogFocus == 2 then S.lightFeatherInput = cur
+        else S.lightGroupInput = cur end
     end
 
     return true
@@ -894,12 +925,18 @@ function M.HandleTextInput(text)
     elseif S.dialogMode == "light" then
         local valid = text:match("[%d%.]+")
         if valid then
-            local cur = (S.lightDialogFocus == 1) and S.lightDiameterInput or S.lightFeatherInput
-            if #cur < 5 then
+            local cur
+            if S.lightDialogFocus == 1 then cur = S.lightDiameterInput
+            elseif S.lightDialogFocus == 2 then cur = S.lightFeatherInput
+            else cur = S.lightGroupInput end
+            local maxLen = (S.lightDialogFocus == 3) and 2 or 5
+            if #cur < maxLen then
                 cur = string.sub(cur, 1, S.lightDialogCursor) .. valid .. string.sub(cur, S.lightDialogCursor + 1)
                 S.lightDialogCursor = S.lightDialogCursor + #valid
                 S.renameBlink = 0
-                if S.lightDialogFocus == 1 then S.lightDiameterInput = cur else S.lightFeatherInput = cur end
+                if S.lightDialogFocus == 1 then S.lightDiameterInput = cur
+                elseif S.lightDialogFocus == 2 then S.lightFeatherInput = cur
+                else S.lightGroupInput = cur end
             end
         end
     elseif S.dialogMode == "background" then
@@ -973,6 +1010,7 @@ function M.HandleMouseDown(mx, my)
         local inputH = 16
         local fieldY1 = dlgY + 34
         local fieldY2 = dlgY + 56
+        local fieldY3 = dlgY + 78
         local dInputX = dlgX + dlgW * 0.5 - inputW * 0.5
         if mx >= dInputX and mx < dInputX + inputW then
             if my >= fieldY1 and my < fieldY1 + inputH then
@@ -981,6 +1019,10 @@ function M.HandleMouseDown(mx, my)
             end
             if my >= fieldY2 and my < fieldY2 + inputH then
                 S.lightDialogFocus = 2; S.lightDialogCursor = #S.lightFeatherInput; S.renameBlink = 0
+                return true
+            end
+            if my >= fieldY3 and my < fieldY3 + inputH then
+                S.lightDialogFocus = 3; S.lightDialogCursor = #S.lightGroupInput; S.renameBlink = 0
                 return true
             end
         end

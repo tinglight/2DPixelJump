@@ -242,6 +242,7 @@ function HandleNanoVGRender(eventType, eventData)
 
     Renderer.DrawGrid()
     Renderer.DrawMap()
+    Renderer.DrawFuelBurst()
     Renderer.DrawPlayer()
 
     nvgRestore(vg)
@@ -262,6 +263,10 @@ function HandleUpdate(eventType, eventData)
 
     -- 更新 BONFIRE LIT 消息
     Renderer.UpdateBonfireMessage(dt)
+
+    -- 更新火苗爆裂粒子和像素恢复动画
+    Renderer.UpdateFuelBurst(dt)
+    Renderer.UpdatePixelRecoverAnim(dt)
 
     -- 世界地图切换冷却
     if LevelManager.transitionCooldown > 0 then
@@ -331,6 +336,19 @@ function HandleUpdate(eventType, eventData)
     local vertResult = PlayerController.UpdateVertical(dt)
     if vertResult == "gameover" then
         gameState = Config.STATE_GAMEOVER
+        return
+    elseif vertResult == "boundary" then
+        -- 玩家下落超出地图底部，检查是否有连接关卡可传送
+        if LevelManager.worldMapData and LevelManager.currentLevelFile then
+            local target = LevelManager.FindConnectedLevel("down")
+            if target and not LevelManager.transition.active then
+                LevelManager.StartLevelTransition(target, "down")
+            elseif not target then
+                gameState = Config.STATE_GAMEOVER
+            end
+        else
+            gameState = Config.STATE_GAMEOVER
+        end
         return
     end
 

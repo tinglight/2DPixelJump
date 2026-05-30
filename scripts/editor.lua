@@ -275,16 +275,10 @@ function HandleUpdate(eventType, eventData)
     end
 
     if S.editorMode == C.MODE_WORLDPLAY then
-        if S.worldPlayCooldown > 0 then
-            S.worldPlayCooldown = S.worldPlayCooldown - dt
-        end
-        if S.panTransition.active then
-            PlayMode.UpdatePanTransition(dt)
-        else
-            PlayMode.Update(dt)
-            if S.play.alive and not S.play.won then
-                PlayMode.WorldPlayCheckBoundary()
-            end
+        PlayMode.UpdateTransition(dt)
+        PlayMode.Update(dt)
+        if S.play.alive and not S.play.won and not S.transition.active then
+            PlayMode.WorldPlayCheckBoundary()
         end
         return
     end

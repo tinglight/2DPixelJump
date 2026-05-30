@@ -17,8 +17,9 @@ M.DESIGN_H = 272  -- 17 格高
 M.MAP_COLS = 60
 M.MAP_ROWS = 17
 
--- 背景图路径（运行时由 LevelManager 加载关卡时设置）
+-- 背景图路径和明暗度（运行时由 LevelManager 加载关卡时设置）
 M.backgroundImage = ""
+M.bgImageAlpha = 0.5
 
 -- 游戏状态枚举
 M.STATE_PLAYING = 1

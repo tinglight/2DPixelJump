@@ -64,6 +64,7 @@ function M.SerializeLevel()
         },
         -- playerParams 不再保存到单个关卡（全局配置，统一由 CloudStorage 管理）
         lightSources = FogOfWar.Serialize(),
+        lightZones = FogOfWar.SerializeZones(),
     }
     -- 保留关卡显示名称（确保云端保存后不丢失）
     if S.currentLevelDisplayName ~= "" then
@@ -205,6 +206,10 @@ function M.ApplyLevelData(data)
     FogOfWar.Deserialize(data.lightSources)
     S.lightSources = FogOfWar.GetLightSources()
     S.selectedLightIndex = 0
+
+    FogOfWar.DeserializeZones(data.lightZones)
+    S.lightZones = FogOfWar.GetLightZones()
+    S.selectedLightZoneIndex = 0
 
     -- 背景图和明暗度
     S.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""

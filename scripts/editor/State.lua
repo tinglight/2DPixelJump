@@ -158,6 +158,11 @@ S.playerParamFocus = 1
 S.playerParamCursor = 0
 
 -- ====================================================================
+-- Gizmos 显隐（光源提示圈、光域矩形、相机框等）
+-- ====================================================================
+S.showGizmos = false  -- 默认隐藏，开启后显示
+
+-- ====================================================================
 -- 光源
 -- ====================================================================
 S.fogShowInEditor = false
@@ -165,8 +170,21 @@ S.lightSources = {}
 S.selectedLightIndex = 0
 S.lightDiameterInput = "6"
 S.lightFeatherInput = "0.5"
+S.lightGroupInput = "0"
 S.lightDialogFocus = 1
 S.lightDialogCursor = 0
+
+-- ====================================================================
+-- 光源区域（光域）
+-- ====================================================================
+S.lightZones = {}
+S.selectedLightZoneIndex = 0
+S.lightZoneDrawing = false       -- 是否正在拖拽框选区域
+S.lightZoneStartCol = 0
+S.lightZoneStartRow = 0
+S.lightZoneEndCol = 0
+S.lightZoneEndRow = 0
+
 
 -- ====================================================================
 -- 交互模式 & 选取
@@ -365,7 +383,7 @@ S.transition = {
 S.panTransition = {
     active = false,       -- 是否正在平移过渡
     progress = 0,         -- 0~1 动画进度
-    duration = 0.2,       -- 过渡时长(秒)
+    duration = 0.35,      -- 过渡时长(秒)
     direction = nil,      -- 移动方向 "left"|"right"|"up"|"down"
     -- 旧关卡快照
     oldLevelData = nil,   -- 旧关卡的 levelData 引用

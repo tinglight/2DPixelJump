@@ -145,9 +145,11 @@ M.TOOLS = {
     { id = "CHECKPOINT",  tile = M.TILE.CHECKPOINT,   name = "篝火", color = {255, 140, 30, 255},  group = "pickup" },
     { id = "FRAGILE",     tile = M.TILE.FRAGILE,     name = "脆台", color = {180, 150, 100, 255}, group = "terrain" },
     { id = "LIGHT",       tile = -1,                 name = "光源", color = {255, 220, 80, 255},  group = "terrain" },
+    { id = "LIGHT_ZONE", tile = -2,                 name = "光域", color = {255, 160, 40, 255},  group = "terrain" },
 }
 
 M.LIGHT_TOOL_INDEX = 17
+M.LIGHT_ZONE_TOOL_INDEX = 18
 M.HIDDEN_WALL_TOOL_INDEX = 13
 
 -- ====================================================================

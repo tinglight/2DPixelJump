@@ -24,6 +24,18 @@ function M.Inject(deps)
     WorldMapEditor = deps.WorldMapEditor
     LevelGenerator = deps.LevelGenerator
     cjson = deps.cjson
+
+    -- 设置碰撞检测器用于光照阴影遮挡
+    local function isSolidForLight(col, row)
+        if col < 1 or col > S.MAP_COLS then return false end
+        if row < 1 or row > S.MAP_ROWS then return false end
+        local val = S.levelData[row] and S.levelData[row][col]
+        if not val or val == 0 then return false end
+        local base = TileUtils.GetTileType(val)
+        return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR
+    end
+    FogOfWar.SetCollisionChecker(isSolidForLight)
+    SolidRenderer.SetCollisionChecker(isSolidForLight)
 end
 
 ------------------------------------------------------------
@@ -112,6 +124,17 @@ function M.IsSolid(col, row)
     return false
 end
 
+--- 检查某格是否为实体方块（用于渲染时邻居检测，边界外返回 false）
+function M.IsSolidAt(row, col)
+    if row < 1 or row > S.MAP_ROWS or col < 1 or col > S.MAP_COLS then
+        return false
+    end
+    local val = S.levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = TileUtils.GetTileType(val)
+    return base == C.TILE.SOLID or base == C.TILE.SOLID_PILLAR
+end
+
 --- 检测玩家是否在梯子上（任意身体格子重叠梯子）
 function M.IsOnLadder(gx, gy)
     local s = M.PlayerGridSize()
@@ -158,6 +181,34 @@ function M.CheckTilesOverlap()
     S.play.inBlackWater = false
 
     local s = M.PlayerGridSize()
+    -- DEBUG: 每2秒打印玩家位置+周围tile值
+    M._debugTimer = (M._debugTimer or 0) + 1
+    if M._debugTimer % 120 == 0 then
+        local tilesInfo = ""
+        for dy = 0, s - 1 do
+            for dx = 0, s - 1 do
+                local c = S.play.gridX + dx
+                local r = S.play.gridY + dy
+                local v = 0
+                if c >= 1 and c <= S.MAP_COLS and r >= 1 and r <= S.MAP_ROWS then
+                    v = S.levelData[r][c] or 0
+                end
+                tilesInfo = tilesInfo .. string.format(" [r%d,c%d]=v%d", r, c, v)
+            end
+        end
+        log:Write(LOG_INFO, string.format("[PLAYER POS] gridX=%d gridY=%d size=%d tiles:%s",
+            S.play.gridX, S.play.gridY, s, tilesInfo))
+        -- 还打印脚下一行和头上一行
+        local belowInfo = ""
+        local feetRow = S.play.gridY + s
+        for dx = 0, s - 1 do
+            local c = S.play.gridX + dx
+            if c >= 1 and c <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
+                belowInfo = belowInfo .. string.format(" [r%d,c%d]=v%d", feetRow, c, S.levelData[feetRow][c] or 0)
+            end
+        end
+        log:Write(LOG_INFO, string.format("[PLAYER BELOW] feetRow=%d:%s", feetRow, belowInfo))
+    end
     for dy = 0, s - 1 do
         for dx = 0, s - 1 do
             local col = S.play.gridX + dx
@@ -173,6 +224,13 @@ function M.ProcessTileAt(col, row)
     local base, group = TileUtils.GetTileType(val)
     local key = row .. "_" .. col
 
+    -- DEBUG: 检测篝火碰撞
+    if val == 14 or base == C.TILE.CHECKPOINT or base == 14 then
+        local activated = S.checkpointActivated[key]
+        log:Write(LOG_INFO, string.format("[CHECKPOINT DEBUG] col=%d row=%d val=%d base=%d TILE.CHECKPOINT=%s key=%s activated=%s",
+            col, row, val, base, tostring(C.TILE.CHECKPOINT), key, tostring(activated)))
+    end
+
     if base == C.TILE.SPIKE or base == C.TILE.POISON_WATER then
         S.play.alive = false
         S.play.deathTimer = 0
@@ -184,9 +242,18 @@ function M.ProcessTileAt(col, row)
         S.play.won = true
     elseif base == C.TILE.FUEL and not S.play.collected[key] then
         S.play.collected[key] = true
-        M.RecoverPixels(math.floor(S.playTotalPixels * 0.4))
+        -- 使用渐进式恢复动画
+        local toRecover = math.floor(S.playTotalPixels * 0.4)
+        local lost = S.playTotalPixels - S.playAlivePixels
+        toRecover = math.min(toRecover, lost)
+        if toRecover > 0 then
+            M.StartPixelRecoverAnim(toRecover)
+        end
         M.SyncFallGridCount()
-        M.ShowBonfireMessage()
+        -- 触发火苗爆裂特效
+        local worldX = (col - 1) * C.GRID + C.GRID * 0.5
+        local worldY = (row - 1) * C.GRID + C.GRID * 0.5
+        M.TriggerFuelBurst(worldX, worldY)
     elseif base == C.TILE.SWITCH and not S.play.collected[key] then
         S.play.collected[key] = true
         S.play.switchState[group] = not S.play.switchState[group]
@@ -222,6 +289,7 @@ function M.ProcessTileAt(col, row)
         M.RecoverPixels(S.playTotalPixels)
         M.SyncFallGridCount()
         S.SetMessage("篝火点燃! 火焰已补满!", 1.5)
+        M.ShowBonfireMessage()
     end
 end
 
@@ -305,6 +373,8 @@ local function CleanupCheckpointLight()
         FogOfWar.RemoveLight(S.checkpointLightPos.col, S.checkpointLightPos.row)
         S.checkpointLightPos = nil
     end
+    -- 同步更新 S.lightSources，避免编辑模式渲染残留的篝火光源
+    S.lightSources = FogOfWar.GetLightSources()
     S.checkpointActivated = {}
     S.checkpointFile = nil
     S.checkpointCol = nil
@@ -321,6 +391,7 @@ function M.Update(dt)
         FogOfWar.UpdateTweens(dt)
         M.UpdateDeathRespawn(dt)
         M.UpdateBonfireMessage(dt)
+        M.UpdateFuelBurst(dt)
         return
     end
 
@@ -337,6 +408,7 @@ function M.Update(dt)
             return
         else
             CleanupCheckpointLight()
+            FogOfWar.RestoreAllLights()
             PipeSystem.StopSound()
             if S.editorMode == C.MODE_PLAY then
                 S.editorMode = C.MODE_EDIT
@@ -365,6 +437,8 @@ function M.Update(dt)
     M.UpdateFragilePlatform(dt)
     CrossLevel.Update(dt)
     M.UpdateBonfireMessage(dt)
+    M.UpdateFuelBurst(dt)
+    M.UpdatePixelRecoverAnim(dt)
 
     if S.playAlivePixels <= 0 then
         S.play.alive = false
@@ -406,6 +480,16 @@ function M.Update(dt)
     end
 
     FogOfWar.UpdateTweens(dt)
+    FogOfWar.UpdatePlayerZone(S.play.gridX + 1, S.play.gridY + 1, dt)
+
+    -- 世界试玩模式：冷却递减、过渡动画、边界检测
+    if S.editorMode == C.MODE_WORLDPLAY then
+        if S.worldPlayCooldown > 0 then
+            S.worldPlayCooldown = S.worldPlayCooldown - dt
+        end
+        -- 过渡动画和边界检测由 editor.lua 统一调度
+    end
+
     M.UpdateCamera(dt)
 end
 
@@ -1067,8 +1151,9 @@ function M.ApplyWorldLevelData(data)
     -- 世界试玩模式下不覆盖玩家参数，保持全局配置一致
     -- （全局 playerParams 已在 StartWorldPlayMode 时从 data/player_params.json 加载）
 
-    -- 背景图
+    -- 背景图和明暗度
     S.backgroundImage = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
+    S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
     S.bgImageHandle = nil  -- 切换关卡时清除缓存
 
     FogOfWar.Deserialize(data.lightSources)
@@ -1178,7 +1263,6 @@ function M.WorldPlayCheckBoundary()
     if not dir then return end
     local targetFile = M.WorldPlayFindConnection(dir)
     if targetFile then
-        -- 启动过渡动画（先 fadeOut，加载完再 fadeIn）
         S.transition.active = true
         S.transition.phase = "fadeOut"
         S.transition.alpha = 0
@@ -1249,15 +1333,78 @@ function M.DrawTransition()
     nvgFill(vg)
 end
 
+--- 检测玩家与 camBound 边缘之间是否全部为实体方块（被墙挡住无法再靠近）
+---@param gx number 玩家 gridX
+---@param gy number 玩家 gridY
+---@param direction string "left"|"right"|"up"|"down"
+---@param ps number 玩家占据的格子数
+---@return boolean
+local EDGE_THRESHOLD = 4
+local function IsAgainstBoundaryWall(gx, gy, direction, ps)
+    if direction == "left" then
+        local gap = gx - S.camBound.left
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for row = gy, gy + ps - 1 do
+            for col = S.camBound.left, gx - 1 do
+                if not M.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    elseif direction == "right" then
+        local rightEdge = gx + ps  -- 玩家右侧第一个格子
+        local gap = S.camBound.right - rightEdge + 1
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for row = gy, gy + ps - 1 do
+            for col = rightEdge, S.camBound.right do
+                if not M.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    elseif direction == "up" then
+        local gap = gy - S.camBound.top
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for col = gx, gx + ps - 1 do
+            for row = S.camBound.top, gy - 1 do
+                if not M.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    elseif direction == "down" then
+        local bottomEdge = gy + ps
+        local gap = S.camBound.bottom - bottomEdge + 1
+        if gap < 1 or gap > EDGE_THRESHOLD then return false end
+        for col = gx, gx + ps - 1 do
+            for row = bottomEdge, S.camBound.bottom do
+                if not M.IsSolid(col, row) then return false end
+            end
+        end
+        return true
+    end
+    return false
+end
+
 function M.DetectBoundaryDirection(gx, gy)
     local pressLeft = input:GetKeyDown(KEY_A) or input:GetKeyDown(KEY_LEFT)
     local pressRight = input:GetKeyDown(KEY_D) or input:GetKeyDown(KEY_RIGHT)
     local ps = M.PlayerGridSize()
-    if gx <= S.camBound.left and pressLeft then return "left", "right" end
-    -- 玩家宽度为 ps 格，最右能到达 camBound.right - ps + 1
-    if gx + ps - 1 >= S.camBound.right and pressRight then return "right", "left" end
-    if gy <= S.camBound.top then return "up", "down" end
-    if gy + ps - 1 >= S.camBound.bottom or gy >= S.MAP_ROWS then return "down", "up" end
+
+    -- 左边界：已到达 camBound.left 或紧贴左侧实体墙
+    local atLeft = gx <= S.camBound.left or IsAgainstBoundaryWall(gx, gy, "left", ps)
+    if atLeft and pressLeft then return "left", "right" end
+
+    -- 右边界：玩家右端已到达 camBound.right 或紧贴右侧实体墙
+    local atRight = (gx + ps - 1 >= S.camBound.right) or IsAgainstBoundaryWall(gx, gy, "right", ps)
+    if atRight and pressRight then return "right", "left" end
+
+    -- 上边界：已到达 camBound.top 或跳跃中紧贴顶部实体墙
+    local atTop = gy <= S.camBound.top or (S.play.isJumping and IsAgainstBoundaryWall(gx, gy, "up", ps))
+    if atTop then return "up", "down" end
+
+    -- 下边界：玩家下端已到达 camBound.bottom
+    local atBottom = (gy + ps - 1 >= S.camBound.bottom) or gy >= S.MAP_ROWS
+        or IsAgainstBoundaryWall(gx, gy, "down", ps)
+    if atBottom then return "down", "up" end
+
     return nil, nil
 end
 
@@ -1319,6 +1466,9 @@ local function ResetPlayState()
     S.playCameraY = math.max(boundTopPx, math.min(spawnY - viewH * 0.5, camMaxY))
     M.InitPlayPixels()
     PipeSystem.Init()
+
+    -- 初始化光源区域可见性（玩家中心格作为检测点）
+    FogOfWar.InitZoneVisibility(S.play.gridX + 1, S.play.gridY + 1)
 end
 
 ------------------------------------------------------------
@@ -1509,6 +1659,23 @@ function M.Draw()
     PipeSystem.DrawParticles(vg, S.playCameraX, S.playCameraY)
     FlameRenderer.UpdateFlameAnim()
     FlameRenderer.Draw()
+    -- 恢复闪光覆盖
+    local flashIntensity = M.GetRecoverFlashIntensity()
+    if flashIntensity > 0 then
+        local ps = C.FLAME_CFG.pixelSize
+        local N = C.FLAME_CFG.pixelGridSize
+        local totalSize = N * ps
+        local baseX = (S.play.gridX - 1) * C.GRID - S.playCameraX
+        local baseY = (S.play.gridY - 1) * C.GRID - S.playCameraY
+        local cx = baseX + totalSize * 0.5
+        local cy = baseY + totalSize * 0.5
+        local flashAlpha = math.floor(flashIntensity * 180)
+        nvgBeginPath(vg)
+        nvgCircle(vg, cx, cy, totalSize * 0.7)
+        nvgFillColor(vg, nvgRGBA(255, 200, 60, flashAlpha))
+        nvgFill(vg)
+    end
+    M.DrawFuelBurst(vg, S.playCameraX, S.playCameraY)
     CrossLevel.Draw(vg, S.playCameraX, S.playCameraY)
     M.DrawFogOfWar(vg, startCol, endCol)
     M.DrawHUD(vg)
@@ -1681,27 +1848,105 @@ function M.DrawSolidTileWithLight(vg, px, py, tileType, row, col)
         totalLdy = totalLdy / len
     end
 
-    SolidRenderer.DrawSolid(vg, tileType, px + 0.5, py + 0.5, C.GRID - 1, totalLit, totalLdx, totalLdy)
+    -- 检测四邻是否有实体方块（用于青苔边缘）
+    local neighbors = {
+        top    = M.IsSolidAt(row - 1, col),
+        bottom = M.IsSolidAt(row + 1, col),
+        left   = M.IsSolidAt(row, col - 1),
+        right  = M.IsSolidAt(row, col + 1),
+    }
+
+    SolidRenderer.DrawSolid(vg, tileType, px, py, C.GRID, totalLit, totalLdx, totalLdy, col, row, neighbors)
 end
 
 function M.DrawFuelTile(vg, px, py, row, col)
     local key = row .. "_" .. col
     if S.play.collected[key] then return end
-    local flicker = math.sin(S.playGameTime * 6 + col * 1.7) * 0.3 + 0.7
-    local fr = math.floor(255 * flicker)
-    local fg = math.floor(120 * flicker)
+    local GRID = C.GRID
+    local ps = 2  -- 像素块大小
+    local t = S.playGameTime or 0
+    -- 火苗形状 (5x7 像素点阵，3帧动画)
+    local frame = math.floor(t * 6 + col * 1.3) % 3
+    local shapes = {
+        {
+            {0,0,1,0,0},
+            {0,1,1,0,0},
+            {0,1,1,1,0},
+            {1,1,1,1,0},
+            {1,1,1,1,1},
+            {0,1,1,1,0},
+            {0,0,1,0,0},
+        },
+        {
+            {0,0,0,1,0},
+            {0,0,1,1,0},
+            {0,1,1,1,0},
+            {0,1,1,1,1},
+            {1,1,1,1,0},
+            {0,1,1,1,0},
+            {0,0,1,0,0},
+        },
+        {
+            {0,1,0,0,0},
+            {0,1,1,0,0},
+            {1,1,1,0,0},
+            {1,1,1,1,0},
+            {0,1,1,1,1},
+            {0,1,1,1,0},
+            {0,0,1,0,0},
+        },
+    }
+    local shape = shapes[frame + 1]
+    local colors = {
+        {255, 255, 180},
+        {255, 230, 100},
+        {255, 190, 50},
+        {255, 150, 30},
+        {255, 120, 20},
+        {255, 90, 10},
+        {200, 60, 5},
+    }
+    local floatY = math.sin(t * 4 + col * 2.3) * 1.5
+    local startX = px + (GRID - 5 * ps) * 0.5
+    local startY = py + (GRID - 7 * ps) * 0.5 + floatY
+
+    -- 光晕
+    local glowFlicker = math.sin(t * 7 + col * 3.1) * 0.3 + 0.7
     nvgBeginPath(vg)
-    nvgCircle(vg, px + C.GRID * 0.5, py + C.GRID * 0.5, 7)
-    nvgFillColor(vg, nvgRGBA(255, 100, 0, math.floor(60 * flicker)))
+    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5 + floatY, 7 * glowFlicker)
+    nvgFillColor(vg, nvgRGBA(255, 150, 30, math.floor(35 * glowFlicker)))
     nvgFill(vg)
-    nvgBeginPath(vg)
-    nvgCircle(vg, px + C.GRID * 0.5, py + C.GRID * 0.5, 4)
-    nvgFillColor(vg, nvgRGBA(fr, fg, 10, 255))
-    nvgFill(vg)
-    nvgBeginPath(vg)
-    nvgCircle(vg, px + C.GRID * 0.5, py + C.GRID * 0.5 - 1, 2)
-    nvgFillColor(vg, nvgRGBA(255, 255, 200, math.floor(200 * flicker)))
-    nvgFill(vg)
+
+    -- 像素火苗
+    for r = 1, 7 do
+        for c = 1, 5 do
+            if shape[r][c] == 1 then
+                local drawX = startX + (c - 1) * ps
+                local drawY = startY + (r - 1) * ps
+                local baseColor = colors[r]
+                local flick = math.sin(t * 10 + r * 3 + c * 5) * 0.15 + 0.85
+                local cr = math.min(255, math.floor(baseColor[1] * flick))
+                local cg = math.min(255, math.floor(baseColor[2] * flick))
+                local cb = math.min(255, math.floor(baseColor[3] * flick))
+                nvgBeginPath(vg)
+                nvgRect(vg, drawX, drawY, ps, ps)
+                nvgFillColor(vg, nvgRGBA(cr, cg, cb, 255))
+                nvgFill(vg)
+            end
+        end
+    end
+
+    -- 顶部火星
+    local sparkPhase = math.floor(t * 12 + col * 5) % 6
+    if sparkPhase < 3 then
+        local sparkX = startX + 2 * ps + math.sin(t * 8 + col) * ps
+        local sparkY = startY - ps - sparkPhase * ps * 0.5
+        local sparkAlpha = math.floor((1 - sparkPhase / 3) * 200)
+        nvgBeginPath(vg)
+        nvgRect(vg, sparkX, sparkY, ps, ps)
+        nvgFillColor(vg, nvgRGBA(255, 240, 100, sparkAlpha))
+        nvgFill(vg)
+    end
 end
 
 function M.DrawGoalTile(vg, px, py)
@@ -2282,6 +2527,119 @@ function M.UpdateBonfireMessage(dt)
             M.bonfireMsg.active = false
         end
     end
+end
+
+-- 火苗爆裂粒子系统
+M.fuelBurstParticles = {}
+
+function M.TriggerFuelBurst(worldX, worldY)
+    local ps = 2
+    for i = 1, 16 do
+        local angle = (i / 16) * math.pi * 2 + math.random() * 0.4
+        local speed = 30 + math.random() * 40
+        local colorIdx = math.random(1, 5)
+        local colors = {
+            {255, 240, 120}, {255, 200, 60}, {255, 150, 30},
+            {255, 100, 20}, {255, 80, 10},
+        }
+        local c = colors[colorIdx]
+        table.insert(M.fuelBurstParticles, {
+            x = worldX, y = worldY,
+            vx = math.cos(angle) * speed,
+            vy = math.sin(angle) * speed - 20,
+            life = 0.5 + math.random() * 0.3,
+            maxLife = 0.5 + math.random() * 0.3,
+            size = ps, r = c[1], g = c[2], b = c[3],
+        })
+    end
+end
+
+function M.UpdateFuelBurst(dt)
+    for i = #M.fuelBurstParticles, 1, -1 do
+        local p = M.fuelBurstParticles[i]
+        p.life = p.life - dt
+        if p.life <= 0 then
+            table.remove(M.fuelBurstParticles, i)
+        else
+            p.x = p.x + p.vx * dt
+            p.y = p.y + p.vy * dt
+            p.vy = p.vy + 60 * dt
+            p.vx = p.vx * 0.97
+        end
+    end
+end
+
+function M.DrawFuelBurst(vg, camX, camY)
+    for _, p in ipairs(M.fuelBurstParticles) do
+        local lifeRatio = p.life / p.maxLife
+        local alpha = math.floor(lifeRatio * 255)
+        local screenX = p.x - camX
+        local screenY = p.y - camY
+        local drawSize = p.size * (0.5 + lifeRatio * 0.5)
+        local drawX = math.floor(screenX / p.size) * p.size
+        local drawY = math.floor(screenY / p.size) * p.size
+        nvgBeginPath(vg)
+        nvgRect(vg, drawX, drawY, drawSize, drawSize)
+        nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, alpha))
+        nvgFill(vg)
+        if lifeRatio > 0.3 then
+            local tailX = drawX - math.floor(p.vx * 0.015 / p.size) * p.size
+            local tailY = drawY - math.floor(p.vy * 0.015 / p.size) * p.size
+            nvgBeginPath(vg)
+            nvgRect(vg, tailX, tailY, drawSize, drawSize)
+            nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, math.floor(alpha * 0.4)))
+            nvgFill(vg)
+        end
+    end
+end
+
+-- 像素恢复过渡动画
+M.pixelRecoverAnim = {
+    active = false,
+    pendingPixels = 0,
+    recoveredPixels = 0,
+    rate = 0,
+    timer = 0,
+    flashTimer = 0,
+    flashActive = false,
+}
+
+function M.StartPixelRecoverAnim(totalToRecover)
+    local anim = M.pixelRecoverAnim
+    anim.active = true
+    anim.pendingPixels = totalToRecover
+    anim.recoveredPixels = 0
+    anim.rate = totalToRecover / 0.6
+    anim.timer = 0
+    anim.flashTimer = 0
+    anim.flashActive = true
+end
+
+function M.UpdatePixelRecoverAnim(dt)
+    local anim = M.pixelRecoverAnim
+    if not anim.active then return end
+    anim.timer = anim.timer + dt
+    anim.flashTimer = anim.flashTimer + dt
+    local toRecover = math.floor(anim.rate * dt + 0.5)
+    toRecover = math.min(toRecover, anim.pendingPixels - anim.recoveredPixels)
+    if toRecover > 0 then
+        M.RecoverPixels(toRecover)
+    end
+    anim.recoveredPixels = anim.recoveredPixels + toRecover
+    if anim.recoveredPixels >= anim.pendingPixels then
+        anim.active = false
+        anim.flashActive = false
+    end
+    if anim.flashTimer > 0.8 then
+        anim.flashActive = false
+    end
+end
+
+function M.GetRecoverFlashIntensity()
+    local anim = M.pixelRecoverAnim
+    if not anim.flashActive then return 0 end
+    local progress = anim.recoveredPixels / math.max(1, anim.pendingPixels)
+    return (1.0 - progress) * 0.6
 end
 
 ------------------------------------------------------------

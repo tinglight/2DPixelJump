@@ -60,6 +60,16 @@ function M.IsSolid(col, row)
     return false
 end
 
+--- 判断某格是否为实体（仅用于光照阴影遮挡：只检查固体方块和柱子）
+function M.IsSolidForLight(col, row)
+    if col < 1 or col > Config.MAP_COLS then return false end
+    if row < 1 or row > Config.MAP_ROWS then return false end
+    local val = levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = M.GetTileType(val)
+    return base == TILE.SOLID or base == TILE.SOLID_PILLAR
+end
+
 --- 判断某格是否为平台（当前无平台类型）
 function M.IsPlatform(col, row)
     if col < 1 or col > Config.MAP_COLS or row < 1 or row > Config.MAP_ROWS then return false end

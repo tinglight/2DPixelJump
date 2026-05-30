@@ -143,7 +143,9 @@ function M.UpdateVertical(dt)
                 p.fallTimer = 0
                 local newY = p.gridY + 1
                 if newY > Config.MAP_ROWS then
-                    return "gameover"
+                    -- 交给 CheckBoundaryTransition 判断是否有连接关卡
+                    -- 如果没有世界地图，那里也会返回 gameover
+                    return "boundary"
                 end
                 if not Physics.PlayerCollidesAt(p.gridX, newY) then
                     p.gridY = newY
@@ -216,10 +218,24 @@ function M.CheckItemCollection()
                     LevelManager.collectedItems[key] = true
                     LevelManager.fuelCount = LevelManager.fuelCount + 1
                     LevelManager.levelData[row][col] = TILE.EMPTY
-                    PixelSystem.RecoverPixels(math.floor(PixelSystem.totalPixels * 0.4))
+                    -- 使用渐进式像素恢复动画（不再瞬间恢复）
+                    local toRecover = math.floor(PixelSystem.totalPixels * 0.4)
+                    -- 限制恢复量不超过已损失的像素
+                    local lost = PixelSystem.totalPixels - PixelSystem.alivePixels
+                    toRecover = math.min(toRecover, lost)
+                    if toRecover > 0 and Renderer then
+                        Renderer.StartPixelRecoverAnim(toRecover)
+                    end
                     local pixelsPerGrid = math.max(1, math.floor(PixelSystem.totalPixels / 10 + 0.5))
                     local expectedFallCount = math.floor((PixelSystem.totalPixels - PixelSystem.alivePixels) / pixelsPerGrid)
                     p.fallGridCount = math.max(0, expectedFallCount)
+                    -- 触发火苗爆裂特效
+                    if Renderer then
+                        local GRID = require("gameplay.Config").GRID
+                        local worldX = (col - 1) * GRID + GRID * 0.5
+                        local worldY = (row - 1) * GRID + GRID * 0.5
+                        Renderer.TriggerFuelBurst(worldX, worldY)
+                    end
 
                 elseif base == TILE.SWITCH and not LevelManager.switchCollected[key] then
                     LevelManager.switchCollected[key] = true

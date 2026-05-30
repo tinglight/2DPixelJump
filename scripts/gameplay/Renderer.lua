@@ -202,6 +202,147 @@ function M.UpdateBonfireMessage(dt)
     end
 end
 
+-- ====================================================================
+-- 火苗拾取爆裂粒子系统
+-- ====================================================================
+M.fuelBurstParticles = {}
+
+--- 在指定位置触发火苗爆裂特效
+function M.TriggerFuelBurst(worldX, worldY)
+    local ps = 2  -- 像素块大小
+    for i = 1, 16 do
+        local angle = (i / 16) * math.pi * 2 + math.random() * 0.4
+        local speed = 30 + math.random() * 40
+        local colorIdx = math.random(1, 5)
+        -- 暖色调颜色组
+        local colors = {
+            {255, 240, 120},  -- 亮黄
+            {255, 200, 60},   -- 金黄
+            {255, 150, 30},   -- 橙色
+            {255, 100, 20},   -- 深橙
+            {255, 80, 10},    -- 红橙
+        }
+        local c = colors[colorIdx]
+        table.insert(M.fuelBurstParticles, {
+            x = worldX,
+            y = worldY,
+            vx = math.cos(angle) * speed,
+            vy = math.sin(angle) * speed - 20,  -- 偏上方弹射
+            life = 0.5 + math.random() * 0.3,
+            maxLife = 0.5 + math.random() * 0.3,
+            size = ps,
+            r = c[1], g = c[2], b = c[3],
+        })
+    end
+end
+
+--- 更新火苗爆裂粒子
+function M.UpdateFuelBurst(dt)
+    for i = #M.fuelBurstParticles, 1, -1 do
+        local p = M.fuelBurstParticles[i]
+        p.life = p.life - dt
+        if p.life <= 0 then
+            table.remove(M.fuelBurstParticles, i)
+        else
+            p.x = p.x + p.vx * dt
+            p.y = p.y + p.vy * dt
+            p.vy = p.vy + 60 * dt  -- 重力
+            p.vx = p.vx * 0.97  -- 阻力
+        end
+    end
+end
+
+--- 绘制火苗爆裂粒子
+function M.DrawFuelBurst()
+    local vg = M.vg
+    for _, p in ipairs(M.fuelBurstParticles) do
+        local lifeRatio = p.life / p.maxLife
+        local alpha = math.floor(lifeRatio * 255)
+        local screenX = p.x - M.cameraX
+        local drawSize = p.size * (0.5 + lifeRatio * 0.5)
+        -- 像素对齐
+        local drawX = math.floor(screenX / p.size) * p.size
+        local drawY = math.floor(p.y / p.size) * p.size
+        nvgBeginPath(vg)
+        nvgRect(vg, drawX, drawY, drawSize, drawSize)
+        nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, alpha))
+        nvgFill(vg)
+        -- 拖尾像素
+        if lifeRatio > 0.3 then
+            local tailX = drawX - math.floor(p.vx * 0.015 / p.size) * p.size
+            local tailY = drawY - math.floor(p.vy * 0.015 / p.size) * p.size
+            nvgBeginPath(vg)
+            nvgRect(vg, tailX, tailY, drawSize, drawSize)
+            nvgFillColor(vg, nvgRGBA(p.r, p.g, p.b, math.floor(alpha * 0.4)))
+            nvgFill(vg)
+        end
+    end
+end
+
+-- ====================================================================
+-- 火焰像素恢复过渡动画
+-- ====================================================================
+M.pixelRecoverAnim = {
+    active = false,
+    pendingPixels = 0,       -- 待恢复的总像素数
+    recoveredPixels = 0,     -- 已恢复的像素数
+    rate = 0,                -- 每秒恢复速度
+    timer = 0,
+    -- 闪光效果
+    flashTimer = 0,
+    flashActive = false,
+}
+
+--- 启动像素恢复过渡动画（替代瞬间恢复）
+function M.StartPixelRecoverAnim(totalToRecover)
+    local anim = M.pixelRecoverAnim
+    anim.active = true
+    anim.pendingPixels = totalToRecover
+    anim.recoveredPixels = 0
+    -- 0.6 秒内恢复完毕，像素逐个出现
+    anim.rate = totalToRecover / 0.6
+    anim.timer = 0
+    anim.flashTimer = 0
+    anim.flashActive = true
+end
+
+--- 更新像素恢复动画
+function M.UpdatePixelRecoverAnim(dt)
+    local anim = M.pixelRecoverAnim
+    if not anim.active then return end
+
+    anim.timer = anim.timer + dt
+    anim.flashTimer = anim.flashTimer + dt
+
+    -- 逐步恢复像素
+    local toRecover = math.floor(anim.rate * dt + 0.5)
+    toRecover = math.min(toRecover, anim.pendingPixels - anim.recoveredPixels)
+    if toRecover > 0 then
+        local PixelSystem = require("gameplay.PixelSystem")
+        PixelSystem.RecoverPixels(toRecover)
+        anim.recoveredPixels = anim.recoveredPixels + toRecover
+    end
+
+    -- 动画完成
+    if anim.recoveredPixels >= anim.pendingPixels then
+        anim.active = false
+        anim.flashActive = false
+    end
+
+    -- 闪光在 0.8 秒后消失
+    if anim.flashTimer > 0.8 then
+        anim.flashActive = false
+    end
+end
+
+--- 获取恢复动画进度（0~1），供玩家渲染时增加闪光效果
+function M.GetRecoverFlashIntensity()
+    local anim = M.pixelRecoverAnim
+    if not anim.flashActive then return 0 end
+    local progress = anim.recoveredPixels / math.max(1, anim.pendingPixels)
+    return (1.0 - progress) * 0.6
+end
+
 -- 依赖
 local Physics = nil
 local PixelSystem = nil
@@ -215,6 +356,11 @@ function M.Inject(deps)
     PlayerController = deps.PlayerController
     LevelManager = deps.LevelManager
     Animation = deps.Animation
+
+    -- 设置碰撞检测器用于光照阴影遮挡
+    SolidRenderer.SetCollisionChecker(function(col, row)
+        return Physics.IsSolidForLight(col, row)
+    end)
 end
 
 -- 外部引用
@@ -265,7 +411,7 @@ function M.DrawBackground()
             local mapH = Config.MAP_ROWS * GRID
             local drawX = -M.cameraX
             local drawY = 0
-            local imgPaint = nvgImagePattern(vg, drawX, drawY, mapW, mapH, 0, bgImageHandle_, 1.0)
+            local imgPaint = nvgImagePattern(vg, drawX, drawY, mapW, mapH, 0, bgImageHandle_, Config.bgImageAlpha or 0.5)
             nvgBeginPath(vg)
             nvgRect(vg, drawX, drawY, mapW, mapH)
             nvgFillPaint(vg, imgPaint)
@@ -341,6 +487,17 @@ local function IsSolidAt(row, col)
     return base == 1 or base == 13  -- SOLID or SOLID_PILLAR
 end
 
+-- 检查某格是否为柱子（专门用于柱子拼接检测）
+local function IsPillarAt(row, col)
+    if row < 1 or row > Config.MAP_ROWS or col < 1 or col > Config.MAP_COLS then
+        return false
+    end
+    local val = LevelManager.levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = Physics.GetTileType(val)
+    return base == 13  -- SOLID_PILLAR only
+end
+
 function M.DrawMap()
     local vg = M.vg
     local GRID = Config.GRID
@@ -398,6 +555,11 @@ function M.DrawMap()
                     bottom = IsSolidAt(row + 1, col),
                     left   = IsSolidAt(row, col - 1),
                     right  = IsSolidAt(row, col + 1),
+                    -- 柱子拼接专用邻居检测
+                    pillarTop    = IsPillarAt(row - 1, col),
+                    pillarBottom = IsPillarAt(row + 1, col),
+                    pillarLeft   = IsPillarAt(row, col - 1),
+                    pillarRight  = IsPillarAt(row, col + 1),
                 }
 
                 SolidRenderer.DrawSolid(vg, base, px, py, GRID, totalLit, totalLdx, totalLdy, col, row, neighbors)
@@ -411,21 +573,7 @@ function M.DrawMap()
             elseif base == TILE.FUEL then
                 local key = row .. "_" .. col
                 if not LevelManager.collectedItems[key] then
-                    local flicker = math.sin(M.gameTime * 6 + col * 1.7) * 0.3 + 0.7
-                    local r = math.floor(255 * flicker)
-                    local g = math.floor(120 * flicker)
-                    nvgBeginPath(vg)
-                    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5, 7)
-                    nvgFillColor(vg, nvgRGBA(255, 100, 0, math.floor(60 * flicker)))
-                    nvgFill(vg)
-                    nvgBeginPath(vg)
-                    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5, 4)
-                    nvgFillColor(vg, nvgRGBA(r, g, 10, 255))
-                    nvgFill(vg)
-                    nvgBeginPath(vg)
-                    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5 - 1, 2)
-                    nvgFillColor(vg, nvgRGBA(255, 255, 200, math.floor(200 * flicker)))
-                    nvgFill(vg)
+                    M.DrawFuelPixelFlame(px, py, col, row)
                 end
 
             elseif base == TILE.GOAL then
@@ -631,6 +779,108 @@ function M.DrawCheckpointTile(px, py, row, col)
 end
 
 -- ====================================================================
+-- 像素风格火苗道具渲染
+-- ====================================================================
+function M.DrawFuelPixelFlame(px, py, col, row)
+    local vg = M.vg
+    local GRID = Config.GRID
+    local ps = 2  -- 像素块大小
+    local t = M.gameTime
+    -- 火苗形状 (5x7 像素点阵，尖顶宽底小火苗)
+    -- 使用两帧动画交替，模拟火焰摇曳
+    local frame = math.floor(t * 6 + col * 1.3) % 3
+    local shapes = {
+        -- 帧0: 正常
+        {
+            {0,0,1,0,0},
+            {0,1,1,0,0},
+            {0,1,1,1,0},
+            {1,1,1,1,0},
+            {1,1,1,1,1},
+            {0,1,1,1,0},
+            {0,0,1,0,0},
+        },
+        -- 帧1: 略偏右
+        {
+            {0,0,0,1,0},
+            {0,0,1,1,0},
+            {0,1,1,1,0},
+            {0,1,1,1,1},
+            {1,1,1,1,0},
+            {0,1,1,1,0},
+            {0,0,1,0,0},
+        },
+        -- 帧2: 略偏左
+        {
+            {0,1,0,0,0},
+            {0,1,1,0,0},
+            {1,1,1,0,0},
+            {1,1,1,1,0},
+            {0,1,1,1,1},
+            {0,1,1,1,0},
+            {0,0,1,0,0},
+        },
+    }
+    local shape = shapes[frame + 1]
+
+    -- 暖色渐变：顶部亮黄 → 底部深橙
+    local colors = {
+        {255, 255, 180},  -- 亮黄白（顶）
+        {255, 230, 100},  -- 黄
+        {255, 190, 50},   -- 金黄
+        {255, 150, 30},   -- 橙
+        {255, 120, 20},   -- 深橙
+        {255, 90, 10},    -- 红橙
+        {200, 60, 5},     -- 深红（底）
+    }
+
+    -- 浮动偏移
+    local floatY = math.sin(t * 4 + col * 2.3) * 1.5
+    -- 渲染起点（居中）
+    local startX = px + (GRID - 5 * ps) * 0.5
+    local startY = py + (GRID - 7 * ps) * 0.5 + floatY
+
+    -- 绘制外部光晕
+    local glowFlicker = math.sin(t * 7 + col * 3.1) * 0.3 + 0.7
+    nvgBeginPath(vg)
+    nvgCircle(vg, px + GRID * 0.5, py + GRID * 0.5 + floatY, 7 * glowFlicker)
+    nvgFillColor(vg, nvgRGBA(255, 150, 30, math.floor(35 * glowFlicker)))
+    nvgFill(vg)
+
+    -- 绘制像素火苗
+    for r = 1, 7 do
+        for c = 1, 5 do
+            if shape[r][c] == 1 then
+                local drawX = startX + (c - 1) * ps
+                local drawY = startY + (r - 1) * ps
+                local baseColor = colors[r]
+                -- 轻微闪烁
+                local flick = math.sin(t * 10 + r * 3 + c * 5) * 0.15 + 0.85
+                local cr = math.min(255, math.floor(baseColor[1] * flick))
+                local cg = math.min(255, math.floor(baseColor[2] * flick))
+                local cb = math.min(255, math.floor(baseColor[3] * flick))
+                nvgBeginPath(vg)
+                nvgRect(vg, drawX, drawY, ps, ps)
+                nvgFillColor(vg, nvgRGBA(cr, cg, cb, 255))
+                nvgFill(vg)
+            end
+        end
+    end
+
+    -- 顶部火星（小粒子随机弹出）
+    local sparkPhase = math.floor(t * 12 + col * 5) % 6
+    if sparkPhase < 3 then
+        local sparkX = startX + 2 * ps + math.sin(t * 8 + col) * ps
+        local sparkY = startY - ps - sparkPhase * ps * 0.5
+        local sparkAlpha = math.floor((1 - sparkPhase / 3) * 200)
+        nvgBeginPath(vg)
+        nvgRect(vg, sparkX, sparkY, ps, ps)
+        nvgFillColor(vg, nvgRGBA(255, 240, 100, sparkAlpha))
+        nvgFill(vg)
+    end
+end
+
+-- ====================================================================
 -- 火焰玩家渲染
 -- ====================================================================
 function M.DrawPlayer()
@@ -753,6 +1003,34 @@ function M.DrawPlayer()
                     nvgRect(vg, ppx, ppy, ps, ps)
                     nvgFillColor(vg, nvgRGBA(r, g, b, 255))
                     nvgFill(vg)
+                end
+            end
+        end
+    end
+
+    -- 恢复动画闪光叠加
+    local flashIntensity = M.GetRecoverFlashIntensity()
+    if flashIntensity > 0 then
+        local flashAlpha = math.floor(flashIntensity * 180)
+        -- 给新恢复的像素一层暖黄色闪光
+        for row = 1, N do
+            for col = 1, N do
+                if PixelSystem.pixelState[row][col] then
+                    -- 边缘像素更亮（刚恢复的通常在边缘）
+                    local cx = (N + 1) / 2
+                    local hDist = math.abs(col - cx)
+                    local edgeFactor = hDist / (N * 0.5)
+                    local pixFlash = math.floor(flashAlpha * (0.3 + edgeFactor * 0.7))
+                    if pixFlash > 10 then
+                        local drawCol = col
+                        if not player.facingRight then drawCol = N - col + 1 end
+                        local ppx = baseX + (drawCol - 1) * ps
+                        local ppy = baseY + (row - 1) * ps
+                        nvgBeginPath(vg)
+                        nvgRect(vg, ppx, ppy, ps, ps)
+                        nvgFillColor(vg, nvgRGBA(255, 240, 150, pixFlash))
+                        nvgFill(vg)
+                    end
                 end
             end
         end

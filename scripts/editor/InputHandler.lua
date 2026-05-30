@@ -22,6 +22,7 @@ local ZOOM_MIN = C.ZOOM_MIN
 local ZOOM_MAX = C.ZOOM_MAX
 local TOOLS = C.TOOLS
 local LIGHT_TOOL_INDEX = C.LIGHT_TOOL_INDEX
+local LIGHT_ZONE_TOOL_INDEX = C.LIGHT_ZONE_TOOL_INDEX
 
 local M = {}
 
@@ -195,6 +196,7 @@ function M.HandleUpdate(dt)
     UpdateBoundDrag()
     UpdateMoveDrag()
     UpdateBoxSelect()
+    UpdateLightZoneDraw()
     UpdateDrawErase()
     UpdateAutoSave(dt)
 end
@@ -452,6 +454,8 @@ function HandleEditorKey(key)
         return
     end
 
+
+
     -- 功能键
     if key == KEY_F then
         S.fogShowInEditor = not S.fogShowInEditor
@@ -699,6 +703,9 @@ function DispatchTopBarBtn(id)
     elseif id == "fog" then
         S.fogShowInEditor = not S.fogShowInEditor
         S.SetMessage(S.fogShowInEditor and "迷雾: 开启" or "迷雾: 关闭", 1.5)
+    elseif id == "gizmos" then
+        S.showGizmos = not S.showGizmos
+        S.SetMessage(S.showGizmos and "标记: 显示" or "标记: 隐藏", 1.5)
     elseif id == "random" then
         Persistence.AutoSaveBeforeSwitch()
         PlayMode.GenerateRandomLevel()
@@ -953,6 +960,12 @@ function HandleDrawClick(button, col, row)
         return
     end
 
+    -- 光域工具
+    if S.currentTool == LIGHT_ZONE_TOOL_INDEX then
+        HandleLightZoneToolClick(button, col, row)
+        return
+    end
+
     -- 普通地块工具
     if button == MOUSEB_LEFT then
         S.isDrawing = true; S.isErasing = false
@@ -990,6 +1003,80 @@ function HandleLightToolClick(button, col, row)
             S.SetMessage("删除光源", 1.5)
         end
     end
+end
+
+-- ====================================================================
+-- 光域工具
+-- ====================================================================
+
+function HandleLightZoneToolClick(button, col, row)
+    if button == MOUSEB_LEFT then
+        -- 检查是否点击了已有区域（用于选中）
+        local zones = FogOfWar.GetLightZones()
+        local clickedIdx = 0
+        for i, z in ipairs(zones) do
+            if col >= z.col1 and col <= z.col2 and row >= z.row1 and row <= z.row2 then
+                clickedIdx = i
+            end
+        end
+
+        if clickedIdx > 0 and not S.lightZoneDrawing then
+            -- 选中已有区域
+            S.selectedLightZoneIndex = clickedIdx
+            S.SetMessage("选中光域 #" .. clickedIdx .. " (右键删除)", 2.0)
+        else
+            -- 开始框选新区域
+            S.lightZoneDrawing = true
+            S.lightZoneStartCol = col
+            S.lightZoneStartRow = row
+            S.lightZoneEndCol = col
+            S.lightZoneEndRow = row
+            S.selectedLightZoneIndex = 0
+        end
+    elseif button == MOUSEB_RIGHT then
+        -- 右键删除选中区域
+        if S.selectedLightZoneIndex > 0 then
+            FogOfWar.RemoveLightZone(S.selectedLightZoneIndex)
+            S.lightZones = FogOfWar.GetLightZones()
+            S.selectedLightZoneIndex = 0
+            Undo.dirty = true
+            Undo.saveTimer = Undo.saveDelay
+            S.SetMessage("删除光域", 1.5)
+        end
+    end
+end
+
+function UpdateLightZoneDraw()
+    if not S.lightZoneDrawing then return end
+    local mx, my = GetDesignMouse()
+    local col, row = ScreenToGrid(mx, my)
+    col = math.max(1, math.min(S.MAP_COLS, col))
+    row = math.max(1, math.min(S.MAP_ROWS, row))
+    S.lightZoneEndCol = col
+    S.lightZoneEndRow = row
+end
+
+function FinishLightZoneDraw()
+    if not S.lightZoneDrawing then return end
+    S.lightZoneDrawing = false
+
+    local c1 = math.min(S.lightZoneStartCol, S.lightZoneEndCol)
+    local r1 = math.min(S.lightZoneStartRow, S.lightZoneEndRow)
+    local c2 = math.max(S.lightZoneStartCol, S.lightZoneEndCol)
+    local r2 = math.max(S.lightZoneStartRow, S.lightZoneEndRow)
+
+    -- 至少2x2的区域才创建
+    if c2 - c1 < 1 and r2 - r1 < 1 then
+        S.SetMessage("区域太小，至少2格", 1.5)
+        return
+    end
+
+    FogOfWar.AddLightZone(c1, r1, c2, r2)
+    S.lightZones = FogOfWar.GetLightZones()
+    S.selectedLightZoneIndex = #S.lightZones
+    Undo.dirty = true
+    Undo.saveTimer = Undo.saveDelay
+    S.SetMessage("创建光域 #" .. #S.lightZones .. " (" .. c1 .. "," .. r1 .. ")-(" .. c2 .. "," .. r2 .. ")", 2.0)
 end
 
 -- ====================================================================
@@ -1071,6 +1158,11 @@ function HandleLeftRelease(mx, my)
     -- 编辑模式下工具拖拽释放（执行重排）
     if S.toolEditDragging then
         FinishToolEditDrag(mx)
+        return
+    end
+
+    if S.lightZoneDrawing then
+        FinishLightZoneDraw()
         return
     end
 

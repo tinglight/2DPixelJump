@@ -40,6 +40,7 @@ function M.InitTopBarButtons()
         { id = "player",   label = "玩家", x = 0, y = 0, w = 38, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG, hasSubmenu = true },
         { id = "bg",       label = "背景", x = 0, y = 0, w = 38, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG, hasSubmenu = true },
         { id = "fog",      label = "迷雾", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG },
+        { id = "gizmos",   label = "标记", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_PILL, group = M.BTN_GROUP_CONFIG },
         { id = "random",   label = "随机", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE },
         { id = "worldmap", label = "世界", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE, hasSubmenu = true },
         { id = "sidebar",  label = "关卡", x = 0, y = 0, w = 34, h = 14, shape = M.BTN_SHAPE_ROUNDED, group = M.BTN_GROUP_MODE },
@@ -105,6 +106,17 @@ local function GetButtonColors(btn)
             bgR, bgG, bgB = 35, 38, 55
             borderR, borderG, borderB = 60, 65, 80
             textR, textG, textB = 140, 140, 160
+        end
+    elseif btn.id == "gizmos" then
+        isActive = S.showGizmos
+        if isActive then
+            bgR, bgG, bgB = 60, 90, 55
+            borderR, borderG, borderB, borderA = 100, 180, 90, 220
+            textR, textG, textB = 170, 240, 160
+        else
+            bgR, bgG, bgB = 35, 45, 38
+            borderR, borderG, borderB = 60, 75, 60
+            textR, textG, textB = 130, 140, 130
         end
     elseif btn.id == "random" then
         bgR, bgG, bgB = 100, 60, 35

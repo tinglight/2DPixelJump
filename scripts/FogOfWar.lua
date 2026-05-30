@@ -23,6 +23,101 @@ local FogOfWar = {}
 local lightSources = {}  -- { {col, row, diameter, feather}, ... }
 
 -- ====================================================================
+-- 碰撞检测回调（用于阴影遮挡）
+-- ====================================================================
+-- 签名: function(col, row) -> boolean
+-- 返回 true 表示该格子是实体碰撞（阻挡光线）
+local collisionChecker = nil
+
+--- 设置碰撞检测函数（用于阴影计算）
+--- 签名: function(col, row) -> boolean
+---@param checker function|nil
+function FogOfWar.SetCollisionChecker(checker)
+    collisionChecker = checker
+end
+
+-- ====================================================================
+-- Bresenham 网格射线遮挡检测
+-- ====================================================================
+-- 从光源 (srcCol, srcRow) 到目标 (dstCol, dstRow) 射线
+-- 返回 true 表示路径被阻挡（有实体碰撞块挡在中间）
+-- 规则：光线照亮碰撞本身，但不照亮碰撞背后的格子
+-- 即：如果射线路径上(不含起点和终点)遇到碰撞格子 → 目标被遮挡
+--     如果目标本身是碰撞 → 不被遮挡（光照亮碰撞方块）
+local function IsOccluded(srcCol, srcRow, dstCol, dstRow)
+    if not collisionChecker then return false end
+    -- 相同位置不遮挡
+    if srcCol == dstCol and srcRow == dstRow then return false end
+
+    -- Bresenham 直线算法（格子级别）
+    local dx = dstCol - srcCol
+    local dy = dstRow - srcRow
+    local absDx = (dx >= 0) and dx or -dx
+    local absDy = (dy >= 0) and dy or -dy
+    local sx = (dx > 0) and 1 or (dx < 0 and -1 or 0)
+    local sy = (dy > 0) and 1 or (dy < 0 and -1 or 0)
+
+    local x = srcCol
+    local y = srcRow
+
+    if absDx >= absDy then
+        -- X 主轴
+        local err = absDx // 2
+        for _ = 1, absDx do
+            x = x + sx
+            err = err - absDy
+            if err < 0 then
+                y = y + sy
+                err = err + absDx
+            end
+            -- 到达终点前检查中间格子
+            if x == dstCol and y == dstRow then
+                return false  -- 终点本身不算遮挡
+            end
+            -- 中间格子是碰撞 → 检查是否为同一表面
+            if collisionChecker(x, y) then
+                -- 允许光沿表面扩散：同一水平面(地面/天花板)不互相遮挡
+                if y == dstRow and srcRow ~= dstRow then
+                    -- 同行表面，光源来自不同行 → 不遮挡
+                elseif x == dstCol and srcCol ~= dstCol then
+                    -- 同列表面，光源来自不同列 → 不遮挡
+                else
+                    return true
+                end
+            end
+        end
+    else
+        -- Y 主轴
+        local err = absDy // 2
+        for _ = 1, absDy do
+            y = y + sy
+            err = err - absDx
+            if err < 0 then
+                x = x + sx
+                err = err + absDy
+            end
+            -- 到达终点前检查中间格子
+            if x == dstCol and y == dstRow then
+                return false  -- 终点本身不算遮挡
+            end
+            -- 中间格子是碰撞 → 检查是否为同一表面
+            if collisionChecker(x, y) then
+                -- 允许光沿表面扩散：同一水平面(地面/天花板)不互相遮挡
+                if y == dstRow and srcRow ~= dstRow then
+                    -- 同行表面，光源来自不同行 → 不遮挡
+                elseif x == dstCol and srcCol ~= dstCol then
+                    -- 同列表面，光源来自不同列 → 不遮挡
+                else
+                    return true
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+-- ====================================================================
 -- Tween 动画系统
 -- ====================================================================
 local TWEEN_DURATION = 0.4  -- 开启/关闭动画时长（秒）
@@ -214,6 +309,11 @@ local function CalcCellLightingWithNoise(cellCol, cellRow)
         local absDx = (dx >= 0) and dx or -dx
         local absDy = (dy >= 0) and dy or -dy
         if absDx > radius + 2 or absDy > radius + 2 then
+            goto continueLight
+        end
+
+        -- 阴影遮挡检测：如果射线被碰撞格挡住，跳过此光源
+        if IsOccluded(light.col, light.row, cellCol, cellRow) then
             goto continueLight
         end
 
@@ -630,13 +730,15 @@ end
 ---@param row number
 ---@param diameter number 直径（格数），默认 6
 ---@param feather number 羽化程度 0.0~1.0，默认 0.5
+---@param group number|nil 光源编组，0=默认/未编组，1~N=编组号
 ---@return number index 新光源的索引
-function FogOfWar.AddLight(col, row, diameter, feather)
+function FogOfWar.AddLight(col, row, diameter, feather, group)
     local light = {
         col = col,
         row = row,
         diameter = diameter or 6,
         feather = feather or 0.5,
+        group = group or 0,
     }
     table.insert(lightSources, light)
     return #lightSources
@@ -648,14 +750,16 @@ end
 ---@param row number
 ---@param diameter number 目标直径（格数），默认 6
 ---@param feather number 羽化程度 0.0~1.0，默认 0.5
+---@param group number|nil 光源编组，0=默认/未编组，1~N=编组号
 ---@return number index 新光源的索引
-function FogOfWar.AddLightAnimated(col, row, diameter, feather)
+function FogOfWar.AddLightAnimated(col, row, diameter, feather, group)
     local targetDiameter = diameter or 6
     local light = {
         col = col,
         row = row,
         diameter = 0.1,  -- 初始极小，动画会渐变
         feather = feather or 0.5,
+        group = group or 0,
     }
     table.insert(lightSources, light)
     TweenLightIn(light, targetDiameter)
@@ -729,11 +833,13 @@ end
 ---@param index number
 ---@param diameter number|nil
 ---@param feather number|nil
-function FogOfWar.UpdateLight(index, diameter, feather)
+---@param group number|nil
+function FogOfWar.UpdateLight(index, diameter, feather, group)
     local light = lightSources[index]
     if not light then return end
-    if diameter then light.diameter = math.max(2, math.min(30, diameter)) end
+    if diameter then light.diameter = math.max(2, math.min(100, diameter)) end
     if feather then light.feather = math.max(0, math.min(1.0, feather)) end
+    if group ~= nil then light.group = math.max(0, math.floor(group)) end
 end
 
 --- 移动光源到新位置
@@ -763,12 +869,16 @@ end
 function FogOfWar.Serialize()
     local data = {}
     for _, light in ipairs(lightSources) do
-        table.insert(data, {
+        local entry = {
             col = light.col,
             row = light.row,
             diameter = light.diameter,
             feather = light.feather,
-        })
+        }
+        if light.group and light.group > 0 then
+            entry.group = light.group
+        end
+        table.insert(data, entry)
     end
     return data
 end
@@ -784,7 +894,372 @@ function FogOfWar.Deserialize(data)
             row = d.row or 1,
             diameter = d.diameter or 6,
             feather = d.feather or 0.5,
+            group = d.group or 0,
         })
+    end
+end
+
+-- ====================================================================
+-- 光源编组区域系统
+-- ====================================================================
+-- 用于游戏试玩时根据玩家所在区域切换可见光源组
+-- 规则：
+-- - group 0 的光源始终可见
+-- - 编辑器中手动配置矩形区域（lightZones），每个区域关联一个 group
+-- - 当玩家进入某个区域时，该区域的 group 对应的光源可见
+-- - 切换组时，旧组渐出、新组渐入（0.2 秒过渡）
+
+local ZONE_TRANSITION_DURATION = 0.2  -- 区域切换过渡时长（秒）
+
+-- 光源区域列表（编辑器配置，矩形区域）
+-- 每个区域: { col1, row1, col2, row2, group }
+local lightZones = {}
+
+-- 区域切换状态
+local zoneState = {
+    activeGroup = 0,          -- 当前激活的编组号（0=仅默认组可见）
+    transitioning = false,    -- 是否正在过渡中
+    fadeOutGroup = 0,         -- 正在淡出的组
+    fadeInGroup = 0,          -- 正在淡入的组
+    transitionElapsed = 0,    -- 过渡已用时间
+    fadeOutDiameters = {},    -- { [lightRef] = originalDiameter }
+    fadeInDiameters = {},     -- { [lightRef] = targetDiameter }
+}
+
+--- 获取光源区域列表
+---@return table[]
+function FogOfWar.GetLightZones()
+    return lightZones
+end
+
+--- 设置光源区域列表（编辑器端写入）
+---@param zones table[]
+function FogOfWar.SetLightZones(zones)
+    lightZones = zones or {}
+end
+
+--- 添加一个光源区域
+---@param col1 number 左上角列
+---@param row1 number 左上角行
+---@param col2 number 右下角列
+---@param row2 number 右下角行
+---@param group number 编组号
+---@return number index 新区域索引
+function FogOfWar.AddLightZone(col1, row1, col2, row2)
+    -- 规范化：确保 col1<=col2, row1<=row2
+    if col1 > col2 then col1, col2 = col2, col1 end
+    if row1 > row2 then row1, row2 = row2, row1 end
+    table.insert(lightZones, {
+        col1 = col1, row1 = row1,
+        col2 = col2, row2 = row2,
+    })
+    return #lightZones
+end
+
+--- 删除一个光源区域
+---@param index number
+function FogOfWar.RemoveLightZone(index)
+    if index >= 1 and index <= #lightZones then
+        table.remove(lightZones, index)
+    end
+end
+
+--- 序列化光源区域数据
+---@return table[]
+function FogOfWar.SerializeZones()
+    local data = {}
+    for _, z in ipairs(lightZones) do
+        table.insert(data, {
+            col1 = z.col1, row1 = z.row1,
+            col2 = z.col2, row2 = z.row2,
+        })
+    end
+    return data
+end
+
+--- 反序列化光源区域数据
+---@param data table[]|nil
+function FogOfWar.DeserializeZones(data)
+    lightZones = {}
+    if not data then return end
+    for _, d in ipairs(data) do
+        table.insert(lightZones, {
+            col1 = d.col1 or 1, row1 = d.row1 or 1,
+            col2 = d.col2 or 2, row2 = d.row2 or 2,
+        })
+    end
+end
+
+--- 重置区域状态（切换关卡时调用）
+function FogOfWar.ResetZoneState()
+    zoneState.activeGroup = 0
+    zoneState.transitioning = false
+    zoneState.fadeOutGroup = 0
+    zoneState.fadeInGroup = 0
+    zoneState.transitionElapsed = 0
+    zoneState.fadeOutDiameters = {}
+    zoneState.fadeInDiameters = {}
+end
+
+--- 判断一个光源属于哪个区域（由空间位置决定）
+--- 光源中心(col,row)落在哪个区域矩形内，就属于那个区域
+---@param lightCol number 光源列
+---@param lightRow number 光源行
+---@return number zoneIndex 区域索引（0=不在任何区域内）
+local function GetLightZoneIndex(lightCol, lightRow)
+    for i, zone in ipairs(lightZones) do
+        if lightCol >= zone.col1 and lightCol <= zone.col2
+            and lightRow >= zone.row1 and lightRow <= zone.row2 then
+            return i
+        end
+    end
+    return 0
+end
+
+--- 检测玩家当前所在的区域索引
+---@param playerCol number 玩家格子列
+---@param playerRow number 玩家格子行
+---@return number zoneIndex 玩家所在区域索引（0=不在任何区域内）
+function FogOfWar.DetectPlayerZone(playerCol, playerRow)
+    for i, zone in ipairs(lightZones) do
+        if playerCol >= zone.col1 and playerCol <= zone.col2
+            and playerRow >= zone.row1 and playerRow <= zone.row2 then
+            return i
+        end
+    end
+    return 0
+end
+
+--- 开始区域过渡（从 oldZone 切换到 newZone）
+--- 关闭旧区域内的光源，打开新区域内的光源
+--- 不在任何区域内的光源始终可见
+---@param oldZone number 旧区域索引（0=无区域）
+---@param newZone number 新区域索引（0=无区域）
+local function StartZoneTransition(oldZone, newZone)
+    zoneState.transitioning = true
+    zoneState.fadeOutGroup = oldZone
+    zoneState.fadeInGroup = newZone
+    zoneState.transitionElapsed = 0
+    zoneState.fadeOutDiameters = {}
+    zoneState.fadeInDiameters = {}
+
+    for _, light in ipairs(lightSources) do
+        local lightZone = GetLightZoneIndex(light.col, light.row)
+
+        if lightZone == 0 then
+            -- 不在任何区域内的光源：始终可见，不处理
+
+        elseif newZone == 0 then
+            -- 玩家离开所有区域 → 恢复所有被隐藏的光源
+            if light._originalDiameter then
+                zoneState.fadeInDiameters[light] = light._originalDiameter
+                -- diameter 当前是 0，将渐入
+            end
+
+        elseif oldZone == 0 then
+            -- 玩家从无区域进入区域 → 隐藏不属于新区域的光
+            if lightZone ~= newZone then
+                zoneState.fadeOutDiameters[light] = light.diameter
+            end
+
+        else
+            -- 玩家从区域A切换到区域B
+            if lightZone == oldZone then
+                -- 旧区域的光：淡出
+                zoneState.fadeOutDiameters[light] = light.diameter
+            elseif lightZone == newZone then
+                -- 新区域的光：淡入
+                local target = light._originalDiameter or light.diameter
+                zoneState.fadeInDiameters[light] = target
+                light.diameter = 0.1  -- 从极小开始渐入
+            end
+        end
+    end
+end
+
+--- 更新区域过渡动画（每帧调用）
+---@param dt number deltaTime（秒）
+function FogOfWar.UpdateZoneTransition(dt)
+    if not zoneState.transitioning then return end
+
+    zoneState.transitionElapsed = zoneState.transitionElapsed + dt
+    local progress = math.min(1.0, zoneState.transitionElapsed / ZONE_TRANSITION_DURATION)
+
+    -- 淡出：旧组光源直径从原始值 → 0
+    local easeOut = EaseInQuad(progress)  -- 加速收缩
+    for light, origDiameter in pairs(zoneState.fadeOutDiameters) do
+        light.diameter = origDiameter * (1.0 - easeOut)
+    end
+
+    -- 淡入：新组光源直径从 0 → 目标值
+    local easeIn = EaseOutQuad(progress)  -- 快速展开
+    for light, targetDiameter in pairs(zoneState.fadeInDiameters) do
+        light.diameter = targetDiameter * easeIn
+    end
+
+    -- 过渡完成
+    if progress >= 1.0 then
+        -- 淡出组保存原始直径并设为0
+        for light, origDiameter in pairs(zoneState.fadeOutDiameters) do
+            light._originalDiameter = origDiameter
+            light.diameter = 0
+        end
+        -- 淡入组恢复到目标直径，清除原始直径标记
+        for light, targetDiameter in pairs(zoneState.fadeInDiameters) do
+            light.diameter = targetDiameter
+            light._originalDiameter = nil
+        end
+        zoneState.transitioning = false
+        zoneState.activeGroup = zoneState.fadeInGroup
+        zoneState.fadeOutDiameters = {}
+        zoneState.fadeInDiameters = {}
+    end
+end
+
+--- 更新玩家区域并处理光源可见性切换
+--- 应在每帧 Update 中调用
+---@param playerCol number 玩家格子列
+---@param playerRow number 玩家格子行
+---@param dt number deltaTime
+function FogOfWar.UpdatePlayerZone(playerCol, playerRow, dt)
+    -- 如果没有配置区域，不处理
+    if #lightZones == 0 then return end
+
+    -- 过渡中不检测新区域
+    if zoneState.transitioning then
+        FogOfWar.UpdateZoneTransition(dt)
+        return
+    end
+
+    local detectedZone = FogOfWar.DetectPlayerZone(playerCol, playerRow)
+
+    -- 如果检测到的区域和当前激活区域不同，触发切换
+    if detectedZone ~= zoneState.activeGroup then
+        if detectedZone == 0 and zoneState.activeGroup > 0 then
+            -- 离开区域回到无区域状态：显示旧区域的光（恢复所有）
+            StartZoneTransition(zoneState.activeGroup, 0)
+        elseif detectedZone > 0 then
+            -- 进入新区域（或从一个区域切换到另一个）
+            StartZoneTransition(zoneState.activeGroup, detectedZone)
+        end
+    end
+
+    FogOfWar.UpdateZoneTransition(dt)
+end
+
+--- 初始化光源可见性（进入试玩模式时调用）
+--- 根据玩家初始位置，只显示玩家所在区域的光源，隐藏其他区域的光源
+--- 不在任何区域内的光源始终可见
+---@param playerCol number
+---@param playerRow number
+function FogOfWar.InitZoneVisibility(playerCol, playerRow)
+    FogOfWar.ResetZoneState()
+
+    -- 如果没有配置任何区域，所有光源都正常显示
+    if #lightZones == 0 then return end
+
+    -- 检测玩家初始所在区域
+    local initialZone = FogOfWar.DetectPlayerZone(playerCol, playerRow)
+    zoneState.activeGroup = initialZone
+
+    -- 设置光源初始可见性：不在玩家所在区域内的光源隐藏
+    for _, light in ipairs(lightSources) do
+        local lightZone = GetLightZoneIndex(light.col, light.row)
+        -- lightZone == 0 表示不在任何区域内，始终可见
+        if lightZone > 0 and lightZone ~= initialZone then
+            light._originalDiameter = light.diameter
+            light.diameter = 0
+        end
+    end
+end
+
+--- 恢复所有光源到原始直径（退出试玩模式时调用）
+function FogOfWar.RestoreAllLights()
+    for _, light in ipairs(lightSources) do
+        if light._originalDiameter then
+            light.diameter = light._originalDiameter
+            light._originalDiameter = nil
+        end
+    end
+    FogOfWar.ResetZoneState()
+end
+
+--- 获取当前激活的编组号
+---@return number
+function FogOfWar.GetActiveGroup()
+    return zoneState.activeGroup
+end
+
+--- 在编辑器中绘制光源区域矩形
+---@param vg userdata NanoVG context
+---@param opts table { gridSize, offsetX, offsetY, zoomLevel, mapX, mapY, selectedIndex }
+-- 区域显示颜色（按索引循环）
+local ZONE_COLORS = {
+    {255, 100, 100},  -- 红
+    {100, 180, 255},  -- 蓝
+    {100, 220, 100},  -- 绿
+    {255, 200, 60},   -- 黄
+    {200, 130, 255},  -- 紫
+    {255, 150, 80},   -- 橙
+}
+
+function FogOfWar.DrawLightZones(vg, opts)
+    local grid = opts.gridSize or 16
+    local ox = opts.offsetX or 0
+    local oy = opts.offsetY or 0
+    local zoom = opts.zoomLevel or 1.0
+    local mapX = opts.mapX or 0
+    local mapY = opts.mapY or 0
+    local selectedIdx = opts.selectedIndex or 0
+
+    for i, zone in ipairs(lightZones) do
+        local x = mapX + (zone.col1 - 1) * grid * zoom - ox
+        local y = mapY + (zone.row1 - 1) * grid * zoom - oy
+        local w = (zone.col2 - zone.col1 + 1) * grid * zoom
+        local h = (zone.row2 - zone.row1 + 1) * grid * zoom
+
+        -- 按区域索引取颜色（循环）
+        local gc = ZONE_COLORS[((i - 1) % #ZONE_COLORS) + 1]
+
+        -- 填充半透明
+        local alpha = (i == selectedIdx) and 50 or 25
+        nvgBeginPath(vg)
+        nvgRect(vg, x, y, w, h)
+        nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], alpha))
+        nvgFill(vg)
+
+        -- 边框
+        local strokeAlpha = (i == selectedIdx) and 220 or 140
+        nvgBeginPath(vg)
+        nvgRect(vg, x, y, w, h)
+        nvgStrokeColor(vg, nvgRGBA(gc[1], gc[2], gc[3], strokeAlpha))
+        nvgStrokeWidth(vg, (i == selectedIdx) and 2.0 or 1.0)
+        nvgStroke(vg)
+
+        -- 左上角标签（带背景）
+        local label = "#" .. i
+        local fontSize = math.max(11, 13 * zoom)
+        nvgFontSize(vg, fontSize)
+        nvgFontFace(vg, "sans")
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_TOP)
+        local tw = nvgTextBounds(vg, 0, 0, label)
+        local pad = 2 * zoom
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, x + pad, y + pad, tw + pad * 2, fontSize + pad, 2 * zoom)
+        nvgFillColor(vg, nvgRGBA(0, 0, 0, 160))
+        nvgFill(vg)
+        nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], 255))
+        nvgText(vg, x + pad * 2, y + pad + 1, label)
+
+        -- 中心标识（区域较大时显示）
+        if w > 40 * zoom and h > 30 * zoom then
+            local centerLabel = "光域 " .. i
+            local centerFontSize = math.max(14, 18 * zoom)
+            nvgFontSize(vg, centerFontSize)
+            nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+            nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], (i == selectedIdx) and 180 or 100))
+            nvgText(vg, x + w * 0.5, y + h * 0.5, centerLabel)
+        end
     end
 end
 

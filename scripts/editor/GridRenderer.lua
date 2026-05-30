@@ -30,6 +30,18 @@ local function IsSolidAt(row, col)
     return base == TILE.SOLID or base == TILE.SOLID_PILLAR
 end
 
+-- 检查某格是否为柱子（专门用于柱子拼接检测）
+local function IsPillarAt(row, col)
+    if row < 1 or row > S.MAP_ROWS or col < 1 or col > S.MAP_COLS then
+        return false
+    end
+    if not S.levelData[row] then return false end
+    local val = S.levelData[row][col]
+    if not val or val == TILE.EMPTY then return false end
+    local base = TileUtils.GetTileType(val)
+    return base == TILE.SOLID_PILLAR
+end
+
 -- ====================================================================
 -- 内部：计算地图区域
 -- ====================================================================
@@ -89,6 +101,11 @@ local function DrawTile(vg, base, group, px, py, zGrid, row, col)
             bottom = IsSolidAt(row + 1, col),
             left   = IsSolidAt(row, col - 1),
             right  = IsSolidAt(row, col + 1),
+            -- 柱子拼接专用邻居检测
+            pillarTop    = IsPillarAt(row - 1, col),
+            pillarBottom = IsPillarAt(row + 1, col),
+            pillarLeft   = IsPillarAt(row, col - 1),
+            pillarRight  = IsPillarAt(row, col + 1),
         }
         SolidRenderer.DrawSolid(vg, base, px, py, zGrid, lighting, ldx, ldy, col, row, neighbors)
 
@@ -755,11 +772,52 @@ function M.Draw()
 
     DrawGridLines(vg, mapX, mapY, mapH, startCol, endCol, startRow, endRow, zGrid)
     DrawTiles(vg, mapX, mapY, startCol, endCol, startRow, endRow, zGrid)
-    DrawCameraBounds(vg, mapX, mapY, mapW, mapH)
-    DrawPlayerCameraFrame(vg, mapX, mapY, mapW, mapH)
+
+    if S.showGizmos then
+        DrawCameraBounds(vg, mapX, mapY, mapW, mapH)
+        DrawPlayerCameraFrame(vg, mapX, mapY, mapW, mapH)
+    end
+
+    -- 光源区域矩形
+    if FogOfWar and S.showGizmos then
+        FogOfWar.DrawLightZones(vg, {
+            gridSize = C.GRID,
+            offsetX = S.cameraX,
+            offsetY = S.cameraY,
+            zoomLevel = S.zoomLevel,
+            mapX = mapX,
+            mapY = mapY,
+            selectedIndex = S.selectedLightZoneIndex,
+        })
+
+        -- 正在绘制的区域预览
+        if S.lightZoneDrawing then
+            local zc1 = math.min(S.lightZoneStartCol, S.lightZoneEndCol)
+            local zr1 = math.min(S.lightZoneStartRow, S.lightZoneEndRow)
+            local zc2 = math.max(S.lightZoneStartCol, S.lightZoneEndCol)
+            local zr2 = math.max(S.lightZoneStartRow, S.lightZoneEndRow)
+            local zx = mapX + (zc1 - 1) * C.GRID * S.zoomLevel - S.cameraX
+            local zy = mapY + (zr1 - 1) * C.GRID * S.zoomLevel - S.cameraY
+            local zw = (zc2 - zc1 + 1) * C.GRID * S.zoomLevel
+            local zh = (zr2 - zr1 + 1) * C.GRID * S.zoomLevel
+            nvgBeginPath(vg); nvgRect(vg, zx, zy, zw, zh)
+            nvgFillColor(vg, nvgRGBA(255, 160, 40, 40)); nvgFill(vg)
+            nvgBeginPath(vg); nvgRect(vg, zx, zy, zw, zh)
+            nvgStrokeColor(vg, nvgRGBA(255, 160, 40, 200))
+            nvgStrokeWidth(vg, 1.5); nvgStroke(vg)
+            -- 预览标识
+            local nextIdx = #(FogOfWar.GetLightZones()) + 1
+            local previewLabel = "#" .. nextIdx
+            nvgFontSize(vg, math.max(12, 14 * S.zoomLevel))
+            nvgFontFace(vg, "sans")
+            nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+            nvgFillColor(vg, nvgRGBA(255, 160, 40, 220))
+            nvgText(vg, zx + zw * 0.5, zy + zh * 0.5, previewLabel)
+        end
+    end
 
     -- 光源标记
-    if FogOfWar then
+    if FogOfWar and S.showGizmos then
         FogOfWar.SetLightSources(FogOfWar.GetLightSources())
         FogOfWar.DrawLightMarkers(vg, {
             gridSize = C.GRID,
@@ -770,22 +828,23 @@ function M.Draw()
             mapY = mapY,
             selectedIndex = S.selectedLightIndex,
         })
+    end
 
-        -- 战争迷雾
-        if S.fogShowInEditor then
-            FogOfWar.Draw(vg, {
-                gridSize = C.GRID,
-                startCol = startCol,
-                endCol = endCol,
-                startRow = startRow,
-                endRow = endRow,
-                offsetX = S.cameraX,
-                offsetY = S.cameraY,
-                zoomLevel = S.zoomLevel,
-                mapX = mapX,
-                mapY = mapY,
-            })
-        end
+    -- 战争迷雾（独立于 gizmos 开关）
+    if FogOfWar and S.fogShowInEditor then
+        FogOfWar.SetLightSources(FogOfWar.GetLightSources())
+        FogOfWar.Draw(vg, {
+            gridSize = C.GRID,
+            startCol = startCol,
+            endCol = endCol,
+            startRow = startRow,
+            endRow = endRow,
+            offsetX = S.cameraX,
+            offsetY = S.cameraY,
+            zoomLevel = S.zoomLevel,
+            mapX = mapX,
+            mapY = mapY,
+        })
     end
 
     -- 选中 & 拖拽 & 框选
