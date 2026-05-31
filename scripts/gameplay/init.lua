@@ -115,6 +115,9 @@ local prevRight = false
 -- 网格显示（默认隐藏，Shift 切换）
 local gridVisible = false
 
+-- 关卡加载完成标志（异步加载完成前阻止游戏逻辑和渲染）
+local levelReady = false
+
 -- 虚拟控件
 local vc_joystick = nil
 local vc_jumpBtn = nil
@@ -275,6 +278,9 @@ local function M_LoadAndInitLevel(filename, player)
     gameTime = 0
     LevelManager.gameTime = 0
 
+    -- 标记关卡就绪，允许渲染和游戏逻辑
+    levelReady = true
+
     print("[Gameplay] Level loaded and initialized: " .. tostring(filename))
 end
 
@@ -323,93 +329,81 @@ function Start()
     Physics.SetHiddenWallRevealed(LevelManager.hiddenWallRevealed)
     PixelSystem.Init()
 
-    -- CloudStorage.Init（MainMenu 已调用过，这里会快速返回缓存）
-    CloudStorage.Init(function(ok)
-        if not ok then
-            print("[Gameplay] CloudStorage.Init failed, cannot load levels")
-            return
-        end
-        CloudStorage.InitWorldMap(function(wmOk)
-            if not wmOk then
-                print("[Gameplay] InitWorldMap failed")
-                return
-            end
+    -- MainMenu 已完成 CloudStorage.Init + InitWorldMap 并验证数据有效
+    -- 直接从缓存读取世界地图（同步），避免重复异步请求导致回调丢失
+    LevelManager.worldMapData = CloudStorage.LoadWorldMap()
+    if not LevelManager.worldMapData or not LevelManager.worldMapData.nodes or #LevelManager.worldMapData.nodes == 0 then
+        print("[Gameplay] No world map nodes found (cache empty?)")
+        return
+    end
+    LevelManager.worldMapLoaded = true
 
-            LevelManager.worldMapData = CloudStorage.LoadWorldMap()
-            if not LevelManager.worldMapData or not LevelManager.worldMapData.nodes or #LevelManager.worldMapData.nodes == 0 then
-                print("[Gameplay] No world map nodes found")
-                return
-            end
-            LevelManager.worldMapLoaded = true
+    ---@diagnostic disable-next-line: undefined-global
+    local mode = _GAMEPLAY_MODE or "new"
+    print("[Gameplay] Mode: " .. mode)
 
-            ---@diagnostic disable-next-line: undefined-global
-            local mode = _GAMEPLAY_MODE or "new"
-            print("[Gameplay] Mode: " .. mode)
-
-            if mode == "continue" then
-                -- 继续游戏：读取存档中的进度
-                clientCloud:Get("player_progress", {
-                    ok = function(values)
-                        local progress = values.player_progress
-                        local targetFile = nil
-                        if progress then
-                            -- 优先使用存档中的 checkpointFile
-                            if progress.checkpointFile and progress.checkpointFile ~= "" then
-                                targetFile = progress.checkpointFile
-                                LevelManager.checkpointFile = progress.checkpointFile
-                                LevelManager.checkpointCol = progress.checkpointCol
-                                LevelManager.checkpointRow = progress.checkpointRow
-                                -- 恢复篝火激活状态
-                                if progress.checkpointCol and progress.checkpointRow then
-                                    local key = progress.checkpointRow .. "_" .. progress.checkpointCol
-                                    LevelManager.checkpointActivated[key] = true
-                                end
-                            elseif progress.currentLevelFile and progress.currentLevelFile ~= "" then
-                                targetFile = progress.currentLevelFile
-                            end
-                            -- 恢复永久解锁能力
-                            if progress.playerUnlocks then
-                                LevelManager.playerUnlocks.hasFireball = progress.playerUnlocks.hasFireball or false
-                                LevelManager.playerUnlocks.hasLanternDash = progress.playerUnlocks.hasLanternDash or false
-                            end
+    if mode == "continue" then
+        -- 继续游戏：读取存档中的进度
+        clientCloud:Get("player_progress", {
+            ok = function(values)
+                local progress = values.player_progress
+                local targetFile = nil
+                if progress then
+                    -- 优先使用存档中的 checkpointFile
+                    if progress.checkpointFile and progress.checkpointFile ~= "" then
+                        targetFile = progress.checkpointFile
+                        LevelManager.checkpointFile = progress.checkpointFile
+                        LevelManager.checkpointCol = progress.checkpointCol
+                        LevelManager.checkpointRow = progress.checkpointRow
+                        -- 恢复篝火激活状态
+                        if progress.checkpointCol and progress.checkpointRow then
+                            local key = progress.checkpointRow .. "_" .. progress.checkpointCol
+                            LevelManager.checkpointActivated[key] = true
                         end
-                        -- 如果没有有效存档文件，回退到第一个节点
-                        if not targetFile or not CloudStorage.Exists(targetFile) then
-                            targetFile = LevelManager.worldMapData.nodes[1].file
-                            LevelManager.checkpointFile = nil
-                            LevelManager.checkpointCol = nil
-                            LevelManager.checkpointRow = nil
-                        end
-                        -- 加载关卡
-                        M_LoadAndInitLevel(targetFile, player)
-                    end,
-                    err = function()
-                        -- 读取失败，回退到第一个节点
-                        print("[Gameplay] Failed to read progress, starting from first node")
-                        local targetFile = LevelManager.worldMapData.nodes[1].file
-                        M_LoadAndInitLevel(targetFile, player)
+                    elseif progress.currentLevelFile and progress.currentLevelFile ~= "" then
+                        targetFile = progress.currentLevelFile
                     end
-                })
-            else
-                -- 新游戏：清空进度，从第一个节点开始
-                LevelManager.ResetCollectibles()
-                LevelManager.playerUnlocks.hasFireball = false
-                LevelManager.playerUnlocks.hasLanternDash = false
-                player.hasFireball = false
-
-                local firstFile = LevelManager.worldMapData.nodes[1].file
-                -- 清空云端进度（异步，不阻塞加载）
-                clientCloud:Set("player_progress", {}, {
-                    ok = function() print("[Gameplay] Progress cleared for new game") end,
-                    err = function() print("[Gameplay] Failed to clear progress") end
-                })
-                M_LoadAndInitLevel(firstFile, player)
+                    -- 恢复永久解锁能力
+                    if progress.playerUnlocks then
+                        LevelManager.playerUnlocks.hasFireball = progress.playerUnlocks.hasFireball or false
+                        LevelManager.playerUnlocks.hasLanternDash = progress.playerUnlocks.hasLanternDash or false
+                    end
+                end
+                -- 如果没有有效存档文件，回退到第一个节点
+                if not targetFile or not CloudStorage.Exists(targetFile) then
+                    targetFile = LevelManager.worldMapData.nodes[1].file
+                    LevelManager.checkpointFile = nil
+                    LevelManager.checkpointCol = nil
+                    LevelManager.checkpointRow = nil
+                end
+                -- 加载关卡
+                M_LoadAndInitLevel(targetFile, player)
+            end,
+            err = function()
+                -- 读取失败，回退到第一个节点
+                print("[Gameplay] Failed to read progress, starting from first node")
+                local targetFile = LevelManager.worldMapData.nodes[1].file
+                M_LoadAndInitLevel(targetFile, player)
             end
+        })
+    else
+        -- 新游戏：清空进度，从第一个节点开始
+        LevelManager.ResetCollectibles()
+        LevelManager.playerUnlocks.hasFireball = false
+        LevelManager.playerUnlocks.hasLanternDash = false
+        player.hasFireball = false
 
-            print("[WorldMap] Loaded with " .. #LevelManager.worldMapData.nodes .. " levels, "
-                .. #(LevelManager.worldMapData.connections or {}) .. " connections")
-        end)
-    end)
+        local firstFile = LevelManager.worldMapData.nodes[1].file
+        -- 清空云端进度（异步，不阻塞加载）
+        clientCloud:Set("player_progress", {}, {
+            ok = function() print("[Gameplay] Progress cleared for new game") end,
+            err = function() print("[Gameplay] Failed to clear progress") end
+        })
+        M_LoadAndInitLevel(firstFile, player)
+    end
+
+    print("[WorldMap] Loaded with " .. #LevelManager.worldMapData.nodes .. " levels, "
+        .. #(LevelManager.worldMapData.connections or {}) .. " connections")
 
     -- 虚拟控件
     vc_joystick = VirtualControls.CreateJoystick({ side = "left" })
@@ -440,6 +434,12 @@ end
 
 function HandleNanoVGRender(eventType, eventData)
     if not vg then return end
+    if not levelReady then
+        -- 关卡未加载完成，渲染黑屏
+        nvgBeginFrame(vg, logicalW, logicalH, dpr)
+        nvgEndFrame(vg)
+        return
+    end
 
     nvgBeginFrame(vg, logicalW, logicalH, dpr)
     nvgScale(vg, scale, scale)
@@ -479,6 +479,9 @@ end
 ---@param eventType string
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
+    if not levelReady then return end
+    local PauseMenu = require "PauseMenu"
+    if PauseMenu.IsPaused() then return end
     if gameState ~= Config.STATE_PLAYING then return end
     local dt = eventData["TimeStep"]:GetFloat()
 
@@ -700,7 +703,8 @@ function HandleKeyDown(eventType, eventData)
         gridVisible = not gridVisible
     end
     if key == KEY_ESCAPE then
-        engine:Exit()
+        local PauseMenu = require "PauseMenu"
+        PauseMenu.Toggle()
     end
 end
 
