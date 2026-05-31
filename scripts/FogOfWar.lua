@@ -1283,10 +1283,20 @@ function FogOfWar.Serialize()
     for _, light in ipairs(lightSources) do
         -- 跳过运行时临时光源（篝火等动态光源标记了 noLantern）
         if light.noLantern then goto continue_serialize end
+        -- 🔴 BUG FIX: 如果光源被 zone 系统临时隐藏（_originalDiameter 存在），
+        -- 必须保存 _originalDiameter 而非当前的 diameter=0，否则重新加载后光源永久消失
+        local saveDiameter
+        if light.extinguished then
+            saveDiameter = light.targetDiameter or 6
+        elseif light._originalDiameter then
+            saveDiameter = light._originalDiameter
+        else
+            saveDiameter = light.diameter
+        end
         local entry = {
             col = light.col,
             row = light.row,
-            diameter = light.extinguished and (light.targetDiameter or 6) or light.diameter,
+            diameter = saveDiameter,
             feather = light.feather,
         }
         if light.group and light.group > 0 then
@@ -1307,16 +1317,25 @@ function FogOfWar.Deserialize(data)
     lightSources = {}
     if not data then return end
     for _, d in ipairs(data) do
+        local rawDiameter = d.diameter or 6
+        -- 🔴 BUG FIX: 修复已损坏的数据 —— 如果 diameter<=0 且不是 extinguished 状态，
+        -- 说明是之前 Serialize bug 导致的脏数据，恢复为默认直径
+        if rawDiameter <= 0 and not d.extinguished then
+            log:Write(LOG_WARNING, string.format(
+                "[FogOfWar] Repaired corrupted light at (%d,%d): diameter was %d, reset to 6",
+                d.col or 1, d.row or 1, rawDiameter))
+            rawDiameter = 6
+        end
         local light = {
             col = d.col or 1,
             row = d.row or 1,
-            diameter = d.extinguished and 0 or (d.diameter or 6),
+            diameter = d.extinguished and 0 or rawDiameter,
             feather = d.feather or 0.5,
             group = d.group or 0,
         }
         if d.extinguished then
             light.extinguished = true
-            light.targetDiameter = d.diameter or 6
+            light.targetDiameter = rawDiameter
         end
         table.insert(lightSources, light)
     end

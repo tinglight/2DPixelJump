@@ -40,6 +40,16 @@ local PLAYER_PARAMS_FILE = "data/player_params.json"
 
 local initialized = false
 
+-- 🔴 待导入的关卡文件列表（一次性，导入后自动清空）
+-- 格式: { "data/levels/level_1.json", ... }
+local PENDING_IMPORTS = {}
+
+-- 🔴 恢复模式：探测云端可能被遗漏的关卡（索引被意外覆盖时使用）
+-- 设为 true 后会尝试探测 level_1 ~ level_20，恢复所有仍存在的关卡
+-- 恢复成功后请改回 false
+local RECOVER_ORPHANED_LEVELS = false
+local RECOVER_PROBE_MAX = 20  -- 探测到编号20
+
 -- ====================================================================
 -- 内部辅助函数
 -- ====================================================================
@@ -81,6 +91,8 @@ end
 function CloudStorage.Init(callback)
     -- 已初始化且有有效缓存时直接返回，避免清空数据
     if initialized and cache.nextIndex >= 1 then
+        -- 但仍需检查是否有待导入关卡
+        CloudStorage._ProcessPendingImports()
         if callback then callback(true) end
         return
     end
@@ -97,8 +109,11 @@ function CloudStorage.Init(callback)
                 cache.nextIndex = indexData.nextIndex
                 CloudStorage._LoadAllLevelsFromCloud(function(ok)
                     if ok then
-                        -- 加载回收站和备份
-                        CloudStorage._LoadTrashAndBackups(callback)
+                        -- 加载回收站和备份，然后处理待导入关卡
+                        CloudStorage._LoadTrashAndBackups(function(ok2, err2)
+                            CloudStorage._ProcessPendingImports()
+                            if callback then callback(ok2, err2) end
+                        end)
                     else
                         if callback then callback(false, "加载关卡失败") end
                     end
@@ -116,8 +131,59 @@ function CloudStorage.Init(callback)
     })
 end
 
+--- 处理待导入的本地关卡文件（追加到现有关卡末尾，不覆盖已有数据）
+function CloudStorage._ProcessPendingImports()
+    if not PENDING_IMPORTS or #PENDING_IMPORTS == 0 then return end
+
+    local imported = 0
+    for _, localPath in ipairs(PENDING_IMPORTS) do
+        local content = ReadLocalFile(localPath)
+        if content then
+            -- 用当前 nextIndex 作为新文件名（追加到末尾）
+            local newIdx = cache.nextIndex
+            local newFname = string.format("level_%d.json", newIdx)
+            cache.levels[newFname] = content
+            cache.nextIndex = newIdx + 1
+            imported = imported + 1
+
+            -- 同步写入云端
+            local key = FilenameToKey(newFname)
+            local decOk, data = pcall(cjson.decode, content)
+            if decOk and data then
+                local levelName = data.levelName or newFname
+                clientCloud:BatchSet()
+                    :Set(key, data)
+                    :Set("editor_index", { nextIndex = cache.nextIndex })
+                    :Save("导入关卡 " .. newFname, {
+                        ok = function()
+                            print("[CloudStorage] 导入成功: " .. newFname .. " (" .. levelName .. ")")
+                        end,
+                        error = function(code, reason)
+                            print("[CloudStorage] 导入云端写入失败: " .. tostring(reason))
+                        end
+                    })
+            end
+        else
+            print("[CloudStorage] 待导入文件不存在: " .. localPath)
+        end
+    end
+
+    -- 清空列表，避免重复导入
+    PENDING_IMPORTS = {}
+
+    if imported > 0 then
+        print("[CloudStorage] 共追加导入 " .. imported .. " 个关卡")
+    end
+end
+
 --- 从云端加载所有关卡（已知 nextIndex）
 function CloudStorage._LoadAllLevelsFromCloud(callback)
+    -- 如果开启了恢复模式，忽略当前 nextIndex，直接探测更大范围
+    if RECOVER_ORPHANED_LEVELS then
+        CloudStorage._RecoverOrphanedLevels(callback)
+        return
+    end
+
     if cache.nextIndex <= 1 then
         -- 没有任何关卡
         initialized = true
@@ -148,6 +214,70 @@ function CloudStorage._LoadAllLevelsFromCloud(callback)
             print("[CloudStorage] 批量读取关卡失败: " .. tostring(reason))
             -- 降级到本地
             CloudStorage._LoadFromLocalOnly(callback)
+        end
+    })
+end
+
+--- 恢复被遗漏的云端关卡（探测 level_1 ~ level_N，重建索引）
+--- 当 editor_index.nextIndex 被意外覆盖为较小值时，已有的关卡数据仍存在于云端，
+--- 只是索引不再引用它们。此函数探测所有可能存在的 key 并重建正确的 nextIndex。
+function CloudStorage._RecoverOrphanedLevels(callback)
+    print("[CloudStorage] 🔄 开始恢复模式：探测 level_1 ~ level_" .. RECOVER_PROBE_MAX)
+
+    -- 构建批量读取请求：探测 1 ~ RECOVER_PROBE_MAX
+    local batch = clientCloud:BatchGet()
+    for i = 1, RECOVER_PROBE_MAX do
+        batch:Key("level_" .. i)
+    end
+
+    batch:Fetch({
+        ok = function(values, iscores)
+            local recovered = 0
+            local maxFound = 0
+
+            for i = 1, RECOVER_PROBE_MAX do
+                local key = "level_" .. i
+                local data = values[key]
+                -- 跳过被标记删除的关卡
+                if data and not data._deleted then
+                    local fname = KeyToFilename(key)
+                    cache.levels[fname] = cjson.encode(data)
+                    recovered = recovered + 1
+                    if i > maxFound then
+                        maxFound = i
+                    end
+                    local levelName = data.levelName or fname
+                    print("[CloudStorage] ✅ 恢复关卡: " .. fname .. " (" .. levelName .. ")")
+                end
+            end
+
+            -- 重建 nextIndex：最大已有编号 + 1
+            local correctNextIndex = maxFound + 1
+            if correctNextIndex > cache.nextIndex then
+                print("[CloudStorage] 🔧 修正 nextIndex: " .. cache.nextIndex .. " → " .. correctNextIndex)
+                cache.nextIndex = correctNextIndex
+            end
+
+            print("[CloudStorage] ✅ 恢复完成：找到 " .. recovered .. " 个关卡，nextIndex=" .. cache.nextIndex)
+
+            -- 将修正后的索引写回云端
+            clientCloud:Set("editor_index", { nextIndex = cache.nextIndex }, {
+                ok = function()
+                    print("[CloudStorage] ✅ 已将修正后的索引写回云端")
+                end,
+                error = function(code, reason)
+                    print("[CloudStorage] ⚠️ 写回索引失败: " .. tostring(reason))
+                end
+            })
+
+            initialized = true
+            if callback then callback(true) end
+        end,
+        error = function(code, reason)
+            print("[CloudStorage] ❌ 恢复模式探测失败: " .. tostring(reason))
+            -- 降级：用当前 nextIndex 正常加载
+            RECOVER_ORPHANED_LEVELS = false
+            CloudStorage._LoadAllLevelsFromCloud(callback)
         end
     })
 end

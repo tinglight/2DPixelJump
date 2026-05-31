@@ -315,34 +315,6 @@ function M.CheckTilesOverlap()
     S.play.inBlackWater = false
 
     local s = M.PlayerGridSize()
-    -- DEBUG: 每2秒打印玩家位置+周围tile值
-    M._debugTimer = (M._debugTimer or 0) + 1
-    if M._debugTimer % 120 == 0 then
-        local tilesInfo = ""
-        for dy = 0, s - 1 do
-            for dx = 0, s - 1 do
-                local c = S.play.gridX + dx
-                local r = S.play.gridY + dy
-                local v = 0
-                if c >= 1 and c <= S.MAP_COLS and r >= 1 and r <= S.MAP_ROWS then
-                    v = S.levelData[r][c] or 0
-                end
-                tilesInfo = tilesInfo .. string.format(" [r%d,c%d]=v%d", r, c, v)
-            end
-        end
-        log:Write(LOG_INFO, string.format("[PLAYER POS] gridX=%d gridY=%d size=%d tiles:%s",
-            S.play.gridX, S.play.gridY, s, tilesInfo))
-        -- 还打印脚下一行和头上一行
-        local belowInfo = ""
-        local feetRow = S.play.gridY + s
-        for dx = 0, s - 1 do
-            local c = S.play.gridX + dx
-            if c >= 1 and c <= S.MAP_COLS and feetRow >= 1 and feetRow <= S.MAP_ROWS then
-                belowInfo = belowInfo .. string.format(" [r%d,c%d]=v%d", feetRow, c, S.levelData[feetRow][c] or 0)
-            end
-        end
-        log:Write(LOG_INFO, string.format("[PLAYER BELOW] feetRow=%d:%s", feetRow, belowInfo))
-    end
     for dy = 0, s - 1 do
         for dx = 0, s - 1 do
             local col = S.play.gridX + dx
@@ -357,13 +329,6 @@ function M.ProcessTileAt(col, row)
     local val = S.levelData[row][col]
     local base, group = TileUtils.GetTileType(val)
     local key = row .. "_" .. col
-
-    -- DEBUG: 检测篝火碰撞
-    if val == 14 or base == C.TILE.CHECKPOINT or base == 14 then
-        local activated = S.checkpointActivated[key]
-        log:Write(LOG_INFO, string.format("[CHECKPOINT DEBUG] col=%d row=%d val=%d base=%d TILE.CHECKPOINT=%s key=%s activated=%s",
-            col, row, val, base, tostring(C.TILE.CHECKPOINT), key, tostring(activated)))
-    end
 
     if base == C.TILE.SPIKE or base == C.TILE.POISON_WATER then
         S.play.alive = false
@@ -1762,6 +1727,21 @@ function M.ApplyBound(bound)
         S.camBound.right = S.MAP_COLS
         S.camBound.bottom = S.MAP_ROWS
     end
+
+    -- 🔴 BUG FIX: 与 Persistence.ApplyCamBound 保持一致的安全检查
+    -- 确保 camBound 值在合法范围内且方向正确
+    S.camBound.left = math.max(1, S.camBound.left)
+    S.camBound.top = math.max(1, S.camBound.top)
+    S.camBound.right = math.max(S.camBound.left, math.min(S.camBound.right, S.MAP_COLS))
+    S.camBound.bottom = math.max(S.camBound.top, math.min(S.camBound.bottom, S.MAP_ROWS))
+
+    -- 确保 camBound 区域至少有最小尺寸（2格宽、2格高），防止玩家生成在无效区域
+    if S.camBound.right - S.camBound.left < 1 then
+        S.camBound.right = math.min(S.MAP_COLS, S.camBound.left + 1)
+    end
+    if S.camBound.bottom - S.camBound.top < 1 then
+        S.camBound.bottom = math.min(S.MAP_ROWS, S.camBound.top + 1)
+    end
 end
 
 function M.ApplyParams(params)
@@ -2030,6 +2010,42 @@ local function ResetPlayState()
 
     S.play.gridX = S.spawnCol
     S.play.gridY = S.spawnRow - (C.PLAYER_GRID_H - 1)
+
+    -- 将玩家初始位置限制在 camBound 范围内，防止 spawn 在 camBound 外导致玩家不可见
+    local ps = M.PlayerGridSize()
+    S.play.gridX = math.max(S.camBound.left, math.min(S.play.gridX, S.camBound.right - ps + 1))
+    S.play.gridY = math.max(S.camBound.top, math.min(S.play.gridY, S.camBound.bottom - C.PLAYER_GRID_H + 1))
+
+    -- 安全检查：如果玩家初始位置卡在实心方块中，向上搜索有效位置
+    if M.Collides(S.play.gridX, S.play.gridY) then
+        log:Write(LOG_WARNING, string.format(
+            "[RESET] Player spawned inside solid at (%d,%d), searching valid position...",
+            S.play.gridX, S.play.gridY))
+        local found = false
+        for tryY = S.play.gridY - 1, S.camBound.top, -1 do
+            if not M.Collides(S.play.gridX, tryY) then
+                S.play.gridY = tryY
+                found = true
+                break
+            end
+        end
+        if not found then
+            -- 向下搜索
+            for tryY = S.play.gridY + 1, S.camBound.bottom - C.PLAYER_GRID_H + 1 do
+                if not M.Collides(S.play.gridX, tryY) then
+                    S.play.gridY = tryY
+                    found = true
+                    break
+                end
+            end
+        end
+        if found then
+            log:Write(LOG_INFO, string.format("[RESET] Found valid position at (%d,%d)", S.play.gridX, S.play.gridY))
+        else
+            log:Write(LOG_WARNING, "[RESET] Could not find valid position, using spawn as-is")
+        end
+    end
+
     S.play.isOnGround = false
     S.play.isJumping = false
     S.play.jumpGridsRemain = 0
@@ -2073,12 +2089,17 @@ local function ResetPlayState()
     M.campfireParticles = {}
     M.campfireIgniteEffect = {}
     local zoom = S.playerParams.cameraZoom or 1.0
-    S.playCameraX = math.max(0, (S.spawnCol - 1) * C.GRID - S.playViewW * zoom * 0.35)
+    -- 水平初始化（使用 camBound.left 作为下界，与 UpdateCamera 一致）
+    local boundLeftPx = (S.camBound.left - 1) * C.GRID
+    local boundRightPx = S.camBound.right * C.GRID
+    local viewW = S.playViewW * zoom
+    local camMaxX = math.max(boundLeftPx, boundRightPx - viewW)
+    S.playCameraX = math.max(boundLeftPx, math.min((S.play.gridX - 1) * C.GRID - viewW * 0.35, camMaxX))
     -- 垂直初始化
     local boundTopPx = (S.camBound.top - 1) * C.GRID
     local boundBottomPx = S.camBound.bottom * C.GRID
     local viewH = S.playViewH * zoom
-    local spawnY = (S.spawnRow - C.PLAYER_GRID_H) * C.GRID
+    local spawnY = (S.play.gridY - 1) * C.GRID
     local camMaxY = math.max(boundTopPx, boundBottomPx - viewH)
     S.playCameraY = math.max(boundTopPx, math.min(spawnY - viewH * 0.5, camMaxY))
     M.InitPlayPixels()
@@ -2086,6 +2107,8 @@ local function ResetPlayState()
 
     -- 初始化光源区域可见性（玩家中心格作为检测点）
     FogOfWar.InitZoneVisibility(S.play.gridX + 1, S.play.gridY + 1)
+
+
 end
 
 ------------------------------------------------------------
@@ -2399,12 +2422,16 @@ end
 
 function M.Draw()
     local vg = S.vg
+
     -- 传入动画时间驱动萤火虫闪烁
     SolidRenderer.SetTime(S.editorClock)
     M.DrawBackground(vg)
     local startCol, endCol = M.DrawGrid(vg)
-    -- 装饰资产图片（背景上方，地块下方，被迷雾覆盖）
+    -- 装饰资产图片（背景上方，地块下方，被迷雾覆盖）— 仅渲染视口内的
     if #S.decorations > 0 then
+        local decoZoom = S.playerParams.cameraZoom or 1.0
+        local decoViewW = S.playViewW * decoZoom
+        local decoViewH = S.playViewH * decoZoom
         for _, deco in ipairs(S.decorations) do
             if not deco.handle and deco.image and deco.image ~= "" then
                 deco.handle = nvgCreateImage(vg, deco.image, 0)
@@ -2414,12 +2441,15 @@ function M.Draw()
                 local dy = (deco.row - 1) * C.GRID - S.playCameraY
                 local dw = (deco.w or 2) * C.GRID
                 local dh = (deco.h or 2) * C.GRID
-                local alpha = deco.alpha or 1.0
-                local imgPaint = nvgImagePattern(vg, dx, dy, dw, dh, 0, deco.handle, alpha)
-                nvgBeginPath(vg)
-                nvgRect(vg, dx, dy, dw, dh)
-                nvgFillPaint(vg, imgPaint)
-                nvgFill(vg)
+                -- 视口裁剪：跳过完全在视口外的装饰物
+                if dx + dw > 0 and dx < decoViewW and dy + dh > 0 and dy < decoViewH then
+                    local alpha = deco.alpha or 1.0
+                    local imgPaint = nvgImagePattern(vg, dx, dy, dw, dh, 0, deco.handle, alpha)
+                    nvgBeginPath(vg)
+                    nvgRect(vg, dx, dy, dw, dh)
+                    nvgFillPaint(vg, imgPaint)
+                    nvgFill(vg)
+                end
             end
         end
     end
@@ -3361,7 +3391,8 @@ function M.DrawFogOfWar(vg, startCol, endCol)
     local sources = FogOfWar.GetLightSources()
     local playerLightIdx = nil
     local flameRatio = S.playAlivePixels / math.max(1, S.playTotalPixels)
-    local playerDiameter = S.playerParams.defaultLightDiameter * flameRatio
+    -- 确保玩家始终有最小自发光（至少 3 格直径），防止被迷雾完全遮盖
+    local playerDiameter = math.max(3, S.playerParams.defaultLightDiameter * flameRatio)
     if playerDiameter >= 1 then
         local playerS = M.PlayerGridSize()
         local lightCol = S.play.gridX + math.floor(playerS * 0.5)
@@ -3376,12 +3407,17 @@ function M.DrawFogOfWar(vg, startCol, endCol)
     end
 
     FogOfWar.SetLightSources(sources)
+    -- 只渲染可见行范围的迷雾（避免大地图时产生过多 NanoVG 调用）
+    local zoom = S.playerParams.cameraZoom or 1.0
+    local fogVisibleH = S.playViewH * zoom
+    local fogStartRow = math.max(1, math.floor(S.playCameraY / C.GRID))
+    local fogEndRow = math.min(S.MAP_ROWS, fogStartRow + math.ceil(fogVisibleH / C.GRID) + 3)
     FogOfWar.Draw(vg, {
         gridSize = C.GRID,
         startCol = startCol,
         endCol = endCol,
-        startRow = 1,
-        endRow = S.MAP_ROWS,
+        startRow = fogStartRow,
+        endRow = fogEndRow,
         offsetX = S.playCameraX,
         offsetY = S.playCameraY,
         zoomLevel = 1.0,

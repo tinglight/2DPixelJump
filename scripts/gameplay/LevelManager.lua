@@ -172,7 +172,16 @@ function M.LoadLevelFromFile(filename, player)
         return false
     end
 
-    -- 清空地图
+    -- 使用关卡自身尺寸覆盖 Config（编辑器保存的画布大小）
+    if data.cols and data.cols > 0 then
+        Config.MAP_COLS = data.cols
+    end
+    if data.rows and data.rows > 0 then
+        Config.MAP_ROWS = data.rows
+    end
+
+    -- 清空地图（使用更新后的尺寸）
+    M.levelData = {}
     for row = 1, Config.MAP_ROWS do
         M.levelData[row] = {}
         for col = 1, Config.MAP_COLS do

@@ -307,6 +307,11 @@ function UpdateBoundDrag()
     elseif S.boundDragEdge == BOUND_EDGE.TOP then
         S.camBound.top = math.min(S.camBound.bottom - 1, gridRow)
     end
+
+    -- 🔴 BUG FIX: 边界拖拽修改了 camBound，必须标记 dirty 触发自动保存
+    -- 否则边界变更不会被持久化到云端
+    Undo.dirty = true
+    Undo.saveTimer = Undo.saveDelay
 end
 
 function UpdateMoveDrag()

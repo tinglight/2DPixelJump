@@ -1,0 +1,58 @@
+[2026-05-30 19:34:33] 📋 ==================================================
+[2026-05-30 19:34:33] 📋 构建开始
+[2026-05-30 19:34:33] 📋 ==================================================
+[2026-05-30 19:34:33] 📋 日志文件: /workspace/logs/build/build_20260530_193433.log
+[2026-05-30 19:34:33] 📋 入口文件: /workspace/scripts/main.lua
+[2026-05-30 19:34:33] 📋 脚本目录: /workspace/scripts
+[2026-05-30 19:34:33] 📋 工作目录: /workspace
+[2026-05-30 19:34:33] 📋 MCP 环境: production
+[2026-05-30 19:34:33] 📋 构建参数: --no-7z --cooking-limit 10
+[2026-05-30 19:34:33] 📋 步骤 1+2: 验证入口 Lua 文件
+[2026-05-30 19:34:33] ✅ 入口文件验证通过
+[2026-05-30 19:34:33] 📋 ⏱️  耗时: 0.01s
+[2026-05-30 19:34:33] 📋 步骤 3: 验证 scripts 目录存在
+[2026-05-30 19:34:33] ✅ scripts 目录存在
+[2026-05-30 19:34:33] ⚠️ 发现 1 个超大 Lua 文件（>2000 行），建议进行模块化拆分重构：
+[2026-05-30 19:34:33] ⚠️   scripts/editor/PlayMode.lua	2333 行
+[2026-05-30 19:34:33] 📋 ⏱️  耗时: 0.05s
+[2026-05-30 19:34:33] 📋 步骤 4: 启动 Lua LSP watch 模式
+[2026-05-30 19:34:33] 📋 LSP watch 已运行 (PID: 286)
+[2026-05-30 19:34:33] ✅ Lua LSP 检查通过: 0 个错误
+[2026-05-30 19:34:33] 📋 ⏱️  耗时: 0.02s
+[2026-05-30 19:34:33] 📋 步骤 5: 检查并初始化 .project 目录
+[2026-05-30 19:34:33] ✅ .project 目录已正确初始化
+[2026-05-30 19:34:33] 📋 ⏱️  耗时: 0.01s
+[2026-05-30 19:34:34] 📋 步骤 5.6: 检查/更新 multiplayer 配置
+[2026-05-30 19:34:34] ✅ 使用本地已有的 multiplayer 配置
+[2026-05-30 19:34:34] 📋 ⏱️  耗时: 0.01s
+[2026-05-30 19:34:34] 📋 步骤 6: 更新 project.json 的 entry
+[2026-05-30 19:34:34] 📋 更新 project.json: /workspace/.project/project.json
+[2026-05-30 19:34:34] 📋   设置 entry: main.lua
+[2026-05-30 19:34:34] ✅ project.json 更新完成
+[2026-05-30 19:34:34] 📋 步骤 6.1: 检查 project_id 一致性
+[2026-05-30 19:34:34] ✅ project_id 一致性检查通过: p_146c
+[2026-05-30 19:34:34] 📋 ⏱️  耗时: 0.03s
+[2026-05-30 19:34:34] 📋 步骤 6.2: 锁定游戏版本号
+[2026-05-30 19:34:34] 📋 本地版本 1.2.0 格式正常，跳过版本锁定
+[2026-05-30 19:34:34] 📋 ⏱️  耗时: 0.01s
+[2026-05-30 19:34:34] 📋 步骤 7: 调用 project_builder.py 进行构建
+[2026-05-30 19:34:34] 📋 已设置 AssetsCooking 可执行权限: /home/Maker/.sce/build/AssetsCooking
+[2026-05-30 19:34:34] 📋 已设置 TileTerrainCLI 可执行权限: /workspace/.cli/TileTerrainCLI
+[2026-05-30 19:34:34] 📋 已设置 download_tile_resources.py 可执行权限: /workspace/.cli/download_tile_resources.py
+[2026-05-30 19:34:34] 📋 执行脚本: /home/Maker/.sce/build/project_builder.py
+[2026-05-30 19:34:34] 📋 参数: --project /workspace --platform all --cooking /home/Maker/.sce/build/AssetsCooking --no-7z --cooking-limit 10
+[2026-05-30 19:34:34] 📋 Python: python3
+[2026-05-30 19:34:34] 📋 ⏱️  耗时: 0.68s
+[2026-05-30 19:34:34] ❌ 构建失败: 脚本执行失败: Traceback (most recent call last):
+  File "/home/Maker/.sce/build/project_builder.py", line 60, in <module>
+    from build_steps import (
+  File "/mnt/container_home/.sce/build/build_steps/__init__.py", line 24, in <module>
+    from .step_assets_cooking import AssetsCookingStep
+  File "<frozen importlib._bootstrap>", line 1360, in _find_and_load
+  File "<frozen importlib._bootstrap>", line 1331, in _find_and_load_unlocked
+  File "<frozen importlib._bootstrap>", line 935, in _load_unlocked
+  File "<frozen importlib._bootstrap_external>", line 991, in exec_module
+  File "<frozen importlib._bootstrap_external>", line 1128, in get_code
+  File "<frozen importlib._bootstrap_external>", line 1187, in get_data
+OSError: [Errno 116] Stale file handle
+

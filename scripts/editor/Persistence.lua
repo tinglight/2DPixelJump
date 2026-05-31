@@ -193,6 +193,9 @@ function M.ApplyLevelData(data)
     if data.spawn then
         S.spawnCol = data.spawn.col or 3
         S.spawnRow = data.spawn.row or (S.MAP_ROWS - 3)
+        -- 确保 spawn 在地图范围内
+        S.spawnCol = math.max(1, math.min(S.spawnCol, S.MAP_COLS))
+        S.spawnRow = math.max(1, math.min(S.spawnRow, S.MAP_ROWS))
         S.levelData[S.spawnRow][S.spawnCol] = TILE.SPAWN
     end
 
@@ -224,6 +227,16 @@ function M.ApplyLevelData(data)
     S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
     S.bgStretchToCanvas = (data.bgStretchToCanvas == true)
     S.bgImageHandle = nil  -- 清除缓存，加载关卡时重新加载图片
+
+    -- [DEBUG] 关卡加载完毕，输出关键数据
+    log:Write(LOG_INFO, string.format(
+        "[LOAD DBG] file=%s MAP=%dx%d spawn=(%d,%d) camBound=[%d,%d,%d,%d] lights=%d zones=%d decos=%d bg='%s'",
+        S.currentLevelName or "?",
+        S.MAP_COLS, S.MAP_ROWS,
+        S.spawnCol, S.spawnRow,
+        S.camBound.left, S.camBound.top, S.camBound.right, S.camBound.bottom,
+        #S.lightSources, #S.lightZones, #S.decorations,
+        S.backgroundImage))
 end
 
 --- 应用摄像机边界
@@ -239,6 +252,20 @@ function M.ApplyCamBound(bound)
         S.camBound.top = 1
         S.camBound.right = S.MAP_COLS
         S.camBound.bottom = S.MAP_ROWS
+    end
+
+    -- 健壮性修正：确保 camBound 值在合法范围内且方向正确
+    S.camBound.left = math.max(1, S.camBound.left)
+    S.camBound.top = math.max(1, S.camBound.top)
+    S.camBound.right = math.max(S.camBound.left, math.min(S.camBound.right, S.MAP_COLS))
+    S.camBound.bottom = math.max(S.camBound.top, math.min(S.camBound.bottom, S.MAP_ROWS))
+
+    -- 确保 camBound 区域至少有最小尺寸（2格宽、2格高），防止相机计算崩溃
+    if S.camBound.right - S.camBound.left < 1 then
+        S.camBound.right = math.min(S.MAP_COLS, S.camBound.left + 1)
+    end
+    if S.camBound.bottom - S.camBound.top < 1 then
+        S.camBound.bottom = math.min(S.MAP_ROWS, S.camBound.top + 1)
     end
 end
 
