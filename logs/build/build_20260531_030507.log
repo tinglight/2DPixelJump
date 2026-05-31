@@ -1,0 +1,56 @@
+[2026-05-31 03:05:07] 📋 ==================================================
+[2026-05-31 03:05:07] 📋 构建开始
+[2026-05-31 03:05:07] 📋 ==================================================
+[2026-05-31 03:05:07] 📋 日志文件: /workspace/logs/build/build_20260531_030507.log
+[2026-05-31 03:05:07] 📋 入口文件: /workspace/scripts/main.lua
+[2026-05-31 03:05:07] 📋 脚本目录: /workspace/scripts
+[2026-05-31 03:05:07] 📋 工作目录: /workspace
+[2026-05-31 03:05:07] 📋 MCP 环境: production
+[2026-05-31 03:05:07] 📋 构建参数: --no-7z --cooking-limit 10
+[2026-05-31 03:05:07] 📋 步骤 1+2: 验证入口 Lua 文件
+[2026-05-31 03:05:07] ✅ 入口文件验证通过
+[2026-05-31 03:05:07] 📋 ⏱️  耗时: 0.01s
+[2026-05-31 03:05:07] 📋 步骤 3: 验证 scripts 目录存在
+[2026-05-31 03:05:07] ✅ scripts 目录存在
+[2026-05-31 03:05:08] ⚠️ 发现 3 个超大 Lua 文件（>2000 行），建议进行模块化拆分重构：
+[2026-05-31 03:05:08] ⚠️   scripts/editor/PlayMode.lua	3962 行
+[2026-05-31 03:05:08] ⚠️   scripts/SolidRenderer.lua	2022 行
+[2026-05-31 03:05:08] ⚠️   scripts/editor/InputHandler.lua	2005 行
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.05s
+[2026-05-31 03:05:08] 📋 步骤 4: 启动 Lua LSP watch 模式
+[2026-05-31 03:05:08] 📋 LSP watch 已运行 (PID: 45554)
+[2026-05-31 03:05:08] ✅ Lua LSP 检查通过: 0 个错误
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.04s
+[2026-05-31 03:05:08] 📋 步骤 5: 检查并初始化 .project 目录
+[2026-05-31 03:05:08] ✅ .project 目录已正确初始化
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.01s
+[2026-05-31 03:05:08] 📋 步骤 5.6: 检查/更新 multiplayer 配置
+[2026-05-31 03:05:08] ✅ 使用本地已有的 multiplayer 配置
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.01s
+[2026-05-31 03:05:08] 📋 步骤 6: 更新 project.json 的 entry
+[2026-05-31 03:05:08] 📋 更新 project.json: /workspace/.project/project.json
+[2026-05-31 03:05:08] 📋   设置 entry: main.lua
+[2026-05-31 03:05:08] ✅ project.json 更新完成
+[2026-05-31 03:05:08] 📋 步骤 6.1: 检查 project_id 一致性
+[2026-05-31 03:05:08] ✅ project_id 一致性检查通过: p_6rh1
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.03s
+[2026-05-31 03:05:08] 📋 步骤 6.2: 锁定游戏版本号
+[2026-05-31 03:05:08] 📋 本地版本 1.3.0 格式正常，跳过版本锁定
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.01s
+[2026-05-31 03:05:08] 📋 步骤 7: 调用 project_builder.py 进行构建
+[2026-05-31 03:05:08] 📋 已设置 AssetsCooking 可执行权限: /home/Maker/.sce/build/AssetsCooking
+[2026-05-31 03:05:08] 📋 已设置 TileTerrainCLI 可执行权限: /workspace/.cli/TileTerrainCLI
+[2026-05-31 03:05:08] 📋 已设置 download_tile_resources.py 可执行权限: /workspace/.cli/download_tile_resources.py
+[2026-05-31 03:05:08] 📋 执行脚本: /home/Maker/.sce/build/project_builder.py
+[2026-05-31 03:05:08] 📋 参数: --project /workspace --platform all --cooking /home/Maker/.sce/build/AssetsCooking --no-7z --cooking-limit 10
+[2026-05-31 03:05:08] 📋 Python: python3
+[2026-05-31 03:05:08] 📋 ⏱️  耗时: 0.46s
+[2026-05-31 03:05:08] ❌ 构建失败: 脚本执行失败: Traceback (most recent call last):
+  File "/home/Maker/.sce/build/project_builder.py", line 60, in <module>
+    from build_steps import (
+  File "/mnt/container_home/.sce/build/build_steps/__init__.py", line 13, in <module>
+    from .step_load_config import LoadConfigStep
+  File "/mnt/container_home/.sce/build/build_steps/step_load_config.py", line 25, in <module>
+    from build_utils import load_jsonc, resolve_platform_config, resolve_version_autoincrement
+ImportError: cannot import name 'load_jsonc' from 'build_utils' (/mnt/container_home/.sce/build/build_utils.py)
+

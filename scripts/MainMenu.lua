@@ -520,6 +520,16 @@ local function BuildUI()
             -- 编辑器按钮（绝对定位右上角）
             editorBtn,
 
+            -- 制作归属（绝对定位左下角）
+            UI.Label {
+                text = "制作归属@Seija@Xp",
+                fontSize = 12,
+                textColor = { 160, 150, 130, 180 },
+                position = "absolute",
+                bottom = 12,
+                left = 12,
+            },
+
             -- 弹窗（绝对定位层）
             settingsModal,
             exitModal,
