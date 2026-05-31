@@ -171,6 +171,8 @@ function M.Update(dt)
                 -- 命中熄灭灯 → 点燃并解锁 lanternDash
                 FogOfWar.IgniteLight(light.col, light.row)
                 PlayerController.player.hasLanternDash = true
+                local LM = require("gameplay.LevelManager")
+                LM.playerUnlocks.hasLanternDash = true
                 fireball = nil
                 return
             else

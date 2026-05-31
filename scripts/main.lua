@@ -20,36 +20,39 @@ local PauseMenu = require "PauseMenu"
 local LaunchGame, LaunchEditor
 
 -- ====================================================================
--- 进入游戏
+-- 进入游戏（正式 gameplay，不走编辑器 PlayMode）
 -- ====================================================================
-LaunchGame = function()
+
+---@param mode "new"|"continue"
+local function LaunchGameWithMode(mode)
     MainMenu.Cleanup()
-    require "editor"
-    local S = require "editor.State"
-    S.fromMainMenu = true
-    S.editorActive = true
+    _GAMEPLAY_DIRECT = true
+    _GAMEPLAY_MODE = mode
+    require "gameplay.init"
     ---@diagnostic disable-next-line: redundant-parameter
     Start()
 
-    -- 初始化暂停菜单（编辑器启动后）
+    -- 初始化暂停菜单（gameplay 启动后）
     PauseMenu.Init({
         onResume = nil,
         onBackToMenu = function()
             PauseMenu.Cleanup()
-            S.editorActive = false
-            S.fromMainMenu = false
+            -- gameplay 的 Stop() 会清理 NanoVG
+            if Stop then Stop() end
+            _GAMEPLAY_DIRECT = nil
+            _GAMEPLAY_MODE = nil
             MainMenu.Init({
                 onStartGame = LaunchGame,
-                onContinue = LaunchGame,
+                onContinue = function() LaunchGameWithMode("continue") end,
                 onOpenEditor = LaunchEditor, ---@diagnostic disable-line: undefined-global
             })
         end,
-        onOpenEditor = function()
-            -- 保持 S.fromMainMenu = true，PauseMenu 不清理
-            -- 这样在编辑器中按 M 键仍可回主菜单
-            PauseMenu.Close()
-        end,
+        onOpenEditor = nil,
     })
+end
+
+LaunchGame = function()
+    LaunchGameWithMode("new")
 end
 
 LaunchEditor = function()
@@ -70,7 +73,7 @@ LaunchEditor = function()
             S.fromMainMenu = false
             MainMenu.Init({
                 onStartGame = LaunchGame,
-                onContinue = LaunchGame,
+                onContinue = function() LaunchGameWithMode("continue") end,
                 onOpenEditor = LaunchEditor,
             })
         end,
@@ -93,7 +96,7 @@ function Start()
 
     MainMenu.Init({
         onStartGame = LaunchGame,
-        onContinue = LaunchGame,
+        onContinue = function() LaunchGameWithMode("continue") end,
         onOpenEditor = LaunchEditor,
     })
 

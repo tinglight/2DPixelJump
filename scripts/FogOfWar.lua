@@ -74,6 +74,19 @@ function FogOfWar.SetCurtainChecker(checker)
     curtainChecker = checker
 end
 
+-- 水方块检测回调（自发光）
+-- 签名: function(col, row) -> boolean
+-- 返回 true 表示该格子是水方块（自带1格亮度）
+local waterChecker = nil
+local WATER_SELF_LIGHT = 0.2  -- 水方块自发光亮度（相当于光源边缘1格的亮度）
+
+--- 设置水方块检测函数（用于水面自发光）
+--- 签名: function(col, row) -> boolean
+---@param checker function|nil
+function FogOfWar.SetWaterChecker(checker)
+    waterChecker = checker
+end
+
 -- ====================================================================
 -- 薄墙判定（一层厚度的墙壁/柱子）
 -- ====================================================================
@@ -492,9 +505,13 @@ end
 -- 计算某个格子的光照强度（像素圆 + 阶梯式环形羽化 + 小光源对角线柔化）
 -- ====================================================================
 local function CalcCellLightingWithNoise(cellCol, cellRow)
-    if #lightSources == 0 then return 0 end
-
+    -- 水方块自发光：自身即带有基础亮度
     local maxLight = 0
+    if waterChecker and waterChecker(cellCol, cellRow) then
+        maxLight = WATER_SELF_LIGHT
+    end
+
+    if #lightSources == 0 then return maxLight end
     for _, light in ipairs(lightSources) do
         if light.diameter <= 0 then goto continueLight end
 

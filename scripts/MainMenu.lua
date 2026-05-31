@@ -96,17 +96,39 @@ local noLevelModal = nil
 
 local function CheckWorldMapAndStart(callback)
     local CS = require "CloudStorage"
-    CS.InitWorldMap(function(ok)
-        local worldMap = CS.LoadWorldMap()
-        local hasNodes = worldMap and worldMap.nodes and #worldMap.nodes > 0
-        if hasNodes then
-            if callback then callback() end
-        else
-            -- 没有关卡，弹窗提示
-            if noLevelModal then
-                noLevelModal:Open()
-            end
+    -- 必须先 Init（加载关卡缓存），再 InitWorldMap，再验证
+    CS.Init(function(initOk)
+        if not initOk then
+            print("[MainMenu] CloudStorage.Init failed")
+            if noLevelModal then noLevelModal:Open() end
+            return
         end
+        CS.InitWorldMap(function(wmOk)
+            if not wmOk then
+                print("[MainMenu] InitWorldMap failed")
+                if noLevelModal then noLevelModal:Open() end
+                return
+            end
+            local worldMap = CS.LoadWorldMap()
+            -- 检查世界地图是否有节点
+            if not worldMap or not worldMap.nodes or #worldMap.nodes == 0 then
+                if noLevelModal then noLevelModal:Open() end
+                return
+            end
+            -- 检查第一个节点是否有关卡文件
+            local firstNode = worldMap.nodes[1]
+            if not firstNode or not firstNode.file or firstNode.file == "" then
+                if noLevelModal then noLevelModal:Open() end
+                return
+            end
+            -- 检查关卡文件是否实际存在于缓存中
+            if not CS.Exists(firstNode.file) then
+                if noLevelModal then noLevelModal:Open() end
+                return
+            end
+            -- 验证通过
+            if callback then callback() end
+        end)
     end)
 end
 
@@ -365,7 +387,7 @@ local function BuildUI()
         showCloseButton = false,
         children = {
             UI.Label {
-                text = "没有关卡可运行，请先在编辑器中创建关卡。",
+                text = "请先在关卡编辑器创建并保存世界",
                 fontSize = 14,
                 textColor = { 200, 190, 170, 255 },
                 textAlign = "center",
@@ -478,6 +500,14 @@ local function BuildUI()
                 alignItems = "center",
                 paddingBottom = "18%",
                 children = {
+                    -- 游戏标题
+                    UI.Label {
+                        text = "Fire Souls",
+                        fontSize = 42,
+                        textColor = { 255, 200, 60, 255 },
+                        marginBottom = 24,
+                        textAlign = "center",
+                    },
                     -- 按钮容器（居中偏下，无背景）
                     UI.Panel {
                         alignItems = "center",
@@ -489,6 +519,16 @@ local function BuildUI()
 
             -- 编辑器按钮（绝对定位右上角）
             editorBtn,
+
+            -- 制作归属（绝对定位左下角）
+            UI.Label {
+                text = "制作归属@Seija@Xp",
+                fontSize = 12,
+                textColor = { 160, 150, 130, 180 },
+                position = "absolute",
+                bottom = 12,
+                left = 12,
+            },
 
             -- 弹窗（绝对定位层）
             settingsModal,

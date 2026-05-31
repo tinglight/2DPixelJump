@@ -43,6 +43,11 @@ local function DeepCopyLightSources(sources)
     return copy
 end
 
+--- 重新进入编辑器时清理 PlayMode 模块级状态
+function M.ResetModuleState()
+    savedEditorLightSources = nil
+end
+
 ---@param deps table { FogOfWar, CloudStorage, WorldMapEditor, LevelGenerator, cjson }
 function M.Inject(deps)
     FogOfWar = deps.FogOfWar
@@ -84,6 +89,17 @@ function M.Inject(deps)
     end
     FogOfWar.SetCurtainChecker(isCurtainAt)
     SolidRenderer.SetCurtainChecker(isCurtainAt)
+
+    -- 设置水方块检测器用于水面自发光
+    local function isWaterAt(col, row)
+        if col < 1 or col > S.MAP_COLS then return false end
+        if row < 1 or row > S.MAP_ROWS then return false end
+        local val = S.levelData[row] and S.levelData[row][col]
+        if not val or val == 0 then return false end
+        local base = TileUtils.GetTileType(val)
+        return base == C.TILE.WATER or base == C.TILE.POISON_WATER or base == C.TILE.BLACK_WATER
+    end
+    FogOfWar.SetWaterChecker(isWaterAt)
 end
 
 ------------------------------------------------------------
@@ -748,6 +764,10 @@ function M.Update(dt)
                 if not ok2 or not data then return false end
                 M.ApplyWorldLevelData(data)
                 S.worldPlayCurrentFile = targetFile
+                -- 重建跨关卡状态（与普通切关一致）
+                CrossLevel.ApplyCrossSwitches(targetFile)
+                savedEditorLightSources = DeepCopyLightSources(FogOfWar.GetLightSources())
+                RestoreCampfireLight()
                 return true
             end,
             getMapSize = function() return S.MAP_COLS, S.MAP_ROWS end,
@@ -1713,6 +1733,11 @@ function M.ApplyWorldLevelData(data)
     FogOfWar.DeserializeZones(data.lightZones)
     S.lightZones = FogOfWar.GetLightZones()
     FogOfWar.ResetZoneState()
+
+    -- 重建运行时缓存：管道系统需要扫描新 levelData
+    PipeSystem.Init()
+    -- 清空飞行道具（属于旧关卡，不应残留）
+    CrossLevel.Clear()
 end
 
 function M.ApplyBound(bound)
@@ -1981,9 +2006,8 @@ function M.DetectBoundaryDirection(gx, gy)
     local atTop = gy <= S.camBound.top or (S.play.isJumping and IsAgainstBoundaryWall(gx, gy, "up", ps))
     if atTop then return "up", "down" end
 
-    -- 下边界：玩家下端已到达 camBound.bottom
+    -- 下边界：仅在玩家真正掉出底部时触发（不使用 IsAgainstBoundaryWall，避免封闭地板误判）
     local atBottom = (gy + ps - 1 >= S.camBound.bottom) or gy >= S.MAP_ROWS
-        or IsAgainstBoundaryWall(gx, gy, "down", ps)
     if atBottom then return "down", "up" end
 
     return nil, nil

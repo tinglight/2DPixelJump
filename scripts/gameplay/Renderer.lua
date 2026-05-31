@@ -1660,11 +1660,9 @@ function M.DrawHUD()
     nvgFontSize(vg, 11)
     nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
 
-    local diffNames = { easy = "Easy", normal = "Normal", hard = "Hard" }
-    local diffColors = { easy = {100,220,100}, normal = {220,200,60}, hard = {255,80,60} }
-    local dc = diffColors[LevelManager.currentDifficulty] or {200,200,200}
-    nvgFillColor(vg, nvgRGBA(dc[1], dc[2], dc[3], 255))
-    nvgText(vg, 6, 11, "Lv" .. LevelManager.levelNumber .. " " .. (diffNames[LevelManager.currentDifficulty] or "?"))
+    nvgFillColor(vg, nvgRGBA(200, 220, 255, 255))
+    local levelLabel = LevelManager.currentTemplateName or LevelManager.currentLevelFile or ""
+    nvgText(vg, 6, 11, levelLabel)
 
     local flamePercent = math.floor(PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels) * 100)
     local flameR = 255

@@ -31,7 +31,6 @@ Physics.Inject({
 })
 
 LevelManager.Inject({
-    LevelGenerator = LevelGenerator,
     CloudStorage = CloudStorage,
     PixelSystem = PixelSystem,
     Physics = Physics,
@@ -85,6 +84,13 @@ FogOfWar.SetCurtainChecker(function(col, row)
     return CurtainRenderer.IsCurtainAt(col, row, LevelManager.levelData,
         LevelGenerator.TILE, Physics.GetTileType)
 end)
+FogOfWar.SetWaterChecker(function(col, row)
+    if row < 1 or row > Config.MAP_ROWS or col < 1 or col > Config.MAP_COLS then return false end
+    local val = LevelManager.levelData[row] and LevelManager.levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = Physics.GetTileType(val)
+    return base == LevelGenerator.TILE.WATER or base == LevelGenerator.TILE.POISON_WATER or base == LevelGenerator.TILE.BLACK_WATER
+end)
 
 -- ====================================================================
 -- 游戏运行时状态
@@ -108,6 +114,9 @@ local prevRight = false
 -- 网格显示（默认隐藏，Shift 切换）
 local gridVisible = false
 
+-- 关卡加载完成标志（异步加载完成前阻止游戏逻辑和渲染）
+local levelReady = false
+
 -- 虚拟控件
 local vc_joystick = nil
 local vc_jumpBtn = nil
@@ -121,7 +130,9 @@ local function RecalcLayout()
     logicalW, logicalH = physW / dpr, physH / dpr
     local zoom = Config.PLAYER_CONFIG.cameraZoom or 1.0
     local effectiveW = Config.DESIGN_W * zoom
-    local effectiveH = Config.DESIGN_H * zoom
+    -- 使用当前关卡实际高度（像素）作为设计高度，确保整个关卡可见
+    local mapPixelH = Config.MAP_ROWS * Config.GRID
+    local effectiveH = math.max(Config.DESIGN_H * zoom, mapPixelH)
     scale = math.min(logicalW / effectiveW, logicalH / effectiveH)
     screenDesignW = logicalW / scale
     screenDesignH = logicalH / scale
@@ -188,12 +199,12 @@ local function ResetGame()
         LevelManager.checkpointRow = cpRow
         LevelManager.checkpointFile = cpFile
     else
-        -- 没有存档点，正常重置
+        -- 没有存档点，重新加载当前关卡文件
         LevelManager.ResetCollectibles()
         if LevelManager.currentLevelFile then
             LevelManager.LoadLevelFromFile(LevelManager.currentLevelFile, player)
-        else
-            LevelManager.InitLevel(player)
+        elseif LevelManager.worldMapData and LevelManager.worldMapData.nodes[1] then
+            LevelManager.LoadLevelFromFile(LevelManager.worldMapData.nodes[1].file, player)
         end
     end
 
@@ -203,23 +214,61 @@ local function ResetGame()
     FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
 end
 
---- 进入下一关
-local function NextLevel()
-    LevelManager.levelNumber = LevelManager.levelNumber + 1
-    if LevelManager.levelNumber <= 3 then
-        LevelManager.currentDifficulty = "easy"
-    elseif LevelManager.levelNumber <= 6 then
-        LevelManager.currentDifficulty = "normal"
-    else
-        LevelManager.currentDifficulty = "hard"
-    end
-    ResetGame()
-end
 
---- 切换难度并重新生成
-local function SetDifficulty(diff)
-    LevelManager.currentDifficulty = diff
-    ResetGame()
+
+-- ====================================================================
+-- 关卡加载完成后的统一初始化
+-- ====================================================================
+
+--- 加载关卡文件并初始化所有运行时系统（PixelSystem、FogOfWar、玩家位置等）
+---@param filename string 关卡文件名
+---@param player table 玩家状态引用
+local function M_LoadAndInitLevel(filename, player)
+    -- 重置玩家运动状态
+    PlayerController.ResetPlayer()
+
+    local ok = LevelManager.LoadLevelFromFile(filename, player)
+    if not ok then
+        print("[Gameplay] Failed to load level: " .. tostring(filename))
+        -- 回退到第一个节点
+        if LevelManager.worldMapData and LevelManager.worldMapData.nodes[1] then
+            local fallback = LevelManager.worldMapData.nodes[1].file
+            if fallback ~= filename then
+                LevelManager.LoadLevelFromFile(fallback, player)
+            end
+        end
+    end
+
+    -- 如果是继续游戏且有存档点，将玩家放在篝火位置
+    if LevelManager.checkpointFile == filename and LevelManager.checkpointCol and LevelManager.checkpointRow then
+        local playerH = math.ceil(Config.PLAYER_CONFIG.pixelGridSize * Config.PLAYER_CONFIG.pixelSize / Config.GRID)
+        player.gridX = LevelManager.checkpointCol
+        player.gridY = LevelManager.checkpointRow - (playerH - 1)
+    end
+
+    -- 初始化运行时系统
+    PixelSystem.Init()
+    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
+    CurtainRenderer.ClearSway()
+    FlameDashChain.Reset()
+    Fireball.Reset()
+    player.fallTickCurrent = Config.PLAYER_CONFIG.fallTickBase
+
+    -- 恢复永久能力到玩家状态
+    if LevelManager.playerUnlocks.hasFireball then
+        player.hasFireball = true
+    end
+
+    -- 重置相机和游戏状态
+    cameraX = 0
+    gameState = Config.STATE_PLAYING
+    gameTime = 0
+    LevelManager.gameTime = 0
+
+    -- 标记关卡就绪，允许渲染和游戏逻辑
+    levelReady = true
+
+    print("[Gameplay] Level loaded and initialized: " .. tostring(filename))
 end
 
 -- ====================================================================
@@ -235,6 +284,9 @@ function Start()
 
     print("=== Pixel Flame Platformer v3 ===")
 
+    -- 重置关卡就绪标志（支持从菜单多次进入游戏）
+    levelReady = false
+
     RecalcLayout()
 
     vg = nvgCreate(1)
@@ -243,43 +295,127 @@ function Start()
         return
     end
 
-    if nvgCreateFont(vg, "sans", "Fonts/MiSans-Regular.ttf") == -1 then
-        print("ERROR: font load failed")
-        return
+    -- 尝试加载字体，优先 zpix，fallback 到 MiSans
+    local fontLoaded = nvgCreateFont(vg, "sans", "Fonts/zpix.ttf")
+    if fontLoaded == -1 then
+        fontLoaded = nvgCreateFont(vg, "sans", "Fonts/MiSans-Regular.ttf")
+    end
+    if fontLoaded == -1 then
+        print("WARNING: font load failed, continuing without custom font")
+        -- 不 return，继续运行（NanoVG 仍可绘制图形，只是文字可能不显示）
     end
 
     -- 加载全局玩家参数
     LevelManager.LoadGlobalPlayerParams()
 
-    -- 初始化关卡和像素
+    -- 进入 loading 状态，等待关卡数据加载完成
+    gameState = Config.STATE_PLAYING  -- 暂时设为 playing，渲染黑屏直到关卡加载完成
     local player = PlayerController.player
-    LevelManager.InitLevel(player)
-    PixelSystem.Init()
-    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
-    player.fallTickCurrent = Config.PLAYER_CONFIG.fallTickBase
 
-    -- 加载世界地图连通数据（异步）
-    CloudStorage.Init(function(ok)
-        if ok then
-            CloudStorage.InitWorldMap(function(wmOk)
-                if wmOk then
-                    LevelManager.worldMapData = CloudStorage.LoadWorldMap()
-                    if LevelManager.worldMapData and LevelManager.worldMapData.nodes and #LevelManager.worldMapData.nodes > 0 then
-                        LevelManager.worldMapLoaded = true
-                        local firstNode = LevelManager.worldMapData.nodes[1]
-                        if firstNode and firstNode.file then
-                            LevelManager.LoadLevelFromFile(firstNode.file, player)
-                            PixelSystem.Init()
-                            FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
+    -- 初始化空地图和像素系统（防止异步加载期间渲染 nil 访问）
+    for row = 1, Config.MAP_ROWS do
+        LevelManager.levelData[row] = LevelManager.levelData[row] or {}
+        for col = 1, Config.MAP_COLS do
+            LevelManager.levelData[row][col] = LevelManager.levelData[row][col] or 0
+        end
+    end
+    Physics.SetLevelData(LevelManager.levelData)
+    Physics.SetSwitchState(LevelManager.switchState)
+    Physics.SetHiddenWallRevealed(LevelManager.hiddenWallRevealed)
+    PixelSystem.Init()
+
+    -- 优先从本地 Git 打包的 data/world_map.json 读取世界地图
+    local worldMapJson = nil
+    if fileSystem:FileExists("data/world_map.json") then
+        local wmFile = File("data/world_map.json", FILE_READ)
+        if wmFile and wmFile:IsOpen() then
+            worldMapJson = wmFile:ReadString()
+            wmFile:Close()
+        end
+    end
+    if worldMapJson and worldMapJson ~= "" then
+        local wmOk, wmData = pcall(cjson.decode, worldMapJson)
+        if wmOk and wmData then
+            LevelManager.worldMapData = wmData
+        end
+    end
+    -- fallback: 从 CloudStorage 缓存读取
+    if not LevelManager.worldMapData then
+        LevelManager.worldMapData = CloudStorage.LoadWorldMap()
+    end
+    if not LevelManager.worldMapData or not LevelManager.worldMapData.nodes or #LevelManager.worldMapData.nodes == 0 then
+        print("[Gameplay] No world map nodes found (local + cloud both empty)")
+        return
+    end
+    LevelManager.worldMapLoaded = true
+
+    ---@diagnostic disable-next-line: undefined-global
+    local mode = _GAMEPLAY_MODE or "new"
+    print("[Gameplay] Mode: " .. mode)
+
+    if mode == "continue" then
+        -- 继续游戏：读取存档中的进度
+        clientCloud:Get("player_progress", {
+            ok = function(values)
+                local progress = values.player_progress
+                local targetFile = nil
+                if progress then
+                    -- 优先使用存档中的 checkpointFile
+                    if progress.checkpointFile and progress.checkpointFile ~= "" then
+                        targetFile = progress.checkpointFile
+                        LevelManager.checkpointFile = progress.checkpointFile
+                        LevelManager.checkpointCol = progress.checkpointCol
+                        LevelManager.checkpointRow = progress.checkpointRow
+                        -- 恢复篝火激活状态
+                        if progress.checkpointCol and progress.checkpointRow then
+                            local key = progress.checkpointRow .. "_" .. progress.checkpointCol
+                            LevelManager.checkpointActivated[key] = true
                         end
-                        print("[WorldMap] Loaded with " .. #LevelManager.worldMapData.nodes .. " levels, " .. #LevelManager.worldMapData.connections .. " connections")
-                    else
-                        print("[WorldMap] No world map data, using random levels")
+                    elseif progress.currentLevelFile and progress.currentLevelFile ~= "" then
+                        targetFile = progress.currentLevelFile
+                    end
+                    -- 恢复永久解锁能力
+                    if progress.playerUnlocks then
+                        LevelManager.playerUnlocks.hasFireball = progress.playerUnlocks.hasFireball or false
+                        LevelManager.playerUnlocks.hasLanternDash = progress.playerUnlocks.hasLanternDash or false
                     end
                 end
-            end)
-        end
-    end)
+                -- 如果没有有效存档文件，回退到第一个节点
+                local fileExists = targetFile and (fileSystem:FileExists("data/levels/" .. targetFile) or CloudStorage.Exists(targetFile))
+                if not fileExists then
+                    targetFile = LevelManager.worldMapData.nodes[1].file
+                    LevelManager.checkpointFile = nil
+                    LevelManager.checkpointCol = nil
+                    LevelManager.checkpointRow = nil
+                end
+                -- 加载关卡
+                M_LoadAndInitLevel(targetFile, player)
+            end,
+            err = function()
+                -- 读取失败，回退到第一个节点
+                print("[Gameplay] Failed to read progress, starting from first node")
+                local targetFile = LevelManager.worldMapData.nodes[1].file
+                M_LoadAndInitLevel(targetFile, player)
+            end
+        })
+    else
+        -- 新游戏：清空进度，从第一个节点开始
+        LevelManager.ResetCollectibles()
+        LevelManager.playerUnlocks.hasFireball = false
+        LevelManager.playerUnlocks.hasLanternDash = false
+        player.hasFireball = false
+
+        local firstFile = LevelManager.worldMapData.nodes[1].file
+        -- 清空云端进度（异步，不阻塞加载）
+        clientCloud:Set("player_progress", {}, {
+            ok = function() print("[Gameplay] Progress cleared for new game") end,
+            err = function() print("[Gameplay] Failed to clear progress") end
+        })
+        M_LoadAndInitLevel(firstFile, player)
+    end
+
+    print("[WorldMap] Loaded with " .. #LevelManager.worldMapData.nodes .. " levels, "
+        .. #(LevelManager.worldMapData.connections or {}) .. " connections")
 
     -- 虚拟控件
     vc_joystick = VirtualControls.CreateJoystick({ side = "left" })
@@ -310,6 +446,12 @@ end
 
 function HandleNanoVGRender(eventType, eventData)
     if not vg then return end
+    if not levelReady then
+        -- 关卡未加载完成，渲染黑屏
+        nvgBeginFrame(vg, logicalW, logicalH, dpr)
+        nvgEndFrame(vg)
+        return
+    end
 
     nvgBeginFrame(vg, logicalW, logicalH, dpr)
     nvgScale(vg, scale, scale)
@@ -349,6 +491,9 @@ end
 ---@param eventType string
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
+    if not levelReady then return end
+    local PauseMenu = require "PauseMenu"
+    if PauseMenu.IsPaused() then return end
     if gameState ~= Config.STATE_PLAYING then return end
     local dt = eventData["TimeStep"]:GetFloat()
 
@@ -554,23 +699,12 @@ function HandleKeyDown(eventType, eventData)
     if key == KEY_R then
         ResetGame()
     end
-    if key == KEY_N then
-        NextLevel()
-    end
-    if key == KEY_1 then
-        SetDifficulty("easy")
-    end
-    if key == KEY_2 then
-        SetDifficulty("normal")
-    end
-    if key == KEY_3 then
-        SetDifficulty("hard")
-    end
     if key == KEY_LSHIFT or key == KEY_RSHIFT then
         gridVisible = not gridVisible
     end
     if key == KEY_ESCAPE then
-        engine:Exit()
+        local PauseMenu = require "PauseMenu"
+        PauseMenu.Toggle()
     end
 end
 

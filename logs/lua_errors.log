@@ -1,4 +1,18 @@
-Lua Errors: 0 | Dir: /workspace/scripts | Time: 2026-05-31 03:04:02
+Lua Errors: 15 | Dir: /workspace/scripts | Time: 2026-05-31 19:37:40
 EmmyLua Types: /workspace/.emmylua
 ---
-✅ No errors
+ERROR | CrossLevel.lua:132:41 | Redefined local `dy`. [redefined-local]
+ERROR | CrossLevel.lua:133:45 | Redefined local `dx`. [redefined-local]
+ERROR | Dialogs.lua:319:15 | Redefined local `Undo`. [redefined-local]
+ERROR | Dialogs.lua:1502:15 | Redefined local `typeRows`. [redefined-local]
+ERROR | Dialogs.lua:1503:15 | Redefined local `fieldStartY`. [redefined-local]
+ERROR | Dialogs.lua:1504:15 | Redefined local `inputW`. [redefined-local]
+ERROR | Dialogs.lua:1505:15 | Redefined local `inputH`. [redefined-local]
+ERROR | Dialogs.lua:1506:15 | Redefined local `gap`. [redefined-local]
+ERROR | Dialogs.lua:1507:15 | Redefined local `inputX`. [redefined-local]
+ERROR | Dialogs.lua:1508:15 | Redefined local `fieldY1`. [redefined-local]
+ERROR | Dialogs.lua:1509:15 | Redefined local `fieldY2`. [redefined-local]
+ERROR | FlameDashChain.lua:291:46 | Undefined type or alias `searchCenterRow`. [undefined-doc-name]
+ERROR | FlameDashChain.lua:323:36 | Undefined type or alias `gridY`. [undefined-doc-name]
+ERROR | FlameDashChain.lua:519:45 | Undefined type or alias `safeY`. [undefined-doc-name]
+ERROR | FlameDashChain.lua:519:52 | Undefined type or alias `found`. [undefined-doc-name]

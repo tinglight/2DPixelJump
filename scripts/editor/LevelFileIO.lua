@@ -122,24 +122,52 @@ function M._SerializeTable(tbl, indent)
 end
 
 -- ====================================================================
+-- 目录与索引文件保证存在
+-- ====================================================================
+
+--- 确保 data/levels/ 目录存在
+local function EnsureLevelsDir()
+    fileSystem:CreateDir("data")
+    fileSystem:CreateDir("data/levels")
+end
+
+--- 确保 _index.lua 文件存在（不存在则创建空索引）
+local function EnsureIndexFile()
+    EnsureLevelsDir()
+    if not fileSystem:FileExists(INDEX_FILE) then
+        local file = File:new(INDEX_FILE, FILE_WRITE)
+        if file and file:IsOpen() then
+            file:WriteString("return {}\n")
+            file:Close()
+        end
+    end
+end
+
+--- 安全读取文本文件：先检查存在性，不存在返回 nil 不触发 ERROR
+---@param path string
+---@return string|nil
+local function SafeReadText(path)
+    if not fileSystem:FileExists(path) then
+        return nil
+    end
+    local file = File:new(path, FILE_READ)
+    if not file or not file:IsOpen() then
+        return nil
+    end
+    local content = file:ReadString()
+    file:Close()
+    return content
+end
+
+-- ====================================================================
 -- 读取索引文件（获取已导出的文件列表）
 -- ====================================================================
 
 --- 读取 _index.lua 获取已导出文件名列表
 ---@return string[] 文件名列表（不含路径和扩展名）
 function M.ReadIndex()
-    -- 先检查文件是否存在，避免 resCache:GetFile 打印 ERROR 日志
-    if not fileSystem:FileExists(INDEX_FILE) then
-        return {}
-    end
-    local resCache = GetCache()
-    local file = resCache:GetFile(INDEX_FILE)
-    if not file or not file:IsOpen() then
-        return {}
-    end
-    local content = file:ReadString()
-    file:Close()
-
+    EnsureIndexFile()
+    local content = SafeReadText(INDEX_FILE)
     if not content or content == "" then
         return {}
     end
@@ -160,6 +188,7 @@ end
 --- 写入索引文件
 ---@param list string[]
 local function WriteIndex(list)
+    EnsureLevelsDir()
     local lines = { "return {" }
     for _, name in ipairs(list) do
         lines[#lines + 1] = string.format("    %q,", name)
@@ -217,6 +246,7 @@ function M.ExportLevel(fname, exportName)
     local content = header .. body
 
     -- 写入文件
+    EnsureLevelsDir()
     local filePath = LEVELS_DIR .. "/" .. safeName .. ".lua"
     local file = File:new(filePath, FILE_WRITE)
     if not file or not file:IsOpen() then
@@ -267,18 +297,19 @@ end
 -- ====================================================================
 
 --- 获取可导入的关卡列表（从索引文件读取）
+--- 自动跳过不存在的文件，并清理 stale index 条目
 ---@return table[] 每项 { name = "filename", displayName = "关卡名" }
 function M.ListImportable()
     local index = M.ReadIndex()
     local result = {}
+    local cleanIndex = {}
+    local dirty = false
 
     for _, name in ipairs(index) do
         local filePath = LEVELS_DIR .. "/" .. name .. ".lua"
-        local resCache = GetCache()
-        local file = resCache:GetFile(filePath)
-        if file and file:IsOpen() then
-            local content = file:ReadString()
-            file:Close()
+        local content = SafeReadText(filePath)
+        if content and content ~= "" then
+            cleanIndex[#cleanIndex + 1] = name
 
             -- 尝试解析获取 levelName
             local displayName = name
@@ -295,7 +326,15 @@ function M.ListImportable()
                 displayName = displayName,
                 filePath = filePath,
             }
+        else
+            -- 文件不存在或为空，标记需要清理
+            dirty = true
         end
+    end
+
+    -- 清理 stale index 条目
+    if dirty then
+        WriteIndex(cleanIndex)
     end
 
     return result
@@ -306,18 +345,10 @@ end
 ---@param callback? fun(ok: boolean, err?: string)
 function M.ImportLevel(name, callback)
     local filePath = LEVELS_DIR .. "/" .. name .. ".lua"
-    local resCache = GetCache()
-    local file = resCache:GetFile(filePath)
-    if not file or not file:IsOpen() then
-        if callback then callback(false, "文件不存在: " .. filePath) end
-        return
-    end
-
-    local content = file:ReadString()
-    file:Close()
+    local content = SafeReadText(filePath)
 
     if not content or content == "" then
-        if callback then callback(false, "文件内容为空") end
+        if callback then callback(false, "文件不存在或内容为空: " .. filePath) end
         return
     end
 

@@ -7,15 +7,13 @@ local FogOfWar = require("FogOfWar")
 local M = {}
 
 -- 外部依赖（通过 Inject 注入）
-local LevelGenerator = nil
 local CloudStorage = nil
 local PixelSystem = nil
 local Physics = nil
 
 --- 注入依赖
----@param deps table { LevelGenerator, CloudStorage, PixelSystem, Physics }
+---@param deps table { CloudStorage, PixelSystem, Physics }
 function M.Inject(deps)
-    LevelGenerator = deps.LevelGenerator
     CloudStorage = deps.CloudStorage
     PixelSystem = deps.PixelSystem
     Physics = deps.Physics
@@ -28,9 +26,7 @@ M.TILE = nil  -- 由 init 设置
 -- 关卡状态
 -- ====================================================================
 M.levelData = {}
-M.currentDifficulty = "easy"
 M.currentTemplateName = ""
-M.levelNumber = 1
 
 -- 开关/门状态
 M.switchState = {}
@@ -54,6 +50,12 @@ M.checkpointActivated = {}
 M.checkpointCol = nil
 M.checkpointRow = nil
 M.checkpointFile = nil
+
+-- 永久解锁能力（跨死亡/篝火/跨图保留，仅新游戏重置）
+M.playerUnlocks = {
+    hasFireball = false,
+    hasLanternDash = false,
+}
 
 -- ====================================================================
 -- 世界地图连通
@@ -129,39 +131,28 @@ end
 -- 关卡生成/加载
 -- ====================================================================
 
---- 使用随机关卡生成器初始化关卡
----@param player table 玩家状态引用
-function M.InitLevel(player)
-    local map, spawnCol, spawnRow, templateName, diff =
-        LevelGenerator.GenerateValid(M.currentDifficulty, 5, Config.MAP_COLS, Config.MAP_ROWS)
 
-    M.levelData = map
-    M.currentTemplateName = templateName or ""
 
-    local playerH = math.ceil(Config.PLAYER_CONFIG.pixelGridSize * Config.PLAYER_CONFIG.pixelSize / Config.GRID)
-    player.gridX = spawnCol
-    player.gridY = spawnRow - (playerH - 1)
-
-    -- 重置开关/门状态
-    M.switchState = {}
-    M.switchCollected = {}
-    M.hiddenWallRevealed = {}
-
-    -- 更新 Physics 引用
-    Physics.SetLevelData(M.levelData)
-    Physics.SetSwitchState(M.switchState)
-    Physics.SetHiddenWallRevealed(M.hiddenWallRevealed)
-
-    print(string.format("[Game] Level %d generated: difficulty=%s, template=%s",
-        M.levelNumber, M.currentDifficulty, M.currentTemplateName))
-end
-
---- 从云存档加载指定关卡文件到 levelData
+--- 从本地 Git 打包的 data/levels/ 读取关卡文件到 levelData
+--- CloudStorage 仅用于玩家进度，不再用于正式游戏关卡读取
 ---@param filename string
 ---@param player table 玩家状态引用
 ---@return boolean
 function M.LoadLevelFromFile(filename, player)
-    local json = CloudStorage.Load(filename)
+    -- 正式游戏优先从本地 data/levels/ 读取（Git 打包数据）
+    local json = nil
+    local localPath = "data/levels/" .. filename
+    if fileSystem:FileExists(localPath) then
+        local file = File(localPath, FILE_READ)
+        if file and file:IsOpen() then
+            json = file:ReadString()
+            file:Close()
+        end
+    end
+    -- fallback: 如果本地文件不存在，再尝试 CloudStorage（兼容旧数据）
+    if not json or json == "" then
+        json = CloudStorage.Load(filename)
+    end
     if not json then
         print("[WorldMap] Level not found: " .. filename)
         return false
@@ -171,8 +162,13 @@ function M.LoadLevelFromFile(filename, player)
         print("[WorldMap] Parse failed: " .. filename)
         return false
     end
+    -- 检查是否为已删除关卡
+    if data._deleted then
+        print("[WorldMap] Level is deleted: " .. filename)
+        return false
+    end
 
-    -- 使用关卡自身尺寸覆盖 Config（编辑器保存的画布大小）
+    -- 从关卡数据读取实际尺寸，更新全局配置（仅有效值才覆盖）
     if data.cols and data.cols > 0 then
         Config.MAP_COLS = data.cols
     end
@@ -180,7 +176,7 @@ function M.LoadLevelFromFile(filename, player)
         Config.MAP_ROWS = data.rows
     end
 
-    -- 清空地图（使用更新后的尺寸）
+    -- 清空地图（使用当前关卡尺寸）
     M.levelData = {}
     for row = 1, Config.MAP_ROWS do
         M.levelData[row] = {}
@@ -224,12 +220,20 @@ function M.LoadLevelFromFile(filename, player)
     M.hiddenWallRevealed = {}
     M.collectedItems = {}
 
-    -- 加载装饰物
+    -- 加载装饰物（保留完整字段以确保渲染正确）
     M.decorations = {}
     if data.decorations then
         for _, d in ipairs(data.decorations) do
             if d.col and d.row and d.typeId then
-                table.insert(M.decorations, { col = d.col, row = d.row, typeId = d.typeId })
+                table.insert(M.decorations, {
+                    col = d.col,
+                    row = d.row,
+                    typeId = d.typeId,
+                    brightness = d.brightness or 100,
+                    scale = d.scale or 100,
+                    touchTransform = d.touchTransform or false,
+                    transformTarget = d.transformTarget or 0,
+                })
             end
         end
     end
@@ -241,6 +245,7 @@ function M.LoadLevelFromFile(filename, player)
     if data.lightZones then
         FogOfWar.DeserializeZones(data.lightZones)
     end
+    FogOfWar.ResetZoneState()
 
     -- gameplay 模式：只有编辑器中标记为"无光"(extinguished)的灯才初始熄灭，
     -- 普通光源正常发光

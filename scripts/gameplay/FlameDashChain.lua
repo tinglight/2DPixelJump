@@ -45,6 +45,7 @@ M.FALL_SPEED       = 60    -- 下落速度（格/秒）
 -- 跨地图配置
 local EDGE_THRESHOLD    = 8   -- 灯距地图边缘 <= 此值视为"靠近边缘"
 local ENTRY_SEARCH_RADIUS = 12 -- 跨地图后在入口附近搜索灯的半径（格）
+local MAX_CROSS_LEVEL   = 20  -- 单次触发允许的最大连续跨图次数
 
 -- ====================================================================
 -- 运行时状态
@@ -63,6 +64,8 @@ local flyY = 0
 
 -- 跨地图状态
 local crossLevelPending = false  -- 是否正在等待跨地图加载
+local crossCount = 0             -- 本次触发已连续跨图次数
+local lastCrossDir = nil         -- 上次跨入新关卡的方向（用于连续跨图时方向优先选灯）
 
 -- 缓存的 ctx 引用（仅在一次 Update 调用内有效）
 local cachedCtx = nil
@@ -94,6 +97,11 @@ function M.GetTarget()
     return nil, nil
 end
 
+--- 获取本次触发的连续跨图次数（调试/HUD 用）
+function M.GetCrossCount()
+    return crossCount
+end
+
 -- ====================================================================
 -- 内部工具函数
 -- ====================================================================
@@ -117,6 +125,9 @@ end
 local function GetEffectiveDiameter(light)
     return FogOfWar.GetEffectiveDiameter(light)
 end
+
+-- 前向声明（FindNextLampFromLamp 在定义时需要引用）
+local FindDirectionalLitLamp
 
 --- 从指定位置搜索覆盖该位置的最近亮灯
 --- @param fromCol number 搜索起点 col
@@ -157,9 +168,74 @@ local function FindNearestLitLamp(fromCol, fromRow, searchRadius)
     return bestLamp
 end
 
-local function FindNextLampFromLamp(lamp)
+--- 从当前灯的光照范围内搜索下一盏灯
+--- @param lamp table 当前灯
+--- @param preferDir string|nil 优先方向（跨图后用于偏好跨入方向的灯）
+--- @return table|nil
+local function FindNextLampFromLamp(lamp, preferDir)
     local radius = GetEffectiveDiameter(lamp) / 2
+    if preferDir then
+        return FindDirectionalLitLamp(lamp.col, lamp.row, radius, preferDir)
+    end
     return FindNearestLitLamp(lamp.col, lamp.row, radius)
+end
+
+--- 判断灯是否在 edgeDir 方向的"前方"（即符合跃迁行进方向）
+--- @param lampCol number
+--- @param lampRow number
+--- @param refCol number 入口参考点 col
+--- @param refRow number 入口参考点 row
+--- @param edgeDir string "left"|"right"|"up"|"down"
+--- @return boolean
+local function IsInPreferredDirection(lampCol, lampRow, refCol, refRow, edgeDir)
+    if edgeDir == "down" then
+        return lampRow >= refRow
+    elseif edgeDir == "up" then
+        return lampRow <= refRow
+    elseif edgeDir == "right" then
+        return lampCol >= refCol
+    elseif edgeDir == "left" then
+        return lampCol <= refCol
+    end
+    return true
+end
+
+--- 跨地图专用灯搜索：带方向优先级
+--- 先按方向匹配分组（匹配方向的灯优先），同组内按距离排序
+--- @param fromCol number 搜索起点 col
+--- @param fromRow number 搜索起点 row
+--- @param searchRadius number 搜索范围
+--- @param edgeDir string 跨图方向
+--- @return table|nil
+FindDirectionalLitLamp = function(fromCol, fromRow, searchRadius, edgeDir)
+    local sources = FogOfWar.GetLightSources()
+    local candidates = {}
+
+    for _, light in ipairs(sources) do
+        local effDiam = GetEffectiveDiameter(light)
+        if not light.extinguished and effDiam > 1 and not light.noLantern then
+            local key = LightKey(light.col, light.row)
+            if not visited[key] then
+                local dist = GridDistance(fromCol, fromRow, light.col, light.row)
+                if dist <= searchRadius then
+                    local inDir = IsInPreferredDirection(light.col, light.row, fromCol, fromRow, edgeDir)
+                    table.insert(candidates, { lamp = light, dist = dist, inDir = inDir })
+                end
+            end
+        end
+    end
+
+    if #candidates == 0 then return nil end
+
+    -- 排序：方向匹配优先，其次按距离
+    table.sort(candidates, function(a, b)
+        if a.inDir ~= b.inDir then
+            return a.inDir  -- true 排前面
+        end
+        return a.dist < b.dist
+    end)
+
+    return candidates[1].lamp
 end
 
 -- ====================================================================
@@ -206,46 +282,62 @@ local function GetNearEdgeDirection(lamp, mapCols, mapRows)
     return dir
 end
 
---- 根据进入方向计算入口搜索中心点
+--- 根据进入方向和 exitLamp 坐标计算入口搜索中心点
 --- @param fromDir string 从哪个方向进入（"left" 表示从左边界进入，即 direction 连接方向是 left）
---- @param mapCols number
---- @param mapRows number
+--- @param mapCols number 新地图列数
+--- @param mapRows number 新地图行数
+--- @param exitRow number|nil exitLamp 在旧地图的 row（left/right 跨图时保留）
+--- @param exitCol number|nil exitLamp 在旧地图的 col（up/down 跨图时保留）
 --- @return number, number  searchCenterCol, searchCenterRow
-local function GetEntrySearchCenter(fromDir, mapCols, mapRows)
+local function GetEntrySearchCenter(fromDir, mapCols, mapRows, exitRow, exitCol)
     -- fromDir 是 FindConnectedLevel 的方向参数
     -- "left" 意味着玩家向左离开当前关卡 → 从右侧进入新关卡
     -- "right" 意味着玩家向右离开当前关卡 → 从左侧进入新关卡
     if fromDir == "left" then
-        -- 从右边界进入新关卡
-        return mapCols - 2, math.floor(mapRows / 2)
+        -- 从右边界进入新关卡，保留 exitLamp.row，clamp 到新地图范围
+        local row = math.max(2, math.min(mapRows - 1, exitRow or math.floor(mapRows / 2)))
+        return mapCols - 1, row
     elseif fromDir == "right" then
-        -- 从左边界进入新关卡
-        return 2, math.floor(mapRows / 2)
+        -- 从左边界进入新关卡，保留 exitLamp.row，clamp 到新地图范围
+        local row = math.max(2, math.min(mapRows - 1, exitRow or math.floor(mapRows / 2)))
+        return 2, row
     elseif fromDir == "up" then
-        -- 从下边界进入新关卡
-        return math.floor(mapCols / 2), mapRows - 2
+        -- 从下边界进入新关卡，保留 exitLamp.col，clamp 到新地图范围
+        local col = math.max(2, math.min(mapCols - 1, exitCol or math.floor(mapCols / 2)))
+        return col, mapRows - 1
     elseif fromDir == "down" then
-        -- 从上边界进入新关卡
-        return math.floor(mapCols / 2), 2
+        -- 从上边界进入新关卡，保留 exitLamp.col，clamp 到新地图范围
+        local col = math.max(2, math.min(mapCols - 1, exitCol or math.floor(mapCols / 2)))
+        return col, 2
     end
     return math.floor(mapCols / 2), math.floor(mapRows / 2)
 end
 
---- 根据进入方向计算安全落地位置
+--- 根据进入方向和 exitLamp 坐标计算安全落地位置
 --- @param fromDir string
---- @param mapCols number
---- @param mapRows number
+--- @param mapCols number 新地图列数
+--- @param mapRows number 新地图行数
 --- @param gridSize number 玩家格子尺寸
+--- @param exitRow number|nil exitLamp 在旧地图的 row（left/right 跨图时保留）
+--- @param exitCol number|nil exitLamp 在旧地图的 col（up/down 跨图时保留）
 --- @return number, number  gridX, gridY
-local function GetEntrySafePosition(fromDir, mapCols, mapRows, gridSize)
+local function GetEntrySafePosition(fromDir, mapCols, mapRows, gridSize, exitRow, exitCol)
     if fromDir == "left" then
-        return mapCols - gridSize - 1, math.floor(mapRows / 2)
+        -- 从右边界进入，保留 exitLamp.row
+        local row = math.max(2, math.min(mapRows - gridSize - 1, exitRow or math.floor(mapRows / 2)))
+        return mapCols - gridSize - 1, row
     elseif fromDir == "right" then
-        return 2, math.floor(mapRows / 2)
+        -- 从左边界进入，保留 exitLamp.row
+        local row = math.max(2, math.min(mapRows - gridSize - 1, exitRow or math.floor(mapRows / 2)))
+        return 2, row
     elseif fromDir == "up" then
-        return math.floor(mapCols / 2), mapRows - gridSize - 1
+        -- 从下边界进入，保留 exitLamp.col
+        local col = math.max(2, math.min(mapCols - gridSize - 1, exitCol or math.floor(mapCols / 2)))
+        return col, mapRows - gridSize - 1
     elseif fromDir == "down" then
-        return math.floor(mapCols / 2), 2
+        -- 从上边界进入，保留 exitLamp.col
+        local col = math.max(2, math.min(mapCols - gridSize - 1, exitCol or math.floor(mapCols / 2)))
+        return col, 2
     end
     return math.floor(mapCols / 2), math.floor(mapRows / 2)
 end
@@ -258,15 +350,22 @@ end
 --- @param lamp table 最后一盏灯
 --- @param ctx table 上下文
 --- @return table|nil 新关卡中找到的灯（已设置为 targetLight），nil 表示跨地图失败
+--- @return string|nil 跨入方向 edgeDir（成功时返回）
 local function TryCrossLevelDash(lamp, ctx)
+    -- 连续跨图次数上限
+    if crossCount >= MAX_CROSS_LEVEL then
+        print("[FlameDash-Cross] Max cross-level count reached (" .. MAX_CROSS_LEVEL .. "), stop")
+        return nil, nil
+    end
+
     local cl = ctx.crossLevel  -- editor 模式的回调接口
 
     -- 必须有 LevelManager 或 ctx.crossLevel
-    if not cl and not LevelManager then return nil end
+    if not cl and not LevelManager then return nil, nil end
 
     local worldMapData = cl and cl.worldMapData or (LevelManager and LevelManager.worldMapData)
     local currentFile = cl and cl.currentLevelFile or (LevelManager and LevelManager.currentLevelFile)
-    if not worldMapData or not currentFile then return nil end
+    if not worldMapData or not currentFile then return nil, nil end
 
     -- 获取当前关卡地图尺寸
     local mapCols, mapRows
@@ -282,7 +381,7 @@ local function TryCrossLevelDash(lamp, ctx)
     local edgeDir = GetNearEdgeDirection(lamp, mapCols, mapRows)
     if not edgeDir then
         print("[FlameDash-Cross] Last lamp not near edge, no cross-level")
-        return nil
+        return nil, nil
     end
 
     -- 2. 查找该方向相邻关卡
@@ -294,14 +393,14 @@ local function TryCrossLevelDash(lamp, ctx)
     end
     if not targetFile then
         print("[FlameDash-Cross] No connected level in direction: " .. edgeDir)
-        return nil
+        return nil, nil
     end
 
     -- 3. 检查该关卡是否已在 crossVisited 中被标记（防止 A→B→A 循环）
     for k, _ in pairs(crossVisited) do
         if k:sub(1, #targetFile + 1) == targetFile .. ":" then
             print("[FlameDash-Cross] Target level already visited, abort: " .. targetFile)
-            return nil
+            return nil, nil
         end
     end
 
@@ -312,12 +411,17 @@ local function TryCrossLevelDash(lamp, ctx)
 
     -- 5. 获取玩家对象
     local player = cl and cl.player or (PlayerController and PlayerController.player)
-    if not player then return nil end
+    if not player then return nil, nil end
 
     -- 保存跨关卡状态
     local savedFallGridCount = player.fallGridCount or 0
 
-    print("[FlameDash-Cross] Loading adjacent level: " .. targetFile .. " (dir=" .. edgeDir .. ")")
+    -- 记录 exitLamp 的相对坐标（用于在新地图中定位入口点）
+    local exitRow = lamp.row
+    local exitCol = lamp.col
+
+    print("[FlameDash-Cross] Loading adjacent level: " .. targetFile .. " (dir=" .. edgeDir
+        .. ") exitLamp=(" .. exitCol .. "," .. exitRow .. ")")
 
     -- 6. 执行关卡加载
     local loadSuccess
@@ -328,17 +432,21 @@ local function TryCrossLevelDash(lamp, ctx)
     end
     if not loadSuccess then
         print("[FlameDash-Cross] Failed to load level: " .. targetFile)
-        return nil
+        return nil, nil
     end
 
-    -- 加载后重新获取地图尺寸（新关卡可能尺寸不同）
+    -- 加载后立刻刷新地图尺寸（新关卡可能尺寸不同，后续不再使用旧值）
     if cl and cl.getMapSize then
         mapCols, mapRows = cl.getMapSize()
+    else
+        local Config = require("gameplay.Config")
+        mapCols = Config.MAP_COLS
+        mapRows = Config.MAP_ROWS
     end
 
-    -- 7. 设置玩家入口位置
+    -- 7. 设置玩家入口位置（使用 exitLamp 坐标推算入口点）
     local gridSize = ctx.gridSize or 2
-    local entryX, entryY = GetEntrySafePosition(edgeDir, mapCols, mapRows, gridSize)
+    local entryX, entryY = GetEntrySafePosition(edgeDir, mapCols, mapRows, gridSize, exitRow, exitCol)
     player.gridX = entryX
     player.gridY = entryY
     flyX = entryX
@@ -361,29 +469,42 @@ local function TryCrossLevelDash(lamp, ctx)
     -- 初始化 zone visibility（否则 zone 内的灯会被隐藏）
     FogOfWar.InitZoneVisibility(entryX + 1, entryY + 1)
 
-    -- 8. 在入口附近搜索已点亮灯
+    -- 8. 在入口附近搜索已点亮灯（带方向优先级）
     -- 重置当前关卡的 visited（新关卡是新的灯集合）
     visited = {}
 
-    local searchCol, searchRow = GetEntrySearchCenter(edgeDir, mapCols, mapRows)
-    local entryLamp = FindNearestLitLamp(searchCol, searchRow, ENTRY_SEARCH_RADIUS)
+    -- 使用 exitLamp 坐标计算入口搜索中心（而非地图中心）
+    local searchCol, searchRow = GetEntrySearchCenter(edgeDir, mapCols, mapRows, exitRow, exitCol)
+    local entryLamp = FindDirectionalLitLamp(searchCol, searchRow, ENTRY_SEARCH_RADIUS, edgeDir)
 
     if entryLamp then
         -- 检查 crossVisited 防循环
         local entryKey = CrossLevelKey(targetFile, entryLamp.col, entryLamp.row)
         if crossVisited[entryKey] then
             print("[FlameDash-Cross] Entry lamp already cross-visited, land at entry")
-            return nil
+            -- loadLevel 已成功，不能回旧地图。落在入口安全点，进入 falling
+            crossCount = crossCount + 1
+            lastCrossDir = edgeDir
+            if ctx.onCrossLevel then ctx.onCrossLevel() end
+            return nil, edgeDir
         end
 
-        -- 找到灯！继续 dash chain
+        -- 找到灯！继续 dash chain，增加跨图计数
+        crossCount = crossCount + 1
+        lastCrossDir = edgeDir
         visited[LightKey(entryLamp.col, entryLamp.row)] = true
         crossVisited[entryKey] = true
-        print("[FlameDash-Cross] Found entry lamp at (" .. entryLamp.col .. "," .. entryLamp.row .. "), continue chain!")
-        return entryLamp
+        print("[FlameDash-Cross] Found entry lamp at (" .. entryLamp.col .. "," .. entryLamp.row
+            .. "), continue chain! (crossCount=" .. crossCount .. "/" .. MAX_CROSS_LEVEL .. ")")
+        return entryLamp, edgeDir
     else
-        print("[FlameDash-Cross] No lit lamp near entry, landing at safe point")
-        return nil
+        -- loadLevel 已成功，地图已切换，不能回旧 ctx。
+        -- 把玩家放在新地图入口安全点，进入 falling 状态。
+        print("[FlameDash-Cross] No lit lamp near entry, landing at safe point in new level")
+        crossCount = crossCount + 1
+        lastCrossDir = edgeDir
+        if ctx.onCrossLevel then ctx.onCrossLevel() end
+        return nil, edgeDir
     end
 end
 
@@ -482,9 +603,11 @@ function M.TryTrigger(ctx)
     local playerCenterCol = gridX + (s - 1) / 2
     local playerCenterRow = gridY + (s - 1) / 2
 
-    -- 清空访问记录
+    -- 清空访问记录和跨图计数
     visited = {}
     crossVisited = {}
+    crossCount = 0
+    lastCrossDir = nil
 
     -- 如果有 forceLamp（火球命中的灯），直接用它作为第一个目标
     -- 否则搜索覆盖玩家位置的最近亮灯
@@ -557,7 +680,8 @@ function M.Update(dt, ctx)
     elseif state == STATE_ARRIVING then
         arriveTimer = arriveTimer - dt
         if arriveTimer <= 0 then
-            local nextLamp = FindNextLampFromLamp(targetLight)
+            -- 如果刚跨图进来，用跨入方向优先选灯；找到后清除方向偏好
+            local nextLamp = FindNextLampFromLamp(targetLight, lastCrossDir)
             if nextLamp then
                 -- 为下一盏灯计算安全锚点
                 local safeX, safeY, found = FindSafeDashAnchor(nextLamp, ctx)
@@ -569,6 +693,7 @@ function M.Update(dt, ctx)
                     flyX = ctx.gridX
                     flyY = ctx.gridY
                     state = STATE_FLYING
+                    lastCrossDir = nil  -- 成功找到同关卡内下一灯后清除方向偏好
                     print("[FlameDash] Chain to lamp at (" .. nextLamp.col .. "," .. nextLamp.row .. ") anchor=(" .. safeX .. "," .. safeY .. ")")
                 else
                     -- 下一盏灯找不到安全锚点，当作链式结束
@@ -579,7 +704,7 @@ function M.Update(dt, ctx)
 
             if not nextLamp then
                 -- 尝试跨地图跃迁
-                local crossLamp = TryCrossLevelDash(targetLight, ctx)
+                local crossLamp, crossDir = TryCrossLevelDash(targetLight, ctx)
                 if crossLamp then
                     -- 跨地图成功，计算新关卡中灯的安全锚点
                     local safeX, safeY, found = FindSafeDashAnchor(crossLamp, ctx)
@@ -596,10 +721,23 @@ function M.Update(dt, ctx)
                         if ctx.onCrossLevel then ctx.onCrossLevel() end
                         return "cross_level"
                     end
-                    -- 锚点计算失败，当跨地图失败处理，走下面的落地逻辑
+                    -- 锚点计算失败，但地图已切换（crossDir ~= nil），进入 falling
+                    -- 落在 TryCrossLevelDash 设置的入口安全点
+                    state = STATE_FALLING
+                    -- flyX/flyY 已在 TryCrossLevelDash 中设置为入口安全点
+                    print("[FlameDash-Cross] Anchor failed after cross-level, falling in new map")
+                    return "cross_level"
+                elseif crossDir then
+                    -- crossLamp 为 nil 但 crossDir 不为 nil：
+                    -- 地图已成功切换，但没找到 entryLamp。
+                    -- 玩家已在 TryCrossLevelDash 中被放到入口安全点，直接进入 falling。
+                    state = STATE_FALLING
+                    -- flyX/flyY 已在 TryCrossLevelDash 中设置
+                    print("[FlameDash-Cross] Cross-level succeeded but no lamp, falling at entry")
+                    return "cross_level"
                 end
 
-                -- 链式结束 → 进入落地阶段
+                -- 链式结束（未跨图或跨图彻底失败） → 进入落地阶段
                 -- 二次校验当前位置
                 local curX, curY = ctx.gridX, ctx.gridY
                 if ctx.isBodyBlocked and ctx.isBodyBlocked(curX, curY) then
@@ -650,6 +788,7 @@ function M.Update(dt, ctx)
         local newY = math.floor(flyY + 0.5)
         local curX = ctx.gridX
         local startY = ctx.gridY
+        local blockedThisFrame = false  -- 标记是否在本帧已修正位置
 
         -- 逐格检测从当前位置到目标位置
         for testY = startY, newY do
@@ -690,13 +829,14 @@ function M.Update(dt, ctx)
                 local landY = testY - 1
                 ctx.setPos(curX, landY)
                 flyY = landY
+                blockedThisFrame = true
                 -- 不算正式落地，继续下一帧尝试
                 break
             end
         end
 
-        -- 未找到地面，正常更新位置
-        if state == STATE_FALLING then
+        -- 未找到地面且未被阻挡修正，正常更新位置
+        if state == STATE_FALLING and not blockedThisFrame then
             ctx.setPos(curX, newY)
         end
     end
@@ -710,6 +850,8 @@ function M.Reset()
     visited = {}
     crossVisited = {}
     crossLevelPending = false
+    crossCount = 0
+    lastCrossDir = nil
     targetLight = nil
     targetAnchorX = 0
     targetAnchorY = 0

@@ -93,14 +93,14 @@ function DoExport()
             elseif S.currentLevelName ~= "" and Undo.dirty then
                 -- 有修改未保存的已有关卡
                 Persistence.SaveLevel()
-                Undo.dirty = false
                 print("[Export] 自动保存当前关卡: " .. S.currentLevelName)
             end
         end
 
-        -- 确保目标目录存在（必须先创建目录，否则 File WRITE 会失败）
-        fileSystem:CreateDir("data")
-        fileSystem:CreateDir("data/levels")
+        -- 确保目标目录存在（写入 scripts/data/ 以便 git 跟踪）
+        fileSystem:CreateDir("scripts")
+        fileSystem:CreateDir("scripts/data")
+        fileSystem:CreateDir("scripts/data/levels")
 
         -- 调试：输出缓存状态
         print("[Export] CloudStorage.IsReady() = " .. tostring(CloudStorage.IsReady()))
@@ -124,42 +124,42 @@ function DoExport()
             return
         end
 
-        -- 写入 data/index.json
-        local indexFile = File("data/index.json", FILE_WRITE)
+        -- 写入 scripts/data/index.json（git 跟踪）
+        local indexFile = File("scripts/data/index.json", FILE_WRITE)
         if indexFile and indexFile:IsOpen() then
             indexFile:WriteString(cjson.encode({ nextIndex = nextIndex }))
             indexFile:Close()
-            print("[Export] 写入 data/index.json")
+            print("[Export] 写入 scripts/data/index.json")
         else
-            print("[Export] 无法写入 data/index.json")
+            print("[Export] 无法写入 scripts/data/index.json")
         end
 
-        -- 写入 data/player_params.json
+        -- 写入 scripts/data/player_params.json
         if playerParams then
-            local ppFile = File("data/player_params.json", FILE_WRITE)
+            local ppFile = File("scripts/data/player_params.json", FILE_WRITE)
             if ppFile and ppFile:IsOpen() then
                 ppFile:WriteString(cjson.encode(playerParams))
                 ppFile:Close()
-                print("[Export] 写入 data/player_params.json")
+                print("[Export] 写入 scripts/data/player_params.json")
             end
         end
 
-        -- 写入 data/world_map.json
+        -- 写入 scripts/data/world_map.json
         if worldMap then
-            local wmFile = File("data/world_map.json", FILE_WRITE)
+            local wmFile = File("scripts/data/world_map.json", FILE_WRITE)
             if wmFile and wmFile:IsOpen() then
                 wmFile:WriteString(cjson.encode(worldMap))
                 wmFile:Close()
-                print("[Export] 写入 data/world_map.json")
+                print("[Export] 写入 scripts/data/world_map.json")
             end
         end
 
-        -- 写入 data/levels/level_N.json
+        -- 写入 scripts/data/levels/level_N.json
         local levelCount = 0
         for _, fname in ipairs(levelFiles) do
             local jsonStr = CloudStorage.Load(fname)
             if jsonStr then
-                local path = "data/levels/" .. fname
+                local path = "scripts/data/levels/" .. fname
                 local lf = File(path, FILE_WRITE)
                 if lf and lf:IsOpen() then
                     lf:WriteString(jsonStr)
@@ -172,7 +172,7 @@ function DoExport()
                 print("[Export] CloudStorage.Load('" .. fname .. "') 返回 nil")
             end
         end
-        print("[Export] 写入 " .. levelCount .. " 个关卡文件到 data/levels/")
+        print("[Export] 写入 " .. levelCount .. " 个关卡文件到 scripts/data/levels/")
 
         S.SetMessage("已导出 " .. levelCount .. " 个关卡到本地文件!", 3.0)
     end)
@@ -524,7 +524,6 @@ function HandleEditorKey(key)
         Undo.Undo()
     elseif key == KEY_S and input:GetKeyDown(KEY_CTRL) then
         Persistence.SaveLevel()
-        Undo.dirty = false
     elseif key == KEY_L and input:GetKeyDown(KEY_CTRL) then
         S.sidebarOpen = not S.sidebarOpen
     elseif key == KEY_ESCAPE then
