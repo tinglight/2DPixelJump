@@ -5,9 +5,9 @@
 local C = require "editor.Constants"
 local S = require "editor.State"
 local Undo = require "editor.UndoSystem"
-local FogOfWar = require "FogOfWar"
-local CloudStorage = require "CloudStorage"
-local WorldMapEditor = require "WorldMapEditor"
+local FogOfWar = require "rendering.FogOfWar"
+local CloudStorage = require "cloud.CloudStorage"
+local WorldMapEditor = require "level.WorldMapEditor"
 
 local TILE = C.TILE
 local M = {}

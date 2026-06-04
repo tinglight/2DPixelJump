@@ -11,8 +11,8 @@
 -- ====================================================================
 
 require "LuaScripts/Utilities/Sample"
-local MainMenu = require "MainMenu"
-local PauseMenu = require "PauseMenu"
+local MainMenu = require "ui.MainMenu"
+local PauseMenu = require "ui.PauseMenu"
 
 -- ====================================================================
 -- 前向声明
@@ -91,7 +91,7 @@ function Start()
     SampleInitMouseMode(MM_FREE)
 
     -- [临时] 云端关卡数据恢复诊断
-    local Recovery = require "cloud_recovery"
+    local Recovery = require "cloud.cloud_recovery"
     Recovery.RestoreAll()
 
     MainMenu.Init({

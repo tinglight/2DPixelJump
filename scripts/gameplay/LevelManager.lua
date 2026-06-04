@@ -2,7 +2,7 @@
 -- gameplay/LevelManager.lua — 关卡加载、世界地图切换、过渡动画
 ------------------------------------------------------------
 local Config = require("gameplay.Config")
-local FogOfWar = require("FogOfWar")
+local FogOfWar = require("rendering.FogOfWar")
 
 local M = {}
 

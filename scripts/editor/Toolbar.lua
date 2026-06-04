@@ -770,7 +770,7 @@ function M.DrawTrashButton(vg)
     S.trashBtnRect = { x = btnX, y = btnY, w = TRASH_BTN_W, h = TRASH_BTN_H }
 
     -- 检查是否有回收站内容
-    local CloudStorage = require "CloudStorage"
+    local CloudStorage = require "cloud.CloudStorage"
     local trashList = CloudStorage.ListTrash()
     local hasItems = #trashList > 0
 

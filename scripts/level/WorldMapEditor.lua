@@ -11,7 +11,7 @@
 --
 -- ====================================================================
 
-local CloudStorage = require "CloudStorage"
+local CloudStorage = require "cloud.CloudStorage"
 
 local WorldMapEditor = {}
 

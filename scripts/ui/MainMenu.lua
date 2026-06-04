@@ -7,7 +7,7 @@
 ------------------------------------------------------------
 
 local UI = require("urhox-libs/UI")
-local CloudStorage = require "CloudStorage"
+local CloudStorage = require "cloud.CloudStorage"
 
 local MainMenu = {}
 
@@ -95,7 +95,7 @@ end
 local noLevelModal = nil
 
 local function CheckWorldMapAndStart(callback)
-    local CS = require "CloudStorage"
+    local CS = require "cloud.CloudStorage"
     -- 必须先 Init（加载关卡缓存），再 InitWorldMap，再验证
     CS.Init(function(initOk)
         if not initOk then

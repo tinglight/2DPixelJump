@@ -4,7 +4,7 @@
 
 local C = require "editor.Constants"
 local S = require "editor.State"
-local FogOfWar = require "FogOfWar"
+local FogOfWar = require "rendering.FogOfWar"
 
 local TILE = C.TILE
 local M = {}

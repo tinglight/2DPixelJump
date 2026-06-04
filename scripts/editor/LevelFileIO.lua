@@ -9,7 +9,7 @@
 -- 索引文件：data/levels/_index.lua  列出所有已导出文件名
 -- ====================================================================
 
-local CloudStorage = require "CloudStorage"
+local CloudStorage = require "cloud.CloudStorage"
 local S = require "editor.State"
 
 local M = {}

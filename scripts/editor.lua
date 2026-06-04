@@ -25,10 +25,10 @@
 
 require "urhox-libs.UI.VirtualControls"
 local UI = require("urhox-libs/UI")
-local CloudStorage = require "CloudStorage"
-local WorldMapEditor = require "WorldMapEditor"
-local FogOfWar = require "FogOfWar"
-local LevelGenerator = require "LevelGenerator"
+local CloudStorage = require "cloud.CloudStorage"
+local WorldMapEditor = require "level.WorldMapEditor"
+local FogOfWar = require "rendering.FogOfWar"
+local LevelGenerator = require "level.LevelGenerator"
 
 -- ====================================================================
 -- 内部模块

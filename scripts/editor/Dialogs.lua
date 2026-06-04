@@ -6,7 +6,7 @@ local C = require "editor.Constants"
 local S = require "editor.State"
 local Undo = require "editor.UndoSystem"
 local UI = require("urhox-libs/UI")
-local CloudStorage = require "CloudStorage"
+local CloudStorage = require "cloud.CloudStorage"
 
 local M = {}
 

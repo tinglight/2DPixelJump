@@ -2,8 +2,8 @@
 -- gameplay/init.lua — 游戏主入口（模块编排、事件绑定、游戏循环）
 ------------------------------------------------------------
 require "urhox-libs.UI.VirtualControls"
-local LevelGenerator = require "LevelGenerator"
-local CloudStorage = require "CloudStorage"
+local LevelGenerator = require "level.LevelGenerator"
+local CloudStorage = require "cloud.CloudStorage"
 local GAME_VERSION = require "version"
 
 -- 加载子模块
@@ -14,10 +14,10 @@ local LevelManager = require("gameplay.LevelManager")
 local PlayerController = require("gameplay.PlayerController")
 local Animation = require("gameplay.Animation")
 local Renderer = require("gameplay.Renderer")
-local CurtainRenderer = require("CurtainRenderer")
+local CurtainRenderer = require("rendering.CurtainRenderer")
 local FlameDashChain = require("gameplay.FlameDashChain")
 local Fireball = require("gameplay.Fireball")
-local FogOfWar = require("FogOfWar")
+local FogOfWar = require("rendering.FogOfWar")
 
 -- ====================================================================
 -- 注入依赖
@@ -492,7 +492,7 @@ end
 ---@param eventData UpdateEventData
 function HandleUpdate(eventType, eventData)
     if not levelReady then return end
-    local PauseMenu = require "PauseMenu"
+    local PauseMenu = require "ui.PauseMenu"
     if PauseMenu.IsPaused() then return end
     if gameState ~= Config.STATE_PLAYING then return end
     local dt = eventData["TimeStep"]:GetFloat()
@@ -703,7 +703,7 @@ function HandleKeyDown(eventType, eventData)
         gridVisible = not gridVisible
     end
     if key == KEY_ESCAPE then
-        local PauseMenu = require "PauseMenu"
+        local PauseMenu = require "ui.PauseMenu"
         PauseMenu.Toggle()
     end
 end

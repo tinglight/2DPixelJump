@@ -8,7 +8,7 @@
 -- - 命中已点亮灯 + hasLanternDash → 触发灯间位移链
 ------------------------------------------------------------
 local Config = require("gameplay.Config")
-local FogOfWar = require("FogOfWar")
+local FogOfWar = require("rendering.FogOfWar")
 
 local M = {}
 

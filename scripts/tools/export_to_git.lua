@@ -7,7 +7,7 @@
 
 require "LuaScripts/Utilities/Sample"
 
-local CloudStorage = require "CloudStorage"
+local CloudStorage = require "cloud.CloudStorage"
 
 local function DoExportToLog()
     local playerParams = CloudStorage.LoadPlayerParams()

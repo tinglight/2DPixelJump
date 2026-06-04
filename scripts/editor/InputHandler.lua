@@ -82,7 +82,7 @@ end
 --- 导出全部数据：将云端缓存直接写入本地 data/ 目录文件
 function DoExport()
     local ok, err = pcall(function()
-        local CloudStorage = require "CloudStorage"
+        local CloudStorage = require "cloud.CloudStorage"
 
         -- 导出前先保存当前正在编辑的关卡（避免未保存的关卡丢失）
         if Persistence then
@@ -396,7 +396,7 @@ function HandlePlayModeKey(key)
         print("[InputHandler] ESC in PLAY mode, fromMainMenu=" .. tostring(S.fromMainMenu))
         if S.fromMainMenu then
             -- 正式游戏：ESC 切换暂停菜单
-            local PauseMenuMod = require("PauseMenu")
+            local PauseMenuMod = require("ui.PauseMenu")
             print("[InputHandler] → calling PauseMenu.Toggle()")
             PauseMenuMod.Toggle()
         else
@@ -418,7 +418,7 @@ function HandleWorldPlayModeKey(key)
         print("[InputHandler] ESC in WORLDPLAY mode, fromMainMenu=" .. tostring(S.fromMainMenu))
         if S.fromMainMenu then
             -- 正式游戏：ESC 切换暂停菜单
-            local PauseMenuMod = require("PauseMenu")
+            local PauseMenuMod = require("ui.PauseMenu")
             print("[InputHandler] → calling PauseMenu.Toggle()")
             PauseMenuMod.Toggle()
         else
@@ -450,7 +450,7 @@ function HandleEditorKey(key)
     -- ESC 返回主菜单
     if key == KEY_ESCAPE then
         print("[InputHandler] ESC in EDIT mode → BackToMenu")
-        local PauseMenuMod = require("PauseMenu")
+        local PauseMenuMod = require("ui.PauseMenu")
         S.editorActive = false
         S.fromMainMenu = false
         PauseMenuMod.BackToMenu()

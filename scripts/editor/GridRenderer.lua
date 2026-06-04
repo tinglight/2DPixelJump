@@ -5,7 +5,7 @@
 local C = require "editor.Constants"
 local S = require "editor.State"
 local TileUtils = require "editor.TileUtils"
-local SolidRenderer = require "SolidRenderer"
+local SolidRenderer = require "rendering.SolidRenderer"
 
 local TILE = C.TILE
 

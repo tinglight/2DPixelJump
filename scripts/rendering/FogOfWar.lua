@@ -8,7 +8,7 @@
 -- - 支持配置光源直径和羽化程度
 --
 -- 用法：
---   local FogOfWar = require "FogOfWar"
+--   local FogOfWar = require "rendering.FogOfWar"
 --   FogOfWar.Init(vg)
 --   FogOfWar.SetLightSources(lightSources)
 --   FogOfWar.Draw(vg, params)

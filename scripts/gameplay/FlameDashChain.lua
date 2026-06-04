@@ -10,7 +10,7 @@
 --
 -- 通用设计：通过 context 表与宿主系统交互，兼容 gameplay/init 和 editor/PlayMode
 ------------------------------------------------------------
-local FogOfWar = require("FogOfWar")
+local FogOfWar = require("rendering.FogOfWar")
 
 local M = {}
 
