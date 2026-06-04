@@ -288,7 +288,8 @@ end
 --- @param mapRows number 新地图行数
 --- @param exitRow number|nil exitLamp 在旧地图的 row（left/right 跨图时保留）
 --- @param exitCol number|nil exitLamp 在旧地图的 col（up/down 跨图时保留）
---- @return number, number  searchCenterCol, searchCenterRow
+--- @return number searchCenterCol
+--- @return number searchCenterRow
 local function GetEntrySearchCenter(fromDir, mapCols, mapRows, exitRow, exitCol)
     -- fromDir 是 FindConnectedLevel 的方向参数
     -- "left" 意味着玩家向左离开当前关卡 → 从右侧进入新关卡
@@ -320,7 +321,8 @@ end
 --- @param gridSize number 玩家格子尺寸
 --- @param exitRow number|nil exitLamp 在旧地图的 row（left/right 跨图时保留）
 --- @param exitCol number|nil exitLamp 在旧地图的 col（up/down 跨图时保留）
---- @return number, number  gridX, gridY
+--- @return number gridX
+--- @return number gridY
 local function GetEntrySafePosition(fromDir, mapCols, mapRows, gridSize, exitRow, exitCol)
     if fromDir == "left" then
         -- 从右边界进入，保留 exitLamp.row
@@ -516,7 +518,9 @@ end
 --- 搜索策略：以灯为中心，优先正上方，然后螺旋式向外扩展
 --- @param lamp table {col, row, diameter}
 --- @param ctx table 上下文（需包含 gridSize, isBodyBlocked）
---- @return number, number, boolean  safeX, safeY, found
+--- @return number safeX
+--- @return number safeY
+--- @return boolean found
 local function FindSafeDashAnchor(lamp, ctx)
     local s = ctx.gridSize or 2
     -- 灯中心对应的玩家 grid 坐标

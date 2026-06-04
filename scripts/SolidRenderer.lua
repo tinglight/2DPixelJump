@@ -484,6 +484,19 @@ function SolidRenderer.DrawBrick(vg, px, py, gridSize, lighting, lightDirX, ligh
         return
     end
 
+    -- 低光照 LOD: 光照很弱时用单色矩形+简单渐变代替 4×4 像素循环（1 draw call vs 16-48）
+    if lighting < 0.15 then
+        local lit = lighting * 0.55 + 0.45
+        local br = math.floor(math.max(0, math.min(255, (85 + colorShift) * lit)))
+        local bg = math.floor(math.max(0, math.min(255, (63 + colorShift) * lit)))
+        local bb = math.floor(math.max(0, math.min(255, (50 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, gridSize, gridSize)
+        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
+        nvgFill(vg)
+        return
+    end
+
     for r = 1, PIXEL_CELLS do
         for c = 1, PIXEL_CELLS do
             local cx = px + (c - 1) * cellSize
@@ -637,6 +650,20 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
     lightDirY = lightDirY or 0
     col = col or 0
     row = row or 0
+
+    -- 低光照 LOD: 单色矩形代替复杂渲染
+    if lighting < 0.15 then
+        local lit = lighting * 0.55 + 0.45
+        local colorShift = (HashPos(col, row, 42) % 10) - 5
+        local pr = math.floor(math.max(0, math.min(255, (70 + colorShift) * lit)))
+        local pg = math.floor(math.max(0, math.min(255, (60 + colorShift) * lit)))
+        local pb = math.floor(math.max(0, math.min(255, (55 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, gridSize, gridSize)
+        nvgFillColor(vg, nvgRGBA(pr, pg, pb, 255))
+        nvgFill(vg)
+        return
+    end
 
     -- 判定柱子模式
     local pLeft = neighbors and neighbors.pillarLeft or false
@@ -1461,6 +1488,20 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
     col = col or 0
     row = row or 0
 
+    -- 低光照 LOD: 单色矩形代替复杂渲染
+    if lighting < 0.15 then
+        local lit = lighting * 0.55 + 0.45
+        local colorShift = (HashPos(col, row, 42) % 10) - 5
+        local sr = math.floor(math.max(0, math.min(255, (55 + colorShift) * lit)))
+        local sg = math.floor(math.max(0, math.min(255, (58 + colorShift) * lit)))
+        local sb = math.floor(math.max(0, math.min(255, (62 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        nvgRect(vg, px, py, gridSize, gridSize)
+        nvgFillColor(vg, nvgRGBA(sr, sg, sb, 255))
+        nvgFill(vg)
+        return
+    end
+
     -- 判定瓦片类型
     local tileClass = ClassifySewerTile(neighbors)
 
@@ -1663,6 +1704,36 @@ function SolidRenderer.DrawSlope(vg, slopeType, px, py, gridSize, lighting, ligh
 
     -- 基于坐标的颜色微变
     local colorShift = (HashPos(col, row, 42) % 10) - 5
+
+    -- 低光照 LOD: 单色三角形代替复杂像素渲染
+    if lighting < 0.15 then
+        local lit = lighting * 0.55 + 0.45
+        local br = math.floor(math.max(0, math.min(255, (85 + colorShift) * lit)))
+        local bg = math.floor(math.max(0, math.min(255, (63 + colorShift) * lit)))
+        local bb = math.floor(math.max(0, math.min(255, (50 + colorShift) * lit)))
+        nvgBeginPath(vg)
+        if slopeType == 19 then
+            nvgMoveTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py)
+        elseif slopeType == 20 then
+            nvgMoveTo(vg, px, py)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+            nvgLineTo(vg, px, py + gridSize)
+        elseif slopeType == 21 then
+            nvgMoveTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+        else
+            nvgMoveTo(vg, px, py)
+            nvgLineTo(vg, px, py + gridSize)
+            nvgLineTo(vg, px + gridSize, py + gridSize)
+        end
+        nvgClosePath(vg)
+        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
+        nvgFill(vg)
+        return
+    end
 
     -- 超级 LOD: gridSize 极小时直接画一个三角形
     if gridSize < 8 then

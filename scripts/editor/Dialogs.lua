@@ -316,7 +316,6 @@ function M.ConfirmDialog()
         local scale = math.max(10, math.min(1000, math.floor(sVal)))
         S.decoDialogBrightness = brightness
         S.decoDialogScale = scale
-        local Undo = require "editor.UndoSystem"
         local touchTransform = S.decoDialogTouchTransform
         local transformTarget = S.decoDialogTransformTarget
         if not touchTransform or transformTarget <= 0 then
@@ -1498,17 +1497,7 @@ function M.HandleMouseDown(mx, my)
             end
         end
 
-        -- 输入框区域
-        local typeRows = math.ceil(#types / cols)
-        local fieldStartY = startY + typeRows * itemH + 8
-        local inputW = 50
-        local inputH = 16
-        local gap = 22
-        local inputX = dlgX + dlgW * 0.5 - inputW * 0.5
-        local fieldY1 = fieldStartY
-        local fieldY2 = fieldStartY + gap
-
-        -- 点击明暗度输入框
+        -- 点击明暗度输入框（复用上方已声明的 fieldY1/fieldY2/inputW/inputH/inputX）
         if mx >= inputX and mx < inputX + inputW and my >= fieldY1 and my < fieldY1 + inputH then
             S.decoDialogFocusField = 1
             S.decoDialogBrightnessInput = ""  -- 清空以便重新输入

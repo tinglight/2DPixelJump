@@ -629,11 +629,13 @@ local function IsWaterAt(row, col)
     return base == 9 or base == 10 or base == 11  -- WATER, POISON_WATER, BLACK_WATER
 end
 
--- 帧级光照缓存（每帧仅计算一次可见区域的瓦片光照）
+-- 持久化光照缓存（只在玩家整格位移或篝火状态变化时清空）
 local frameLightCache = {}     -- [row*10000+col] = {lit, ldx, ldy}
-local frameLightCacheFrame = -1 -- 帧编号，用于检测是否需要重算
 local cachedCampfires = {}     -- 预解析的篝火位置列表 {row, col}
-local frameCounter = 0
+local lastPlayerGridCol = -1   -- 上次计算光照时的玩家整格列
+local lastPlayerGridRow = -1   -- 上次计算光照时的玩家整格行
+local lastCampfireCount = -1   -- 上次篝火数量（用于检测变化）
+local lastFlameRatioQuant = -1 -- 上次火焰比量化值（避免每帧微变触发重算）
 
 --- 计算单个瓦片的合并光照（玩家 + 篝火），结果缓存
 local function CalcTileLighting(col, row, playerGridX, playerGridY, playerLightRadius)
@@ -680,10 +682,34 @@ function M.DrawMap()
     local visW = Config.DESIGN_W * (Config.PLAYER_CONFIG.cameraZoom or 1.0)
     local endCol = math.min(Config.MAP_COLS, startCol + math.ceil(visW / GRID) + 2)
 
-    -- 每帧重置光照缓存并预解析篝火位置
-    frameCounter = frameCounter + 1
-    if frameLightCacheFrame ~= frameCounter then
-        frameLightCacheFrame = frameCounter
+    -- 预算玩家光照参数（一帧内不变）
+    local player = PlayerController.player
+    local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
+    local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
+    local playerGridX = player.gridX
+    local playerGridY = player.gridY + 1
+
+    -- 光照缓存失效检测：仅当玩家整格位移、篝火状态变化或火焰比显著变化时才清空
+    local curPlayerCol = math.floor(playerGridX + 0.5)
+    local curPlayerRow = math.floor(playerGridY + 0.5)
+    local curFlameQuant = math.floor(flameRatio * 10 + 0.5)  -- 量化到 10 级
+
+    -- 预解析已激活篝火坐标
+    local campfireCount = 0
+    for cpKey, activated in pairs(LevelManager.checkpointActivated) do
+        if activated then campfireCount = campfireCount + 1 end
+    end
+
+    local needInvalidate = (curPlayerCol ~= lastPlayerGridCol)
+        or (curPlayerRow ~= lastPlayerGridRow)
+        or (campfireCount ~= lastCampfireCount)
+        or (curFlameQuant ~= lastFlameRatioQuant)
+
+    if needInvalidate then
+        lastPlayerGridCol = curPlayerCol
+        lastPlayerGridRow = curPlayerRow
+        lastCampfireCount = campfireCount
+        lastFlameRatioQuant = curFlameQuant
         frameLightCache = {}
         -- 预解析已激活篝火坐标（避免在每个瓦片内 string:match）
         cachedCampfires = {}
@@ -698,13 +724,6 @@ function M.DrawMap()
         end
     end
 
-    -- 预算玩家光照参数（一帧内不变）
-    local player = PlayerController.player
-    local flameRatio = PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
-    local playerLightRadius = Config.PLAYER_CONFIG.defaultLightDiameter * 0.5 * flameRatio
-    local playerGridX = player.gridX
-    local playerGridY = player.gridY + 1
-
     for row = 1, Config.MAP_ROWS do
         for col = startCol, endCol do
             local val = LevelManager.levelData[row][col]
@@ -716,9 +735,12 @@ function M.DrawMap()
 
             if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER
                 or (base >= 19 and base <= 22) then  -- includes slopes
-                -- 使用帧级缓存计算光照（避免重复 Bresenham）
+                -- 使用持久缓存计算光照（避免重复 Bresenham）
                 local totalLit, totalLdx, totalLdy = CalcTileLighting(
                     col, row, playerGridX, playerGridY, playerLightRadius)
+
+                -- 性能优化：完全黑暗的瓦片跳过渲染（FogOfWar 会覆盖为黑色）
+                if totalLit < 0.01 then goto continueTile end
 
                 -- 检测四邻是否有实体方块（用于青苔边缘）
                 local neighbors = {

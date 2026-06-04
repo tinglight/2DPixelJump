@@ -32,11 +32,13 @@ local lastLightFingerprint = "" -- 用于检测光源是否变化
 local lastCacheRange = -1      -- 用于检测可见范围是否变化
 
 --- 计算光源指纹（用于快速检测变化）
+--- 性能优化：坐标取整到整格级别，避免玩家亚像素移动导致每帧重算
 local function CalcLightFingerprint()
-    -- 简化：用光源数量 + 所有光源位置/直径的校验和
     local sum = #lightSources
     for _, light in ipairs(lightSources) do
-        sum = sum + light.col * 1000 + light.row * 100 + math.floor(light.diameter * 10)
+        local intCol = math.floor(light.col + 0.5)
+        local intRow = math.floor(light.row + 0.5)
+        sum = sum + intCol * 1000 + intRow * 100 + math.floor(light.diameter * 10)
     end
     return sum
 end

@@ -129,9 +129,9 @@ function M.UpdateOneProjectile(proj, dt)
                                 forceLamp = light,
                                 isBodyBlocked = function(gx, gy)
                                     local ps = PlayMode.PlayerGridSize()
-                                    for dy = 0, ps - 1 do
-                                        for dx = 0, ps - 1 do
-                                            if PlayMode.IsSolid(gx + dx, gy + dy) then return true end
+                                    for bdy = 0, ps - 1 do
+                                        for bdx = 0, ps - 1 do
+                                            if PlayMode.IsSolid(gx + bdx, gy + bdy) then return true end
                                         end
                                     end
                                     return false
