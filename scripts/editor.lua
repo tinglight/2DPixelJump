@@ -212,6 +212,7 @@ function Start()
                     S.playerParams.maxJumpGrids = savedParams.maxJumpGrids ~= nil and savedParams.maxJumpGrids or S.playerParams.maxJumpGrids
                     S.playerParams.defaultLightDiameter = savedParams.defaultLightDiameter or S.playerParams.defaultLightDiameter
                     -- 同步更新输入框显示
+                    ---@diagnostic disable-next-line: assign-type-mismatch
                     S.playerParamInputs = {
                         tostring(S.playerParams.baseJumpGrids),
                         tostring(S.playerParams.fallJumpMultiplier),

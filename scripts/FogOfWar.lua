@@ -28,7 +28,7 @@ local lightSources = {}  -- { {col, row, diameter, feather}, ... }
 -- 缓存每个格子的光照值，只在光源变化时重算
 local lightCache = {}          -- [row][col] = lighting (0~1)
 local lightCacheDirty = true   -- 标记缓存是否需要重算
-local lastLightFingerprint = "" -- 用于检测光源是否变化
+local lastLightFingerprint = 0 -- 用于检测光源是否变化
 local lastCacheRange = -1      -- 用于检测可见范围是否变化
 
 --- 计算光源指纹（用于快速检测变化）
@@ -1507,14 +1507,28 @@ local function StartZoneTransition(oldZone, newZone)
         local lightZone = GetLightZoneIndex(light.col, light.row)
 
         if newZone == 0 then
-            -- 玩家离开所有光域 → 恢复所有被隐藏的光源
-            if light._originalDiameter then
-                zoneState.fadeInDiameters[light] = light._originalDiameter
+            -- 玩家离开光域进入无光域区域 → 旧光域灯淡出，zone 0 灯淡入
+            if lightZone == oldZone then
+                -- 旧光域的灯：淡出
+                zoneState.fadeOutDiameters[light] = light.diameter
+            elseif lightZone == 0 then
+                -- zone 0 的灯：淡入（从隐藏状态恢复）
+                if light._originalDiameter then
+                    zoneState.fadeInDiameters[light] = light._originalDiameter
+                    light.diameter = 0.1
+                end
             end
 
         elseif oldZone == 0 then
-            -- 玩家从无光域进入光域 → 只保留新区域的光，其他全灭
-            if lightZone ~= newZone then
+            -- 玩家从无光域进入光域 → 新区域灯淡入，zone 0 灯淡出
+            if lightZone == newZone then
+                -- 新光域的灯：淡入
+                if light._originalDiameter then
+                    zoneState.fadeInDiameters[light] = light._originalDiameter
+                    light.diameter = 0.1
+                end
+            elseif lightZone == 0 then
+                -- zone 0 的灯：淡出
                 if light.diameter > 0 then
                     zoneState.fadeOutDiameters[light] = light.diameter
                 end
@@ -1596,7 +1610,7 @@ function FogOfWar.UpdatePlayerZone(playerCol, playerRow, dt)
     -- 如果检测到的区域和当前激活区域不同，触发切换
     if detectedZone ~= zoneState.activeGroup then
         if detectedZone == 0 and zoneState.activeGroup > 0 then
-            -- 离开区域回到无区域状态：显示旧区域的光（恢复所有）
+            -- 离开区域回到无区域状态：关闭旧区域的光（所有光域灯全灭）
             StartZoneTransition(zoneState.activeGroup, 0)
         elseif detectedZone > 0 then
             -- 进入新区域（或从一个区域切换到另一个）
@@ -1631,8 +1645,14 @@ function FogOfWar.InitZoneVisibility(playerCol, playerRow)
     zoneState.activeGroup = initialZone
 
     if initialZone == 0 then
-        -- 玩家不在任何光域内：所有光源正常显示（不隐藏任何灯）
-        return
+        -- 玩家不在任何光域内：所有属于光域的灯全灭，只有不属于任何光域的灯正常显示
+        for _, light in ipairs(lightSources) do
+            local lightZone = GetLightZoneIndex(light.col, light.row)
+            if lightZone > 0 then
+                light._originalDiameter = light.diameter
+                light.diameter = 0
+            end
+        end
     else
         -- 玩家在某个区域内：只亮该区域的灯，其他全灭
         for _, light in ipairs(lightSources) do

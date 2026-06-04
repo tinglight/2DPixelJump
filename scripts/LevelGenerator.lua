@@ -948,7 +948,9 @@ function LevelGenerator.Generate(difficulty, gridWidth, gridHeight)
                 newDefs[i] = segDefs[i]
             end
         end
+        ---@diagnostic disable-next-line: assign-type-mismatch
         newDefs[#newDefs + 1] = segDefs[segCount]  -- goal
+        ---@diagnostic disable-next-line: assign-type-mismatch
         segDefs = newDefs
         segCount = #segDefs
     end
@@ -1070,6 +1072,7 @@ function LevelGenerator.Generate(difficulty, gridWidth, gridHeight)
         end
     end
 
+    ---@diagnostic disable-next-line: return-type-mismatch
     return map, spawnCol or 3, spawnRow or (baseGround - 1), tmpl.name, difficulty, segments
 end
 

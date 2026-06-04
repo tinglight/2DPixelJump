@@ -242,6 +242,7 @@ function M.ExportLevel(fname, exportName)
         os.date("%Y-%m-%d %H:%M:%S")
     )
 
+    ---@diagnostic disable-next-line: param-type-mismatch
     local body = "return " .. M._SerializeTable(data, 1) .. "\n"
     local content = header .. body
 

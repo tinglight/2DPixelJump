@@ -167,6 +167,7 @@ function M.LoadLevel(filename)
         return
     end
 
+    ---@diagnostic disable-next-line: param-type-mismatch
     M.ApplyLevelData(data)
     S.currentLevelName = fname
     M.RestoreViewport(fname)

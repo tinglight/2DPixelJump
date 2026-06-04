@@ -3595,6 +3595,7 @@ function M.DrawPixelText(vg, text, cx, cy, pixSize, r, g, b, a)
             for row = 1, charH do
                 local rowStr = glyph[row]
                 for col = 1, charW do
+                    ---@diagnostic disable-next-line: param-type-mismatch
                     if rowStr:sub(col, col) == "1" then
                         nvgBeginPath(vg)
                         nvgRect(vg, ox + (col - 1) * pixSize, startY + (row - 1) * pixSize, pixSize, pixSize)

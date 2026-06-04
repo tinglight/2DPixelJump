@@ -431,6 +431,7 @@ function M.GetToolOrder()
     end
 
     local filtered = {}
+    ---@diagnostic disable-next-line: param-type-mismatch
     for _, toolIdx in ipairs(rawOrder) do
         local tool = C.TOOLS[toolIdx]
         if tool and tool.submenu then
