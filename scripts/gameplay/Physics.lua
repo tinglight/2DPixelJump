@@ -2,6 +2,7 @@
 -- gameplay/Physics.lua — 碰撞检测与地形判定
 ------------------------------------------------------------
 local Config = require("gameplay.Config")
+local SlopeUtils = require("shared.SlopeUtils")
 
 local M = {}
 
@@ -73,7 +74,7 @@ end
 function M.IsSolid(col, row)
     if col < 1 or col > Config.MAP_COLS then return true end
     if row < 1 then return false end
-    if row > Config.MAP_ROWS then return false end
+    if row > Config.MAP_ROWS then return true end
     local val = levelData[row][col]
     local base, group = M.GetTileType(val)
     if base == TILE.SOLID or base == TILE.SOLID_PILLAR or base == TILE.SOLID_SEWER then return true end
@@ -127,6 +128,36 @@ end
 --- 判断某格是否为平台（当前无平台类型）
 function M.IsPlatform(col, row)
     if col < 1 or col > Config.MAP_COLS or row < 1 or row > Config.MAP_ROWS then return false end
+    return false
+end
+
+--- 判断某格是否为梯子
+function M.IsLadderAt(col, row)
+    if col < 1 or col > Config.MAP_COLS or row < 1 or row > Config.MAP_ROWS then return false end
+    local val = levelData[row][col]
+    if not val or val == 0 then return false end
+    local base = M.GetTileType(val)
+    return base == TILE.LADDER
+end
+
+--- 判断玩家占据的区域内是否有梯子格子
+function M.IsOnLadder(gx, gy)
+    local s = M.PlayerGridSize()
+    for dy = 0, s - 1 do
+        for dx = 0, s - 1 do
+            if M.IsLadderAt(gx + dx, gy + dy) then return true end
+        end
+    end
+    return false
+end
+
+--- 判断玩家脚下是否有梯子（用于梯子顶部作为地面支撑）
+function M.IsLadderBelow(gx, gy)
+    local s = M.PlayerGridSize()
+    local feetRow = gy + s
+    for dx = 0, s - 1 do
+        if M.IsLadderAt(gx + dx, feetRow) then return true end
+    end
     return false
 end
 
@@ -234,6 +265,14 @@ function M.PlayerOnGround(gx, gy)
         end
     end
     return false
+end
+
+--- 判断斜坡方向与移动方向是否构成"上坡"/"下坡"
+---@param slopeType integer 斜坡地块类型 (SLOPE_TR/TL/BR/BL)
+---@param dir integer 移动方向 (1=右, -1=左)
+---@return boolean isUphill, boolean isDownhill
+function M.SlopeMovementType(slopeType, dir)
+    return SlopeUtils.SlopeMovementType(slopeType, dir)
 end
 
 return M

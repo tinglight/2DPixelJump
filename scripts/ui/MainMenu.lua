@@ -81,7 +81,7 @@ local function CheckSaveData(callback)
             end
             if callback then callback() end
         end,
-        err = function()
+        error = function()
             hasSaveData = false
             if callback then callback() end
         end
@@ -95,41 +95,55 @@ end
 local noLevelModal = nil
 
 local function CheckWorldMapAndStart(callback)
-    local CS = require "cloud.CloudStorage"
-    -- 必须先 Init（加载关卡缓存），再 InitWorldMap，再验证
-    CS.Init(function(initOk)
-        if not initOk then
-            print("[MainMenu] CloudStorage.Init failed")
-            if noLevelModal then noLevelModal:Open() end
-            return
-        end
-        CS.InitWorldMap(function(wmOk)
-            if not wmOk then
-                print("[MainMenu] InitWorldMap failed")
-                if noLevelModal then noLevelModal:Open() end
-                return
-            end
-            local worldMap = CS.LoadWorldMap()
-            -- 检查世界地图是否有节点
-            if not worldMap or not worldMap.nodes or #worldMap.nodes == 0 then
-                if noLevelModal then noLevelModal:Open() end
-                return
-            end
-            -- 检查第一个节点是否有关卡文件
-            local firstNode = worldMap.nodes[1]
-            if not firstNode or not firstNode.file or firstNode.file == "" then
-                if noLevelModal then noLevelModal:Open() end
-                return
-            end
-            -- 检查关卡文件是否实际存在于缓存中
-            if not CS.Exists(firstNode.file) then
-                if noLevelModal then noLevelModal:Open() end
-                return
-            end
-            -- 验证通过
-            if callback then callback() end
-        end)
-    end)
+    -- 同步本地验证：直接从 resource cache 读取本地文件检查关卡是否存在
+    -- 不依赖异步 clientCloud 回调（避免 clientCloud 未就绪时回调不触发导致静默失败）
+    -- 实际的云端初始化会在 editor.lua Start() 中完成
+    local resCache = GetCache()
+
+    -- 1. 读取本地世界地图
+    local wmFile = resCache:GetFile("data/world_map.json")
+    if not wmFile or not wmFile:IsOpen() then
+        print("[MainMenu] CheckWorldMapAndStart: world_map.json not found locally")
+        if noLevelModal then noLevelModal:Open() end
+        return
+    end
+    local wmJson = wmFile:ReadString()
+    wmFile:Close()
+
+    local decOk, worldMap = pcall(cjson.decode, wmJson)
+    if not decOk or not worldMap then
+        print("[MainMenu] CheckWorldMapAndStart: world_map.json decode failed")
+        if noLevelModal then noLevelModal:Open() end
+        return
+    end
+
+    -- 2. 检查世界地图是否有节点
+    if not worldMap.nodes or #worldMap.nodes == 0 then
+        print("[MainMenu] CheckWorldMapAndStart: no nodes in world map")
+        if noLevelModal then noLevelModal:Open() end
+        return
+    end
+
+    -- 3. 检查第一个节点是否有关卡文件
+    local firstNode = worldMap.nodes[1]
+    if not firstNode or not firstNode.file or firstNode.file == "" then
+        print("[MainMenu] CheckWorldMapAndStart: first node has no file")
+        if noLevelModal then noLevelModal:Open() end
+        return
+    end
+
+    -- 4. 检查关卡文件是否存在于本地
+    local levelFile = resCache:GetFile("data/levels/" .. firstNode.file)
+    if not levelFile or not levelFile:IsOpen() then
+        print("[MainMenu] CheckWorldMapAndStart: level file not found: " .. firstNode.file)
+        if noLevelModal then noLevelModal:Open() end
+        return
+    end
+    levelFile:Close()
+
+    -- 验证通过，同步调用回调
+    print("[MainMenu] CheckWorldMapAndStart: validation passed, launching game")
+    if callback then callback() end
 end
 
 -- ====================================================================
@@ -606,21 +620,19 @@ end
 
 --- 重置存档并开始新游戏（只重置玩家游戏进度，不影响编辑器关卡数据）
 function MainMenu.ResetSaveAndStart()
-    -- 只重置玩家进度，不碰 editor_index（编辑器关卡索引）
+    -- 异步重置玩家进度（不阻塞游戏启动）
     clientCloud:Set("player_progress", {}, {
         ok = function()
             print("[MainMenu] Player progress reset (editor data preserved)")
-            CheckWorldMapAndStart(function()
-                if onStartGame then onStartGame() end
-            end)
         end,
-        err = function()
-            print("[MainMenu] Failed to reset progress, starting anyway")
-            CheckWorldMapAndStart(function()
-                if onStartGame then onStartGame() end
-            end)
+        error = function()
+            print("[MainMenu] Failed to reset progress (non-blocking)")
         end
     })
+    -- 直接验证并启动（不等待云端回调）
+    CheckWorldMapAndStart(function()
+        if onStartGame then onStartGame() end
+    end)
 end
 
 --- 显示主菜单
@@ -649,6 +661,7 @@ end
 --- 清理
 function MainMenu.Cleanup()
     UI.SetRoot(nil)
+    UI.Shutdown()
     if bgmSource then
         bgmSource:Stop()
     end

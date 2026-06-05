@@ -4,6 +4,7 @@
 local C = require("editor.Constants")
 local S = require("editor.State")
 local TileUtils = require("editor.TileUtils")
+local SlopeUtils = require("shared.SlopeUtils")
 
 local Physics = {}
 
@@ -143,23 +144,10 @@ function Physics.Attach(M)
         return nil
     end
 
-    --- 判断斜坡与移动方向的关系（模块内 local，通过闭包被 MoveOneGrid 使用）
+    --- 判断斜坡与移动方向的关系（委托到共享模块）
     ---@return boolean isUpSlope, boolean isDownSlope
     function M.PlaySlopeMovementType(slopeType, dir)
-        if slopeType == C.TILE.SLOPE_TR then
-            if dir == 1 then return true, false end   -- 右=上坡
-            if dir == -1 then return false, true end  -- 左=下坡
-        elseif slopeType == C.TILE.SLOPE_TL then
-            if dir == -1 then return true, false end
-            if dir == 1 then return false, true end
-        elseif slopeType == C.TILE.SLOPE_BR then
-            if dir == 1 then return false, true end
-            if dir == -1 then return true, false end
-        elseif slopeType == C.TILE.SLOPE_BL then
-            if dir == -1 then return false, true end
-            if dir == 1 then return true, false end
-        end
-        return false, false
+        return SlopeUtils.SlopeMovementType(slopeType, dir)
     end
 
 end

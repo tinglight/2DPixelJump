@@ -228,7 +228,12 @@ function M.ApplyLevelData(data)
     S.backgroundImage = bgImg
     S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
     S.bgStretchToCanvas = (data.bgStretchToCanvas == true)
-    S.bgImageHandle = nil  -- 清除缓存，加载关卡时重新加载图片
+    -- 预加载背景图片（避免渲染时懒加载导致黑屏闪烁）
+    if S.vg and bgImg ~= "" then
+        S.bgImageHandle = nvgCreateImage(S.vg, bgImg, 0)
+    else
+        S.bgImageHandle = nil
+    end
 
     -- [DEBUG] 关卡加载完毕，输出关键数据
     log:Write(LOG_INFO, string.format(

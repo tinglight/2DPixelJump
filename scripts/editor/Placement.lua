@@ -211,8 +211,7 @@ function M.EraseTile(col, row)
     local decoIdx = M.FindDecoration(col, row)
     if decoIdx then
         table.remove(S.decorations, decoIdx)
-        Undo.dirty = true
-        Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
     end
 
     if S.levelData[row][col] == TILE.SPAWN then return end

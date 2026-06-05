@@ -250,7 +250,7 @@ S.boxSelectCurrentX = 0
 S.boxSelectCurrentY = 0
 
 -- ====================================================================
--- 工具栏滑动状态
+-- 工具栏滑动状态（旧版水平滚动，保留兼容字段）
 -- ====================================================================
 S.toolbarScrollX = 0          -- 当前滑动偏移（设计像素，<=0 表示向右滑）
 S.toolbarDragging = false     -- 正在拖拽滑动工具栏
@@ -259,6 +259,13 @@ S.toolbarDragStartScroll = 0  -- 拖拽起始时的 scrollX
 S.toolbarDragPending = false  -- 按下但尚未确定是拖拽还是点击
 S.toolbarDragPendingSlot = nil -- pending 时命中的工具槽位（nil=未命中按钮）
 S.toolbarDragThreshold = 4    -- 超过此像素视为拖拽（设计坐标）
+
+-- ====================================================================
+-- 工具分类面板状态（新版：分类标签 + 弹出网格面板）
+-- ====================================================================
+S.toolPanelOpen = false             -- 分类面板是否展开
+S.toolPanelCategory = nil           -- 当前展开的分类 id（如 "terrain"/"trap"/"puzzle"...）
+S.toolPanelHoverIdx = 0             -- 面板中悬停的工具索引
 
 -- ====================================================================
 -- 工具栏子菜单展开状态
@@ -295,6 +302,7 @@ S.backgroundImage = ""        -- 选中的背景图路径（如 "image/xxx.png"�
 S.bgImageAlpha = 0.5          -- 背景图明暗度（0.0~1.0，越大越亮）
 S.bgStretchToCanvas = false   -- 是否拉伸背景图为画布大小（false=铺满相机边界）
 S.bgImageHandle = nil         -- NanoVG 图片句柄（运行时缓存）
+S._bgCache = {}               -- 相邻关卡背景图预加载缓存 { [path] = nvgHandle }
 S.bgDialogSelected = 0        -- 背景对话框中选中的索引
 S.bgAlphaInput = "50"         -- 对话框中明暗度输入框的文本
 
@@ -347,6 +355,7 @@ S.play = {
     fallTickCurrent = C.PLAY_FALL_BASE,
     jumpTimer = 0,
     fallGridCount = 0,
+    groundedFrames = 0,  -- 连续站在地面的帧数（篝火碰撞判定用）
     alive = true,
     won = false,
     deathTimer = 0,
@@ -431,6 +440,7 @@ S.transition = {
     pendingDir = nil,
     pendingGx = nil,
     pendingGy = nil,
+    holdTimer = 0,
 }
 
 -- 关卡切换平移过渡

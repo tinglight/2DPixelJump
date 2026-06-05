@@ -29,6 +29,7 @@ local CloudStorage = require "cloud.CloudStorage"
 local WorldMapEditor = require "level.WorldMapEditor"
 local FogOfWar = require "rendering.FogOfWar"
 local LevelGenerator = require "level.LevelGenerator"
+local LoadingScreen = require "ui.LoadingScreen"
 
 -- ====================================================================
 -- 内部模块
@@ -280,16 +281,30 @@ function HandleNanoVGRender(eventType, eventData)
     nvgBeginFrame(S.vg, S.logicalW, S.logicalH, S.dpr)
     nvgScale(S.vg, S.scaleF, S.scaleF)
 
+    -- Loading 界面：激活时遮盖所有其他内容
+    if LoadingScreen.IsBlocking() then
+        LoadingScreen.Draw(S.vg, S.screenDesignW, S.screenDesignH)
+        nvgEndFrame(S.vg)
+        return
+    end
+
     if S.editorMode == C.MODE_PLAY or S.editorMode == C.MODE_WORLDPLAY then
-        -- 试玩模式：4:3 比例 letterbox 居中显示
+        -- 试玩模式：顶部 HUD 栏 + 4:3 比例 letterbox 居中显示
+        local HUD_BAR_H = 22  -- HUD 栏高度（屏幕设计像素）
         local playW = S.playViewW
         local playH = S.playViewH
-        -- 计算 4:3 视口在屏幕设计坐标内的适配缩放和偏移
-        local fitScale = math.min(S.screenDesignW / playW, S.screenDesignH / playH)
+        -- 游戏视口可用高度 = 屏幕高度 - HUD 栏
+        local availH = S.screenDesignH - HUD_BAR_H
+        local fitScale = math.min(S.screenDesignW / playW, availH / playH)
         local scaledW = playW * fitScale
         local scaledH = playH * fitScale
         local offsetX = (S.screenDesignW - scaledW) * 0.5
-        local offsetY = (S.screenDesignH - scaledH) * 0.5
+        local offsetY = HUD_BAR_H + (availH - scaledH) * 0.5
+
+        -- 保存布局参数供输入检测使用
+        S.playFitScale = fitScale
+        S.playOffsetX = offsetX
+        S.playOffsetY = offsetY
 
         -- 绘制 letterbox 黑边
         nvgBeginPath(S.vg)
@@ -309,6 +324,9 @@ function HandleNanoVGRender(eventType, eventData)
         end
         PlayMode.Draw()
         nvgRestore(S.vg)
+
+        -- 在游戏视口外部（顶部栏）绘制 HUD 信息
+        PlayMode.DrawExternalHUD(S.screenDesignW, HUD_BAR_H)
     elseif S.editorMode == C.MODE_WORLDMAP then
         WorldMapEditor.Draw()
         Toolbar.DrawTopBar()
@@ -317,6 +335,7 @@ function HandleNanoVGRender(eventType, eventData)
         GridRenderer.Draw()
         Toolbar.DrawToolbar()
         Toolbar.DrawSubmenuPopup()
+        Toolbar.DrawToolPanel()
         Toolbar.DrawTopBar()
         Toolbar.DrawBottomBar()
         CloudPanel.DrawButton(S.vg)
@@ -336,6 +355,16 @@ function HandleUpdate(eventType, eventData)
     if not S.editorActive then return end
     local dt = eventData["TimeStep"]:GetFloat()
     S.editorClock = S.editorClock + dt
+
+    -- Loading 界面更新：阻止其他逻辑
+    if LoadingScreen.IsBlocking() then
+        LoadingScreen.Update(dt)
+        -- 检测关卡是否加载完成
+        if not LoadingScreen.ready and S.editorMode == C.MODE_WORLDPLAY then
+            LoadingScreen.SetReady()
+        end
+        return
+    end
 
     if S.msgTimer > 0 then S.msgTimer = S.msgTimer - dt end
     if S.dialogMode then S.renameBlink = S.renameBlink + dt end
@@ -372,6 +401,15 @@ end
 
 function HandleKeyDown(eventType, eventData)
     if not S.editorActive then return end
+
+    -- Loading 界面：ready 后按任意键关闭
+    if LoadingScreen.IsBlocking() then
+        if LoadingScreen.ready then
+            LoadingScreen.Dismiss()
+        end
+        return
+    end
+
     local key = eventData["Key"]:GetInt()
     InputHandler.HandleKeyDown(key)
 end
@@ -397,6 +435,10 @@ end
 
 function HandleMouseDown(eventType, eventData)
     if not S.editorActive then return end
+    if LoadingScreen.IsBlocking() then
+        if LoadingScreen.ready then LoadingScreen.Dismiss() end
+        return
+    end
     local button = eventData["Button"]:GetInt()
     local mx = input:GetMousePosition().x / S.dpr / S.scaleF
     local my = input:GetMousePosition().y / S.dpr / S.scaleF
@@ -405,6 +447,7 @@ end
 
 function HandleMouseUp(eventType, eventData)
     if not S.editorActive then return end
+    if LoadingScreen.IsBlocking() then return end
     local button = eventData["Button"]:GetInt()
     local mx = input:GetMousePosition().x / S.dpr / S.scaleF
     local my = input:GetMousePosition().y / S.dpr / S.scaleF
@@ -413,6 +456,7 @@ end
 
 function HandleMouseWheel(eventType, eventData)
     if not S.editorActive then return end
+    if LoadingScreen.IsBlocking() then return end
     local wheel = eventData["Wheel"]:GetInt()
     InputHandler.HandleMouseWheel(wheel)
 end

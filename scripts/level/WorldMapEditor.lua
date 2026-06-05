@@ -54,6 +54,7 @@ local vg = nil
 local mapData = {
     nodes = {},          -- { id, file, name, x, y }
     connections = {},    -- { fromId, toId, direction }
+    startFile = nil,     -- 初始关卡文件名（试玩起始点，nil 则用 nodes[1]）
     nextId = 1,
 }
 
@@ -199,9 +200,10 @@ function WorldMapEditor.Load()
     if data and data.nodes then
         mapData.nodes = data.nodes or {}
         mapData.connections = data.connections or {}
+        mapData.startFile = data.startFile or nil
         mapData.nextId = data.nextId or 1
     else
-        mapData = { nodes = {}, connections = {}, nextId = 1 }
+        mapData = { nodes = {}, connections = {}, startFile = nil, nextId = 1 }
     end
 end
 
@@ -411,6 +413,7 @@ local function DrawNodes()
         -- 选中高亮
         local isSelected = (selectedNode == node.id)
         local isConnectFrom = connectMode and connectMode.fromId == node.id
+        local isStartNode = (mapData.startFile == node.file)
 
         -- 卡片背景
         nvgBeginPath(vg)
@@ -433,6 +436,9 @@ local function DrawNodes()
         elseif isSelected then
             nvgStrokeColor(vg, nvgRGBA(100, 180, 255, 255))
             nvgStrokeWidth(vg, 2.0)
+        elseif isStartNode then
+            nvgStrokeColor(vg, nvgRGBA(255, 180, 50, 200))
+            nvgStrokeWidth(vg, 1.5)
         else
             nvgStrokeColor(vg, nvgRGBA(70, 80, 110, 200))
             nvgStrokeWidth(vg, 1.0)
@@ -452,6 +458,14 @@ local function DrawNodes()
         nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
         nvgFillColor(vg, nvgRGBA(240, 240, 255, 255))
         nvgText(vg, sx + w * 0.5, sy + titleH * 0.5, node.name)
+
+        -- 初始关卡标记（名称左侧显示旗帜图标）
+        if isStartNode then
+            nvgFontSize(vg, math.max(7, 9 * zoom))
+            nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+            nvgFillColor(vg, nvgRGBA(255, 200, 80, 255))
+            nvgText(vg, sx + 3 * zoom, sy + titleH * 0.5, "START")
+        end
 
         -- 文件名
         nvgFontSize(vg, math.max(6, 8 * zoom))
@@ -757,6 +771,24 @@ function WorldMapEditor.HandleKeyDown(key)
         end
     end
 
+    -- H 键：设置选中节点为初始关卡（试玩起始点）
+    if key == KEY_H then
+        if selectedNode then
+            local node = nil
+            for _, n in ipairs(mapData.nodes) do
+                if n.id == selectedNode then node = n; break end
+            end
+            if node then
+                mapData.startFile = node.file
+                ShowMsg("已设为初始关卡: " .. node.name, 2.0)
+                return true
+            end
+        else
+            ShowMsg("请先选中一个节点再按 H 设为初始关卡", 2.0)
+            return true
+        end
+    end
+
     -- Ctrl+S 保存
     if key == KEY_S and input:GetKeyDown(KEY_CTRL) then
         WorldMapEditor.Save()
@@ -769,6 +801,19 @@ end
 --- 获取地图数据（供外部序列化或游戏加载）
 function WorldMapEditor.GetMapData()
     return mapData
+end
+
+--- 获取初始关卡文件名（试玩起始点）
+--- 如果已配置 startFile 且该文件在节点列表中存在则返回，否则返回 nil
+function WorldMapEditor.GetStartFile()
+    if mapData.startFile then
+        for _, node in ipairs(mapData.nodes) do
+            if node.file == mapData.startFile then
+                return node.file
+            end
+        end
+    end
+    return nil
 end
 
 return WorldMapEditor

@@ -49,9 +49,15 @@ end
 --- 试玩开始前保存的编辑器原始光源快照（子模块通过 M._savedEditorLightSources 访问）
 M._savedEditorLightSources = nil
 
+--- 试玩开始前保存的编辑器原始出生点（退出试玩时恢复）
+M._savedSpawnCol = nil
+M._savedSpawnRow = nil
+
 --- 重新进入编辑器时清理 PlayMode 模块级状态
 function M.ResetModuleState()
     M._savedEditorLightSources = nil
+    M._savedSpawnCol = nil
+    M._savedSpawnRow = nil
 end
 
 ------------------------------------------------------------
@@ -217,6 +223,7 @@ function M._ResetPlayState()
     S.play.fallTickCurrent   = C.PLAY_FALL_BASE
     S.play.jumpTimer         = 0
     S.play.fallGridCount     = 0
+    S.play.groundedFrames    = 0
     S.play.alive             = true
     S.play.won               = false
     S.play.deathTimer        = 0
@@ -364,16 +371,6 @@ end
 ------------------------------------------------------------
 
 function M.Update(dt)
-    -- GM 工具拖拽追踪（在所有逻辑之前，确保死亡/暂停时也能拖拽）
-    if GMTool.IsDragging() then
-        local mx = input:GetMousePosition().x / S.dpr / S.scaleF
-        local my = input:GetMousePosition().y / S.dpr / S.scaleF
-        local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
-        local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
-        local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
-        GMTool.HandleMouseMove((mx - offsetX) / fitScale, (my - offsetY) / fitScale)
-    end
-
     S.play.gameTime = S.play.gameTime + dt
 
     -- 死亡中由 deathPhase 自行处理 ESC，此处跳过
@@ -455,6 +452,7 @@ function M.Update(dt)
             S.play.isOnGround      = false
             S.play.isJumping       = false
             S.play.fallGridCount   = 0
+            S.play.groundedFrames  = 0
             S.play.fallAnimTime    = 0
             M.SnapCameraToPlayer()
         end,

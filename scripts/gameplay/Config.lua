@@ -42,6 +42,7 @@ M.PLAYER_CONFIG = {
     fallTickMin = 0.04,
     fallAccel = 0.015,
     jumpTickRate = 0.07,
+    climbTickRate = 0.09,
 
     -- 下落剥离配置（每下降1格剥离 totalPixels/10 个像素）
     recoverPerSec = 6,

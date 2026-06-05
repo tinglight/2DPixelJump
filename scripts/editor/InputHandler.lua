@@ -79,108 +79,10 @@ local function CycleDifficulty()
     S.SetMessage("难度: " .. diffName, 1.5)
 end
 
---- 导出全部数据：将云端缓存直接写入本地 data/ 目录文件
-function DoExport()
-    local ok, err = pcall(function()
-        local CloudStorage = require "cloud.CloudStorage"
-
-        -- 导出前先保存当前正在编辑的关卡（避免未保存的关卡丢失）
-        if Persistence then
-            if S.currentLevelName == "" and S.levelData then
-                -- 从未保存过的关卡，先执行"另存为新关卡"
-                Persistence.SaveAsNewLevel()
-                print("[Export] 自动保存为新关卡")
-            elseif S.currentLevelName ~= "" and Undo.dirty then
-                -- 有修改未保存的已有关卡
-                Persistence.SaveLevel()
-                print("[Export] 自动保存当前关卡: " .. S.currentLevelName)
-            end
-        end
-
-        -- 确保目标目录存在（写入 scripts/data/ 以便 git 跟踪）
-        fileSystem:CreateDir("scripts")
-        fileSystem:CreateDir("scripts/data")
-        fileSystem:CreateDir("scripts/data/levels")
-
-        -- 调试：输出缓存状态
-        print("[Export] CloudStorage.IsReady() = " .. tostring(CloudStorage.IsReady()))
-        print("[Export] GetNextIndex() = " .. tostring(CloudStorage.GetNextIndex()))
-
-        -- 获取各项数据
-        local playerParams = CloudStorage.LoadPlayerParams()
-        local worldMap = CloudStorage.LoadWorldMap()
-        local nextIndex = CloudStorage.GetNextIndex()
-        local levelFiles = CloudStorage.ListLevels()
-
-        print("[Export] ListLevels 返回 " .. #levelFiles .. " 个文件")
-        for i, f in ipairs(levelFiles) do
-            print("[Export]   " .. i .. ": " .. f)
-        end
-
-        -- 如果缓存为空，提示用户先保存
-        if #levelFiles == 0 then
-            S.SetMessage("没有已保存的关卡，请先保存!", 3.0)
-            print("[Export] 缓存为空，请检查：1) 是否已保存过关卡 2) CloudStorage.Init 是否完成")
-            return
-        end
-
-        -- 写入 scripts/data/index.json（git 跟踪）
-        local indexFile = File("scripts/data/index.json", FILE_WRITE)
-        if indexFile and indexFile:IsOpen() then
-            indexFile:WriteString(cjson.encode({ nextIndex = nextIndex }))
-            indexFile:Close()
-            print("[Export] 写入 scripts/data/index.json")
-        else
-            print("[Export] 无法写入 scripts/data/index.json")
-        end
-
-        -- 写入 scripts/data/player_params.json
-        if playerParams then
-            local ppFile = File("scripts/data/player_params.json", FILE_WRITE)
-            if ppFile and ppFile:IsOpen() then
-                ppFile:WriteString(cjson.encode(playerParams))
-                ppFile:Close()
-                print("[Export] 写入 scripts/data/player_params.json")
-            end
-        end
-
-        -- 写入 scripts/data/world_map.json
-        if worldMap then
-            local wmFile = File("scripts/data/world_map.json", FILE_WRITE)
-            if wmFile and wmFile:IsOpen() then
-                wmFile:WriteString(cjson.encode(worldMap))
-                wmFile:Close()
-                print("[Export] 写入 scripts/data/world_map.json")
-            end
-        end
-
-        -- 写入 scripts/data/levels/level_N.json
-        local levelCount = 0
-        for _, fname in ipairs(levelFiles) do
-            local jsonStr = CloudStorage.Load(fname)
-            if jsonStr then
-                local path = "scripts/data/levels/" .. fname
-                local lf = File(path, FILE_WRITE)
-                if lf and lf:IsOpen() then
-                    lf:WriteString(jsonStr)
-                    lf:Close()
-                    levelCount = levelCount + 1
-                else
-                    print("[Export] 无法写入 " .. path)
-                end
-            else
-                print("[Export] CloudStorage.Load('" .. fname .. "') 返回 nil")
-            end
-        end
-        print("[Export] 写入 " .. levelCount .. " 个关卡文件到 scripts/data/levels/")
-
-        S.SetMessage("已导出 " .. levelCount .. " 个关卡到本地文件!", 3.0)
-    end)
-
-    if not ok then
-        print("[Export Error] " .. tostring(err))
-        S.SetMessage("导出出错: " .. tostring(err), 3.0)
-    end
+--- 导出全部数据（委托到 LevelExport 模块）
+local LevelExport = require "editor.LevelExport"
+local function DoExport()
+    LevelExport.DoExport()
 end
 
 local function SwitchToHiddenWallTool(idx, prevTool)
@@ -310,8 +212,7 @@ function UpdateBoundDrag()
 
     -- 🔴 BUG FIX: 边界拖拽修改了 camBound，必须标记 dirty 触发自动保存
     -- 否则边界变更不会被持久化到云端
-    Undo.dirty = true
-    Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
 end
 
 function UpdateMoveDrag()
@@ -369,11 +270,11 @@ function M.HandleKeyDown(key)
     end
     -- 试玩模式
     if S.editorMode == MODE.PLAY then
-        HandlePlayModeKey(key)
+        HandlePlayModeKey(key, false)
         return
     end
     if S.editorMode == MODE.WORLDPLAY then
-        HandleWorldPlayModeKey(key)
+        HandlePlayModeKey(key, true)
         return
     end
     if S.editorMode == MODE.WORLDMAP then
@@ -391,46 +292,28 @@ function M.HandleKeyDown(key)
     HandleEditorKey(key)
 end
 
-function HandlePlayModeKey(key)
+function HandlePlayModeKey(key, isWorld)
     if key == KEY_ESCAPE then
-        print("[InputHandler] ESC in PLAY mode, fromMainMenu=" .. tostring(S.fromMainMenu))
+        print("[InputHandler] ESC in " .. (isWorld and "WORLDPLAY" or "PLAY") .. " mode, fromMainMenu=" .. tostring(S.fromMainMenu))
         if S.fromMainMenu then
-            -- 正式游戏：ESC 切换暂停菜单
             local PauseMenuMod = require("ui.PauseMenu")
             print("[InputHandler] → calling PauseMenu.Toggle()")
             PauseMenuMod.Toggle()
         else
-            -- 编辑器试玩：ESC 返回编辑模式（恢复光源）
             PlayMode.ExitPlayMode()
-            S.editorMode = MODE.EDIT
-            print("[InputHandler] → returning to MODE_EDIT")
-            S.SetMessage("返回编辑模式", 1.5)
+            if isWorld then
+                S.editorMode = MODE.WORLDMAP
+                WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
+                print("[InputHandler] → returning to MODE_WORLDMAP")
+                S.SetMessage("返回世界地图编辑", 1.5)
+            else
+                S.editorMode = MODE.EDIT
+                print("[InputHandler] → returning to MODE_EDIT")
+                S.SetMessage("返回编辑模式", 1.5)
+            end
         end
     elseif key == KEY_R then
-        PlayMode.StartPlayMode()
-    elseif key == KEY_LSHIFT or key == KEY_RSHIFT then
-        S.playGridVisible = not S.playGridVisible
-    end
-end
-
-function HandleWorldPlayModeKey(key)
-    if key == KEY_ESCAPE then
-        print("[InputHandler] ESC in WORLDPLAY mode, fromMainMenu=" .. tostring(S.fromMainMenu))
-        if S.fromMainMenu then
-            -- 正式游戏：ESC 切换暂停菜单
-            local PauseMenuMod = require("ui.PauseMenu")
-            print("[InputHandler] → calling PauseMenu.Toggle()")
-            PauseMenuMod.Toggle()
-        else
-            -- 世界地图试玩：ESC 返回世界地图编辑（恢复光源）
-            PlayMode.ExitPlayMode()
-            S.editorMode = MODE.WORLDMAP
-            WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
-            print("[InputHandler] → returning to MODE_WORLDMAP")
-            S.SetMessage("返回世界地图编辑", 1.5)
-        end
-    elseif key == KEY_R then
-        PlayMode.StartWorldPlayMode()
+        if isWorld then PlayMode.StartWorldPlayMode() else PlayMode.StartPlayMode() end
     elseif key == KEY_LSHIFT or key == KEY_RSHIFT then
         S.playGridVisible = not S.playGridVisible
     end
@@ -447,8 +330,19 @@ function HandleWorldMapKey(key)
 end
 
 function HandleEditorKey(key)
-    -- ESC 返回主菜单
+    -- ESC：先关闭弹出面板，再返回主菜单
     if key == KEY_ESCAPE then
+        -- 先关闭工具分类面板/子菜单
+        if S.toolPanelOpen then
+            S.toolPanelOpen = false
+            S.toolPanelCategory = nil
+            return
+        end
+        if S.submenuOpen then
+            S.submenuOpen = false
+            S.submenuGroupId = nil
+            return
+        end
         print("[InputHandler] ESC in EDIT mode → BackToMenu")
         local PauseMenuMod = require("ui.PauseMenu")
         S.editorActive = false
@@ -559,11 +453,11 @@ end
 function M.HandleMouseDown(button, mx, my)
     -- 试玩模式
     if S.editorMode == MODE.PLAY then
-        HandlePlayModeClick(button, mx, my)
+        HandlePlayModeClick(button, mx, my, false)
         return
     end
     if S.editorMode == MODE.WORLDPLAY then
-        HandleWorldPlayClick(button, mx, my)
+        HandlePlayModeClick(button, mx, my, true)
         return
     end
     if S.editorMode == MODE.WORLDMAP then
@@ -590,6 +484,46 @@ function M.HandleMouseDown(button, mx, my)
             -- 不 return，继续正常处理（可能点击了工具栏其他位置）
         else
             return  -- 在弹出层内但未命中按钮，吞掉事件
+        end
+    end
+
+    -- 工具分类面板处理（优先级次于子菜单）
+    if S.toolPanelOpen and button == MOUSEB_LEFT then
+        local hitToolIdx = Toolbar.HitTestToolPanel(mx, my)
+        if hitToolIdx then
+            -- 选中面板中的工具
+            local prevTool = S.currentTool
+            S.currentTool = hitToolIdx
+            S.interactMode = INTERACT.DRAW
+            SwitchToHiddenWallTool(hitToolIdx, prevTool)
+            S.ClearSelection()
+            S.toolPanelOpen = false
+            S.toolPanelCategory = nil
+            -- 关闭子菜单
+            S.submenuOpen = false
+            S.submenuGroupId = nil
+            return
+        end
+        -- 点击在面板外部 → 检查是否点击了分类标签（切换分类）
+        if not Toolbar.IsInsideToolPanel(mx, my) then
+            local hitCat = Toolbar.HitTestCategoryTabs(mx, my)
+            if hitCat then
+                if hitCat == S.toolPanelCategory then
+                    -- 再次点击同一标签 → 关闭面板
+                    S.toolPanelOpen = false
+                    S.toolPanelCategory = nil
+                else
+                    -- 切换到另一个分类
+                    S.toolPanelCategory = hitCat
+                end
+                return
+            end
+            -- 点击在面板和标签外部 → 关闭面板
+            S.toolPanelOpen = false
+            S.toolPanelCategory = nil
+            -- 不 return，继续正常处理
+        else
+            return  -- 在面板内但未命中按钮，吞掉事件
         end
     end
 
@@ -655,50 +589,32 @@ function M.HandleMouseDown(button, mx, my)
     end
 end
 
-function HandlePlayModeClick(button, mx, my)
+function HandlePlayModeClick(button, mx, my, isWorld)
     if button ~= MOUSEB_LEFT then return end
-    -- 将 screenDesign 坐标转换到 4:3 playView 坐标
-    local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
-    local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
-    local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
-    local pmx = (mx - offsetX) / fitScale
-    local pmy = (my - offsetY) / fitScale
 
-    -- GM工具优先拦截
-    if GMTool.HandleMouseDown(pmx, pmy) then return end
+    local HUD_BAR_H = 22
 
-    local backBtnW, backBtnH = 50, 16
-    local backBtnX = S.playViewW - backBtnW - 6
-    local backBtnY = (22 - backBtnH) * 0.5
-    local pad = 6
-    if pmx >= backBtnX - pad and pmx < backBtnX + backBtnW + pad and pmy >= backBtnY - pad and pmy < backBtnY + backBtnH + pad then
-        PlayMode.ExitPlayMode()
-        S.editorMode = MODE.EDIT
-        S.SetMessage("返回编辑模式", 1.5)
-    end
-end
+    -- GM 工具优先拦截（按钮在 HUD 栏，下拉菜单在栏下方）
+    if GMTool.HandleHUDClick(mx, my, HUD_BAR_H) then return end
 
-function HandleWorldPlayClick(button, mx, my)
-    if button ~= MOUSEB_LEFT then return end
-    -- 将 screenDesign 坐标转换到 4:3 playView 坐标
-    local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
-    local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
-    local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
-    local pmx = (mx - offsetX) / fitScale
-    local pmy = (my - offsetY) / fitScale
-
-    -- GM工具优先拦截
-    if GMTool.HandleMouseDown(pmx, pmy) then return end
-
-    local backBtnW, backBtnH = 60, 16
-    local backBtnX = S.playViewW - backBtnW - 6
-    local backBtnY = (22 - backBtnH) * 0.5
-    local pad = 6
-    if pmx >= backBtnX - pad and pmx < backBtnX + backBtnW + pad and pmy >= backBtnY - pad and pmy < backBtnY + backBtnH + pad then
-        PlayMode.ExitPlayMode()
-        S.editorMode = MODE.WORLDMAP
-        WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
-        S.SetMessage("返回世界地图编辑", 1.5)
+    -- 返回按钮在顶部外部 HUD 栏（屏幕设计坐标系，y=0~22）
+    if my < HUD_BAR_H then
+        local backBtnW, backBtnH = isWorld and 60 or 50, 16
+        local backBtnX = S.screenDesignW - backBtnW - 6
+        local backBtnY = (HUD_BAR_H - backBtnH) * 0.5
+        local pad = 6
+        if mx >= backBtnX - pad and mx < backBtnX + backBtnW + pad and my >= backBtnY - pad and my < backBtnY + backBtnH + pad then
+            PlayMode.ExitPlayMode()
+            if isWorld then
+                S.editorMode = MODE.WORLDMAP
+                WorldMapEditor.SetLayout(S.screenDesignW, S.screenDesignH, TOPBAR_H, 0, S.sidebarOpen and SIDEBAR_W or 0)
+                S.SetMessage("返回世界地图编辑", 1.5)
+            else
+                S.editorMode = MODE.EDIT
+                S.SetMessage("返回编辑模式", 1.5)
+            end
+        end
+        return
     end
 end
 
@@ -858,6 +774,26 @@ function HandleToolbarClick(mx, my, barY)
         end
     end
 
+    -- 分类标签点击（新版工具面板）
+    if not S.toolbarEditMode then
+        local hitCat = Toolbar.HitTestCategoryTabs(mx, my)
+        if hitCat then
+            if S.toolPanelOpen and S.toolPanelCategory == hitCat then
+                -- 再次点击同一标签 → 关闭面板
+                S.toolPanelOpen = false
+                S.toolPanelCategory = nil
+            else
+                -- 打开/切换面板分类
+                S.toolPanelOpen = true
+                S.toolPanelCategory = hitCat
+            end
+            -- 关闭子菜单（避免两个弹出层同时打开）
+            S.submenuOpen = false
+            S.submenuGroupId = nil
+            return
+        end
+    end
+
     -- 编辑/确认按钮
     local editHit = Toolbar.HitTestEditButtons(mx, my)
     if editHit == "edit" then
@@ -893,7 +829,7 @@ function HandleToolbarClick(mx, my, barY)
         return
     end
 
-    -- 工具栏区域点击
+    -- 工具栏区域点击（仅编辑模式保留旧拖拽逻辑）
     if Toolbar.HitTestToolbarArea(mx, my) then
         if S.toolbarEditMode then
             -- 编辑模式下：开始拖拽工具（重排）
@@ -904,13 +840,8 @@ function HandleToolbarClick(mx, my, barY)
                 S.toolEditDragStartX = mx
                 S.toolEditDragOffsetX = 0
             end
-        else
-            -- 非编辑模式：进入 pending 状态（等阈值判定是拖拽还是点击）
-            S.toolbarDragPending = true
-            S.toolbarDragStartX = mx
-            S.toolbarDragStartScroll = S.toolbarScrollX
-            S.toolbarDragPendingSlot = Toolbar.HitTestToolbar(mx, my) -- 可能为 nil
         end
+        -- 非编辑模式：新版使用分类标签面板，不再需要拖拽/pending
         return
     end
 end
@@ -1123,8 +1054,7 @@ function HandleLightToolClick(button, col, row)
             local idx = FogOfWar.AddLight(col, row, 6, 0.5)
             S.selectedLightIndex = idx
             S.lightSources = FogOfWar.GetLightSources()
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("放置光源 (" .. col .. "," .. row .. ")", 1.5)
             Dialogs.OpenLightDialog(idx)
         end
@@ -1134,8 +1064,7 @@ function HandleLightToolClick(button, col, row)
             S.lightSources = FogOfWar.GetLightSources()
             S.selectedLightIndex = 0
             S.dialogMode = nil
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("删除光源", 1.5)
         end
     end
@@ -1156,8 +1085,7 @@ function HandleUnlitLightToolClick(button, col, row)
             local idx = FogOfWar.AddUnlitLight(col, row, 6, 0.5)
             S.selectedLightIndex = idx
             S.lightSources = FogOfWar.GetLightSources()
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("放置无光灯 (" .. col .. "," .. row .. ") 可被火球点亮", 2.0)
             Dialogs.OpenLightDialog(idx)
         end
@@ -1167,8 +1095,7 @@ function HandleUnlitLightToolClick(button, col, row)
             S.lightSources = FogOfWar.GetLightSources()
             S.selectedLightIndex = 0
             S.dialogMode = nil
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("删除无光灯", 1.5)
         end
     end
@@ -1208,8 +1135,7 @@ function HandleLightZoneToolClick(button, col, row)
             FogOfWar.RemoveLightZone(S.selectedLightZoneIndex)
             S.lightZones = FogOfWar.GetLightZones()
             S.selectedLightZoneIndex = 0
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("删除光域", 1.5)
         end
     end
@@ -1243,8 +1169,7 @@ function FinishLightZoneDraw()
     FogOfWar.AddLightZone(c1, r1, c2, r2)
     S.lightZones = FogOfWar.GetLightZones()
     S.selectedLightZoneIndex = #S.lightZones
-    Undo.dirty = true
-    Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
     S.SetMessage("创建光域 #" .. #S.lightZones .. " (" .. c1 .. "," .. r1 .. ")-(" .. c2 .. "," .. r2 .. ")", 2.0)
 end
 
@@ -1274,7 +1199,7 @@ function HandleDecorationToolClick(button, col, row)
             S.decoDialogTouchTransform = false
             S.decoDialogTransformTarget = 0
             S.currentDecorationType = 1
-            Dialogs.OpenDecorationDialog()
+            Dialogs.OpenDecoPropertyDialog()
         end
     elseif button == MOUSEB_RIGHT then
         -- 右键删除
@@ -1284,8 +1209,7 @@ function HandleDecorationToolClick(button, col, row)
             if S.selectedDecorationIndex == existIdx then
                 S.selectedDecorationIndex = 0
             end
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("删除装饰", 1.5)
         end
     end
@@ -1328,8 +1252,7 @@ function FinishDecoDrag(mx, my)
         deco.row = row
         if col ~= S.decoDragStartCol or row ~= S.decoDragStartRow then
             -- 真正移动了 → 标记脏
-            Undo.dirty = true
-            Undo.saveTimer = Undo.saveDelay
+                        Undo.MarkDirty()
             S.SetMessage("装饰已移动到 (" .. col .. "," .. row .. ")", 1.5)
         else
             -- 原地释放 → 打开编辑弹窗
@@ -1341,7 +1264,7 @@ function FinishDecoDrag(mx, my)
             S.decoDialogTouchTransform = deco.touchTransform or false
             S.decoDialogTransformTarget = deco.transformTarget or 0
             S.currentDecorationType = deco.typeId or 1
-            Dialogs.OpenDecorationDialog()
+            Dialogs.OpenDecoPropertyDialog()
         end
     end
     S.decoDragIndex = 0
@@ -1353,15 +1276,7 @@ end
 
 function M.HandleMouseUp(button, mx, my)
     if S.editorMode == MODE.PLAY or S.editorMode == MODE.WORLDPLAY then
-        -- GM工具拖拽释放
-        if button == MOUSEB_LEFT then
-            local fitScale = math.min(S.screenDesignW / S.playViewW, S.screenDesignH / S.playViewH)
-            local offsetX = (S.screenDesignW - S.playViewW * fitScale) * 0.5
-            local offsetY = (S.screenDesignH - S.playViewH * fitScale) * 0.5
-            local pmx = (mx - offsetX) / fitScale
-            local pmy = (my - offsetY) / fitScale
-            GMTool.HandleMouseUp(pmx, pmy)
-        end
+        -- GM 工具已迁移到 HUD 栏，无需拖拽释放处理
         return
     end
 
@@ -1418,6 +1333,7 @@ function HandleLeftRelease(mx, my)
                     end
                 else
                     -- 普通工具：直接选中
+                    ---@diagnostic disable-next-line: assign-type-mismatch
                     local prevTool = S.currentTool
                     S.currentTool = toolIdx
                     S.interactMode = INTERACT.DRAW
@@ -1720,8 +1636,7 @@ function ExecuteMultiMove(targetCol, targetRow)
         st.row = st.row + offsetRow
     end
     S.lightSources = FogOfWar.GetLightSources()
-    Undo.dirty = true
-    Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
     S.SetMessage(#S.selectedTiles .. " 个物体已移动", 1.5)
 end
 
@@ -1756,8 +1671,7 @@ function ExecuteDecorationMove(col, row)
         S.selectedTiles[1].col = col
         S.selectedTiles[1].row = row
     end
-    Undo.dirty = true
-    Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
     S.SetMessage("装饰物已移动到 (" .. col .. "," .. row .. ")", 1.5)
 end
 
@@ -1766,8 +1680,7 @@ function ExecuteLightMove(col, row)
     S.lightSources = FogOfWar.GetLightSources()
     S.selectedTileCol = col
     S.selectedTileRow = row
-    Undo.dirty = true
-    Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
     S.SetMessage("光源已移动到 (" .. col .. "," .. row .. ")", 1.5)
 end
 
@@ -1790,8 +1703,7 @@ function ExecuteSingleTileMove(col, row)
     Undo.RecordTileChange(col, row, TILE.EMPTY, oldVal)
     S.selectedTileCol = col
     S.selectedTileRow = row
-    Undo.dirty = true
-    Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
     local names = { [TILE.SPAWN]="主角", [TILE.FUEL]="火焰", [TILE.GOAL]="终点",
                     [TILE.SPIKE]="刺", [TILE.SWITCH]="开关", [TILE.GATE]="门" }
     S.SetMessage((names[base] or "物体") .. " 移动到 (" .. col .. "," .. row .. ")", 1.5)
@@ -1893,12 +1805,10 @@ function DeleteSelection()
     end
     if lightRemoveCount > 0 then
         S.lightSources = FogOfWar.GetLightSources()
-        Undo.dirty = true
-        Undo.saveTimer = Undo.saveDelay
+                Undo.MarkDirty()
     end
     if decoRemoveCount > 0 then
-        Undo.dirty = true
-        Undo.saveTimer = Undo.saveDelay
+                Undo.MarkDirty()
     end
 
     local total = #deltas + lightRemoveCount + decoRemoveCount
@@ -2016,8 +1926,7 @@ function PasteClipboard()
     end
     if lightPastedCount > 0 then
         S.lightSources = FogOfWar.GetLightSources()
-        Undo.dirty = true
-        Undo.saveTimer = Undo.saveDelay
+                Undo.MarkDirty()
     end
 
     local total = pastedCount + lightPastedCount

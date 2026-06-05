@@ -7,6 +7,7 @@ function DeathRespawn.Attach(M)
 
     local C = require("editor.Constants")
     local S = require("editor.State")
+    local TileUtils = require("editor.TileUtils")
     local CrossLevel = require("editor.CrossLevel")
 
     local CIRCLE_CLOSE_TIME = 0.6   -- 缩圈时间
@@ -100,6 +101,7 @@ function DeathRespawn.Attach(M)
         S.play.jumpTimer = 0
         -- 死亡复活恢复满血，跳跃力归零
         S.play.fallGridCount = 0
+        S.play.groundedFrames = 0
         S.play.isMoving = false
         S.play.moveAnimTime = 0
         S.play.fallAnimTime = 0
@@ -117,6 +119,34 @@ function DeathRespawn.Attach(M)
         S.play.fragilePrevPlatform = nil
         S.play.fragileGone = {}
         S.play.fragileParticles = {}
+
+        -- === 机关复位：重置开关、燃料、火焰光源 ===
+        -- 1. 重置开关状态
+        S.play.switchState = {}
+        -- 2. 清除已拾取的燃料和开关（保留其他类型如能力点）
+        local removeKeys = {}
+        for ckey, _ in pairs(S.play.collected) do
+            local cr, cc = ckey:match("^(%d+)_(%d+)$")
+            if cr and cc then
+                local cRow = tonumber(cr)
+                local cCol = tonumber(cc)
+                local rd = S.levelData[cRow]
+                if rd then
+                    local tv = rd[cCol]
+                    if tv then
+                        local tb = TileUtils.GetTileType(tv)
+                        if tb == C.TILE.FUEL or tb == C.TILE.SWITCH then
+                            removeKeys[#removeKeys + 1] = ckey
+                        end
+                    end
+                end
+            end
+        end
+        for _, rk in ipairs(removeKeys) do
+            S.play.collected[rk] = nil
+        end
+        -- 3. 重置火焰光源（已被点燃的恢复为熄灭状态）
+        M._fogOfWar.ResetIgnitedLights()
 
         if useBonfire then
             local key = S.checkpointRow .. "_" .. S.checkpointCol

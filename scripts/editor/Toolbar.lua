@@ -334,12 +334,19 @@ function M.DrawTopBar()
 end
 
 -- ====================================================================
--- DrawToolbar - 绘制底部工具栏（交互模式+工具按钮+颜色分组）
+-- DrawToolbar - 绘制底部工具栏（交互模式 + 分类标签 + 当前工具）
 -- ====================================================================
 function M.DrawToolbar()
     local vg = S.vg
     local toolBarH = C.BOTTOMBAR_H
     local barY = S.screenDesignH - toolBarH - 16  -- 16 = 状态栏高度
+
+    -- 背景
+    nvgBeginPath(vg)
+    nvgRect(vg, 0, barY, S.screenDesignW, toolBarH)
+    nvgFillPaint(vg, nvgLinearGradient(vg, 0, barY, 0, barY + toolBarH,
+        nvgRGBA(22, 22, 34, 245), nvgRGBA(16, 16, 26, 250)))
+    nvgFill(vg)
 
     -- 顶部分隔线
     nvgBeginPath(vg)
@@ -350,7 +357,8 @@ function M.DrawToolbar()
     nvgStroke(vg)
 
     M.DrawInteractModeButtons(vg, barY)
-    M.DrawToolButtons(vg, barY, toolBarH)
+    M.DrawCategoryTabs(vg, barY, toolBarH)
+    M.DrawCurrentToolIndicator(vg, barY, toolBarH)
     M.DrawGroupIndicator(vg, barY, toolBarH)
 end
 
@@ -399,6 +407,17 @@ M.TOOL_BTN_PAD = 4
 M.EDIT_BTN_W = 20       -- 编辑按钮宽度
 M.EDIT_BTN_H = 14       -- 编辑按钮高度
 M.EDIT_BTN_GAP = 4      -- 编辑按钮与工具区的间距
+
+-- ====================================================================
+-- 分类面板布局常量
+-- ====================================================================
+M.CAT_TAB_H = 16         -- 分类标签高度
+M.CAT_TAB_PAD = 3        -- 标签间距
+M.CAT_TAB_START_X = 32   -- 标签起始 X（交互模式按钮右侧）
+M.PANEL_BTN_W = 42       -- 面板中工具按钮宽度
+M.PANEL_BTN_H = 22       -- 面板中工具按钮高度
+M.PANEL_BTN_PAD = 3      -- 面板按钮间距
+M.PANEL_COLS = 4          -- 面板网格列数
 
 -- ====================================================================
 -- GetToolOrder - 获取当前工具显示顺序（隐藏子菜单中非代表工具）
@@ -681,18 +700,329 @@ function M.DrawEditButton(vg, barY, toolBarH)
 end
 
 -- ====================================================================
+-- DrawCategoryTabs - 绘制分类标签行（替代原水平滚动工具栏）
+-- ====================================================================
+function M.DrawCategoryTabs(vg, barY, toolBarH)
+    local startX = M.CAT_TAB_START_X
+    local tabH = M.CAT_TAB_H
+    local tabPad = M.CAT_TAB_PAD
+    local tabY = barY + 4
+
+    nvgFontFace(vg, "sans")
+
+    -- 缓存标签布局供命中检测使用
+    S.categoryTabRects = S.categoryTabRects or {}
+
+    local curX = startX
+    for i, group in ipairs(C.TOOL_GROUPS) do
+        local label = group.name
+        nvgFontSize(vg, 9)
+        local textW = nvgTextBounds(vg, 0, 0, label)
+        local tabW = textW + 12
+
+        -- 判断是否是当前工具所属分类
+        local currentToolGroup = C.TOOLS[S.currentTool] and C.TOOLS[S.currentTool].group or ""
+        local isActive = (group.id == currentToolGroup)
+        local isPanelOpen = (S.toolPanelOpen and S.toolPanelCategory == group.id)
+
+        -- 标签背景
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, curX, tabY, tabW, tabH, tabH * 0.5)
+        if isPanelOpen then
+            nvgFillColor(vg, nvgRGBA(group.color[1], group.color[2], group.color[3], 200))
+        elseif isActive then
+            nvgFillColor(vg, nvgRGBA(group.color[1], group.color[2], group.color[3], 120))
+        else
+            nvgFillColor(vg, nvgRGBA(35, 38, 50, 255))
+        end
+        nvgFill(vg)
+
+        -- 标签边框
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, curX, tabY, tabW, tabH, tabH * 0.5)
+        nvgStrokeColor(vg, nvgRGBA(group.color[1], group.color[2], group.color[3], isPanelOpen and 255 or (isActive and 200 or 80)))
+        nvgStrokeWidth(vg, 0.8)
+        nvgStroke(vg)
+
+        -- 标签文字
+        nvgFontSize(vg, 9)
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, nvgRGBA(255, 255, 255, isPanelOpen and 255 or (isActive and 240 or 160)))
+        nvgText(vg, curX + tabW * 0.5, tabY + tabH * 0.5, label)
+
+        -- 存储位置
+        S.categoryTabRects[i] = { x = curX, y = tabY, w = tabW, h = tabH, groupId = group.id }
+
+        curX = curX + tabW + tabPad
+    end
+end
+
+-- ====================================================================
+-- DrawCurrentToolIndicator - 当前工具名称显示（标签行下方）
+-- ====================================================================
+function M.DrawCurrentToolIndicator(vg, barY, toolBarH)
+    local tool = C.TOOLS[S.currentTool]
+    if not tool then return end
+
+    local indicatorY = barY + 4 + M.CAT_TAB_H + 4
+    local startX = M.CAT_TAB_START_X
+
+    -- 当前工具色块 + 名称
+    local c = tool.color
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, startX, indicatorY, 8, 12, 2)
+    nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], 255))
+    nvgFill(vg)
+
+    nvgFontFace(vg, "sans")
+    nvgFontSize(vg, 10)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(240, 240, 250, 255))
+    nvgText(vg, startX + 12, indicatorY + 6, tool.name)
+
+    -- 分组色带（在名称右侧）
+    local gc = C.GetToolGroupColor(tool)
+    local nameW = nvgTextBounds(vg, 0, 0, tool.name)
+    nvgBeginPath(vg)
+    nvgCircle(vg, startX + 12 + nameW + 8, indicatorY + 6, 3)
+    nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], 200))
+    nvgFill(vg)
+
+    -- 快捷键提示
+    nvgFontSize(vg, 8)
+    nvgFillColor(vg, nvgRGBA(150, 150, 170, 180))
+    nvgText(vg, startX + 12 + nameW + 16, indicatorY + 6, "[1-9切换]")
+
+    -- 第二行：子菜单同类工具快速预览
+    if tool.submenu and C.SUBMENU_GROUPS[tool.submenu] then
+        local subGroup = C.SUBMENU_GROUPS[tool.submenu]
+        local previewY = indicatorY + 16
+        local previewX = startX
+        nvgFontSize(vg, 8)
+        for _, tIdx in ipairs(subGroup.tools) do
+            local subTool = C.TOOLS[tIdx]
+            if subTool then
+                local sc = subTool.color
+                local isSelected = (tIdx == S.currentTool)
+                nvgBeginPath(vg)
+                nvgRoundedRect(vg, previewX, previewY, 28, 11, 3)
+                nvgFillColor(vg, nvgRGBA(sc[1], sc[2], sc[3], isSelected and 255 or 100))
+                nvgFill(vg)
+                if isSelected then
+                    nvgBeginPath(vg)
+                    nvgRoundedRect(vg, previewX - 1, previewY - 1, 30, 13, 4)
+                    nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 180))
+                    nvgStrokeWidth(vg, 1)
+                    nvgStroke(vg)
+                end
+                nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+                nvgFillColor(vg, nvgRGBA(255, 255, 255, isSelected and 255 or 180))
+                nvgText(vg, previewX + 14, previewY + 5.5, subTool.name)
+                previewX = previewX + 31
+            end
+        end
+    end
+end
+
+-- ====================================================================
+-- DrawToolPanel - 绘制弹出工具选择面板（某分类下的所有工具网格）
+-- ====================================================================
+function M.DrawToolPanel()
+    if not S.toolPanelOpen or not S.toolPanelCategory then return end
+    local vg = S.vg
+
+    -- 收集该分类下的所有工具
+    local tools = M.GetToolsInCategory(S.toolPanelCategory)
+    if #tools == 0 then return end
+
+    local toolBarH = C.BOTTOMBAR_H
+    local barY = S.screenDesignH - toolBarH - 16
+
+    local cols = M.PANEL_COLS
+    local btnW = M.PANEL_BTN_W
+    local btnH = M.PANEL_BTN_H
+    local btnPad = M.PANEL_BTN_PAD
+    local rows = math.ceil(#tools / cols)
+
+    local panelPadX = 8
+    local panelPadY = 6
+    local panelW = cols * (btnW + btnPad) - btnPad + panelPadX * 2
+    local panelH = rows * (btnH + btnPad) - btnPad + panelPadY * 2 + 16  -- 16 for title
+
+    -- 面板位置：在工具栏上方弹出，水平居中于对应标签
+    local anchorX = M.CAT_TAB_START_X
+    -- 找到对应标签位置
+    if S.categoryTabRects then
+        for _, rect in ipairs(S.categoryTabRects) do
+            if rect.groupId == S.toolPanelCategory then
+                anchorX = rect.x + rect.w * 0.5
+                break
+            end
+        end
+    end
+
+    local panelX = anchorX - panelW * 0.5
+    -- 边界约束
+    panelX = math.max(4, math.min(S.screenDesignW - panelW - 4, panelX))
+    local panelY = barY - panelH - 4
+
+    -- 保存面板位置供命中检测
+    S.toolPanelRect = { x = panelX, y = panelY, w = panelW, h = panelH }
+
+    -- 面板背景（半透明深色）
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, panelX, panelY, panelW, panelH, 6)
+    nvgFillColor(vg, nvgRGBA(20, 22, 35, 245))
+    nvgFill(vg)
+
+    -- 面板边框
+    nvgBeginPath(vg)
+    nvgRoundedRect(vg, panelX, panelY, panelW, panelH, 6)
+    local catColor = {100, 100, 100}
+    for _, g in ipairs(C.TOOL_GROUPS) do
+        if g.id == S.toolPanelCategory then catColor = g.color; break end
+    end
+    nvgStrokeColor(vg, nvgRGBA(catColor[1], catColor[2], catColor[3], 180))
+    nvgStrokeWidth(vg, 1)
+    nvgStroke(vg)
+
+    -- 底部指示三角
+    local triCx = math.max(panelX + 10, math.min(panelX + panelW - 10, anchorX))
+    nvgBeginPath(vg)
+    nvgMoveTo(vg, triCx - 5, panelY + panelH)
+    nvgLineTo(vg, triCx + 5, panelY + panelH)
+    nvgLineTo(vg, triCx, panelY + panelH + 4)
+    nvgClosePath(vg)
+    nvgFillColor(vg, nvgRGBA(20, 22, 35, 245))
+    nvgFill(vg)
+
+    -- 标题
+    nvgFontFace(vg, "sans")
+    nvgFontSize(vg, 9)
+    nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+    nvgFillColor(vg, nvgRGBA(catColor[1], catColor[2], catColor[3], 255))
+    local titleLabel = ""
+    for _, g in ipairs(C.TOOL_GROUPS) do
+        if g.id == S.toolPanelCategory then titleLabel = g.name; break end
+    end
+    nvgText(vg, panelX + panelPadX, panelY + 9, titleLabel)
+
+    -- 工具按钮网格
+    local gridStartX = panelX + panelPadX
+    local gridStartY = panelY + 16 + panelPadY
+
+    -- 鼠标位置（用于 hover）
+    local rawMx = input:GetMousePosition().x / S.dpr / S.scaleF
+    local rawMy = input:GetMousePosition().y / S.dpr / S.scaleF
+
+    -- 保存按钮位置列表
+    S.toolPanelButtons = S.toolPanelButtons or {}
+    for idx = 1, #tools do S.toolPanelButtons[idx] = nil end
+
+    for idx, toolInfo in ipairs(tools) do
+        local toolIdx = toolInfo.index
+        local tool = toolInfo.def
+        local col = (idx - 1) % cols
+        local row = math.floor((idx - 1) / cols)
+        local bx = gridStartX + col * (btnW + btnPad)
+        local by = gridStartY + row * (btnH + btnPad)
+
+        -- 存储按钮位置
+        S.toolPanelButtons[idx] = { x = bx, y = by, w = btnW, h = btnH, toolIdx = toolIdx }
+
+        local isSelected = (toolIdx == S.currentTool)
+        local isHover = rawMx >= bx and rawMx < bx + btnW and rawMy >= by and rawMy < by + btnH
+
+        -- 按钮背景
+        local c = tool.color
+        local alpha = isSelected and 255 or (isHover and 200 or 140)
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, bx, by, btnW, btnH, 4)
+        nvgFillColor(vg, nvgRGBA(c[1], c[2], c[3], alpha))
+        nvgFill(vg)
+
+        -- 选中高亮框
+        if isSelected then
+            nvgBeginPath(vg)
+            nvgRoundedRect(vg, bx - 1, by - 1, btnW + 2, btnH + 2, 5)
+            nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 220))
+            nvgStrokeWidth(vg, 1.5)
+            nvgStroke(vg)
+        elseif isHover then
+            nvgBeginPath(vg)
+            nvgRoundedRect(vg, bx - 1, by - 1, btnW + 2, btnH + 2, 5)
+            nvgStrokeColor(vg, nvgRGBA(200, 200, 220, 150))
+            nvgStrokeWidth(vg, 1)
+            nvgStroke(vg)
+        end
+
+        -- 工具名称
+        nvgFontFace(vg, "sans")
+        nvgFontSize(vg, 9)
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, nvgRGBA(255, 255, 255, isSelected and 255 or 220))
+        nvgText(vg, bx + btnW * 0.5, by + btnH * 0.5, tool.name)
+    end
+end
+
+-- ====================================================================
+-- GetToolsInCategory - 获取某分类下的所有工具（含索引）
+-- ====================================================================
+function M.GetToolsInCategory(categoryId)
+    local result = {}
+    for i, tool in ipairs(C.TOOLS) do
+        if tool.group == categoryId then
+            result[#result + 1] = { index = i, def = tool }
+        end
+    end
+    return result
+end
+
+-- ====================================================================
+-- HitTestCategoryTabs - 检测分类标签点击
+-- ====================================================================
+---@return string|nil 命中的分类 id
+function M.HitTestCategoryTabs(mx, my)
+    if not S.categoryTabRects then return nil end
+    for _, rect in ipairs(S.categoryTabRects) do
+        if mx >= rect.x and mx < rect.x + rect.w and my >= rect.y and my < rect.y + rect.h then
+            return rect.groupId
+        end
+    end
+    return nil
+end
+
+-- ====================================================================
+-- HitTestToolPanel - 检测工具面板中的按钮点击
+-- ====================================================================
+---@return number|nil 命中的工具索引（C.TOOLS 中的索引）
+function M.HitTestToolPanel(mx, my)
+    if not S.toolPanelOpen or not S.toolPanelButtons then return nil end
+    for _, btn in ipairs(S.toolPanelButtons) do
+        if btn and mx >= btn.x and mx < btn.x + btn.w and my >= btn.y and my < btn.y + btn.h then
+            return btn.toolIdx
+        end
+    end
+    return nil
+end
+
+-- ====================================================================
+-- IsInsideToolPanel - 检测点击是否在面板区域内
+-- ====================================================================
+function M.IsInsideToolPanel(mx, my)
+    if not S.toolPanelOpen or not S.toolPanelRect then return false end
+    local r = S.toolPanelRect
+    return mx >= r.x - 2 and mx <= r.x + r.w + 2
+       and my >= r.y - 2 and my <= r.y + r.h + 6
+end
+
+-- ====================================================================
 -- DrawGroupIndicator - 工具栏右侧颜色分组指示器
 -- ====================================================================
 function M.DrawGroupIndicator(vg, barY, toolBarH)
-    local btnW = 36
-    local btnH = 28
-    local btnPad = 4
-    local totalW = #C.TOOLS * (btnW + btnPad) - btnPad
-    local startX = (S.screenDesignW - totalW) * 0.5
-    local btnY = barY + (toolBarH - btnH) * 0.5
-
-    local indicatorX = startX + totalW + 12
-    local indicatorY = btnY + btnH * 0.5
+    -- 放在工具栏右下角
+    local indicatorX = S.screenDesignW - C.MAX_GROUPS * 14 - 40
+    local indicatorY = barY + toolBarH * 0.5
     local sgc = C.GROUP_COLORS[S.currentGroup]
 
     for gi = 1, C.MAX_GROUPS do
@@ -702,13 +1032,13 @@ function M.DrawGroupIndicator(vg, barY, toolBarH)
         local alpha = (gi == S.currentGroup) and 255 or 100
 
         nvgBeginPath(vg)
-        nvgCircle(vg, gx, indicatorY - 2, radius)
+        nvgCircle(vg, gx, indicatorY, radius)
         nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], alpha))
         nvgFill(vg)
 
         if gi == S.currentGroup then
             nvgBeginPath(vg)
-            nvgCircle(vg, gx, indicatorY - 2, radius + 1.5)
+            nvgCircle(vg, gx, indicatorY, radius + 1.5)
             nvgStrokeColor(vg, nvgRGBA(255, 255, 255, 200))
             nvgStrokeWidth(vg, 1.5)
             nvgStroke(vg)
@@ -719,7 +1049,7 @@ function M.DrawGroupIndicator(vg, barY, toolBarH)
     nvgFontSize(vg, 8)
     nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
     nvgFillColor(vg, nvgRGBA(sgc[1], sgc[2], sgc[3], 255))
-    nvgText(vg, indicatorX + C.MAX_GROUPS * 14 + 2, indicatorY - 2,
+    nvgText(vg, indicatorX + C.MAX_GROUPS * 14 + 2, indicatorY,
         C.GROUP_NAMES[S.currentGroup] .. " [G]")
 end
 

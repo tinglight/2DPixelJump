@@ -15,69 +15,14 @@ function Renderer.Attach(M)
     local CrossLevel = require("editor.CrossLevel")
     local FlameDashChain = require("gameplay.FlameDashChain")
     local GMTool = require("editor.GMTool")
+    local PixelFont = require("rendering.PixelFont")
 
     -- 装饰物图片句柄缓存
     local playDecoImageCache = {}
 
-    ------------------------------------------------------------
-    -- 像素字体 (5x7 bitmap)
-    ------------------------------------------------------------
-
-    local PIXEL_FONT = {
-        A = { "01110", "10001", "10001", "11111", "10001", "10001", "10001" },
-        B = { "11110", "10001", "10001", "11110", "10001", "10001", "11110" },
-        C = { "01110", "10001", "10000", "10000", "10000", "10001", "01110" },
-        D = { "11100", "10010", "10001", "10001", "10001", "10010", "11100" },
-        E = { "11111", "10000", "10000", "11110", "10000", "10000", "11111" },
-        F = { "11111", "10000", "10000", "11110", "10000", "10000", "10000" },
-        G = { "01110", "10001", "10000", "10111", "10001", "10001", "01110" },
-        H = { "10001", "10001", "10001", "11111", "10001", "10001", "10001" },
-        I = { "11111", "00100", "00100", "00100", "00100", "00100", "11111" },
-        K = { "10001", "10010", "10100", "11000", "10100", "10010", "10001" },
-        L = { "10000", "10000", "10000", "10000", "10000", "10000", "11111" },
-        M = { "10001", "11011", "10101", "10101", "10001", "10001", "10001" },
-        N = { "10001", "11001", "10101", "10011", "10001", "10001", "10001" },
-        O = { "01110", "10001", "10001", "10001", "10001", "10001", "01110" },
-        P = { "11110", "10001", "10001", "11110", "10000", "10000", "10000" },
-        R = { "11110", "10001", "10001", "11110", "10100", "10010", "10001" },
-        S = { "01111", "10000", "10000", "01110", "00001", "00001", "11110" },
-        T = { "11111", "00100", "00100", "00100", "00100", "00100", "00100" },
-        U = { "10001", "10001", "10001", "10001", "10001", "10001", "01110" },
-        W = { "10001", "10001", "10001", "10101", "10101", "11011", "10001" },
-        X = { "10001", "01010", "00100", "00100", "00100", "01010", "10001" },
-        Y = { "10001", "10001", "01010", "00100", "00100", "00100", "00100" },
-        [" "] = { "00000", "00000", "00000", "00000", "00000", "00000", "00000" },
-        [":"] = { "00000", "00100", "00100", "00000", "00100", "00100", "00000" },
-    }
-
-    --- 绘制像素字体文本（居中）
+    --- 绘制像素字体文本（居中），委托到共享模块
     function M.DrawPixelText(vg, text, cx, cy, pixSize, r, g, b, a)
-        local gap = 1
-        local charW = 5
-        local charH = 7
-        local totalW = #text * (charW + gap) - gap
-        local startX = cx - totalW * pixSize * 0.5
-        local startY = cy - charH * pixSize * 0.5
-
-        nvgFillColor(vg, nvgRGBA(r, g, b, a))
-        for ci = 1, #text do
-            local ch = text:sub(ci, ci)
-            local glyph = PIXEL_FONT[ch]
-            if glyph then
-                local ox = startX + (ci - 1) * (charW + gap) * pixSize
-                for row = 1, charH do
-                    local rowStr = glyph[row]
-                    for col = 1, charW do
-                        ---@diagnostic disable-next-line: param-type-mismatch
-                        if rowStr:sub(col, col) == "1" then
-                            nvgBeginPath(vg)
-                            nvgRect(vg, ox + (col - 1) * pixSize, startY + (row - 1) * pixSize, pixSize, pixSize)
-                            nvgFill(vg)
-                        end
-                    end
-                end
-            end
-        end
+        PixelFont.Draw(vg, text, cx, cy, pixSize, r, g, b, a)
     end
 
     ------------------------------------------------------------
@@ -144,8 +89,7 @@ function Renderer.Attach(M)
         M.DrawFuelBurst(vg, S.playCameraX, S.playCameraY)
         CrossLevel.Draw(vg, S.playCameraX, S.playCameraY)
         M.DrawFogOfWar(vg, startCol, endCol)
-        M.DrawHUD(vg)
-        GMTool.Draw(vg)
+        -- GMTool 已移到外部 HUD 栏（DrawExternalHUD）
         M.DrawOverlays(vg)
         M.DrawTransition()
     end
@@ -455,10 +399,19 @@ function Renderer.Attach(M)
         local gx = S.play.gridX
         local gy = S.play.gridY
         local ps = M.PlayerGridSize()
+        local curtainDirX = S.play.facingRight and 1.0 or -1.0
+        -- 玩家占据的格子触发晃动
         if col >= gx and col < gx + ps and row >= gy and row < gy + ps then
-            CurtainRenderer.TriggerSway(col, row, 1.2)
+            CurtainRenderer.TriggerSway(col, row, 1.2, curtainDirX)
             CurtainRenderer.PropagateSwayToNeighbors(col, row, 1.0,
-                S.levelData, C.TILE, TileUtils.GetTileType)
+                S.levelData, C.TILE, TileUtils.GetTileType, curtainDirX)
+        end
+        -- 玩家前方相邻列也触发（提前推开效果）
+        local frontCol = S.play.facingRight and (gx + ps) or (gx - 1)
+        if col == frontCol and row >= gy and row < gy + ps then
+            CurtainRenderer.TriggerSway(col, row, 0.8, curtainDirX)
+            CurtainRenderer.PropagateSwayToNeighbors(col, row, 0.6,
+                S.levelData, C.TILE, TileUtils.GetTileType, curtainDirX)
         end
     end
 
@@ -972,7 +925,7 @@ function Renderer.Attach(M)
         nvgFontSize(vg, 11)
         nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
 
-        local flamePercent = math.floor(S.playAlivePixels / math.max(1, S.playTotalPixels) * 100)
+        local flamePercent = M.GetFlamePercent()
         local flameG = math.floor(200 * (flamePercent / 100))
         nvgFillColor(vg, nvgRGBA(255, flameG, 30, 255))
         nvgText(vg, 6, 11, "FLAME:" .. flamePercent .. "%")
@@ -1431,6 +1384,73 @@ function Renderer.Attach(M)
 
                 ::continuePlay::
             end
+        end
+    end
+
+    -- ====================================================================
+    -- 外部 HUD（绘制在游戏视口外的顶部栏，不遮挡游戏场景）
+    -- ====================================================================
+    function M.DrawExternalHUD(barW, barH)
+        local vg = S.vg
+        local midY = barH * 0.5
+
+        -- 背景条（比纯黑稍有区分）
+        nvgBeginPath(vg)
+        nvgRect(vg, 0, 0, barW, barH)
+        nvgFillColor(vg, nvgRGBA(15, 12, 20, 240))
+        nvgFill(vg)
+        -- 底部分隔线
+        nvgBeginPath(vg)
+        nvgRect(vg, 0, barH - 1, barW, 1)
+        nvgFillColor(vg, nvgRGBA(60, 50, 40, 150))
+        nvgFill(vg)
+
+        nvgFontFace(vg, "sans")
+        nvgFontSize(vg, 11)
+        nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
+
+        -- FLAME 百分比（档位制，始终为10的倍数）
+        local flamePercent = M.GetFlamePercent()
+        local flameG = math.floor(200 * (flamePercent / 100))
+        nvgFillColor(vg, nvgRGBA(255, flameG, 30, 255))
+        nvgText(vg, 6, midY, "FLAME:" .. flamePercent .. "%")
+
+        -- JUMP 高度
+        nvgFillColor(vg, nvgRGBA(150, 255, 150, 255))
+        nvgText(vg, 100, midY, "JUMP:" .. M.CalcJump() .. "G")
+
+        -- GM 按钮（在 JUMP 右侧）
+        if GMTool.IsActive() then
+            GMTool.DrawHUD(vg, barH)
+        end
+
+        -- 返回按钮
+        local isWorldPlay = (S.editorMode == C.MODE_WORLDPLAY)
+        local backBtnLabel = isWorldPlay and "返回世界" or "返回编辑"
+        local backBtnW = isWorldPlay and 60 or 50
+        local backBtnH = 16
+        local backBtnX = barW - backBtnW - 6
+        local backBtnY = (barH - backBtnH) * 0.5
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, backBtnX, backBtnY, backBtnW, backBtnH, 3)
+        nvgFillColor(vg, nvgRGBA(80, 60, 40, 230))
+        nvgFill(vg)
+        nvgBeginPath(vg)
+        nvgRoundedRect(vg, backBtnX, backBtnY, backBtnW, backBtnH, 3)
+        nvgStrokeColor(vg, nvgRGBA(255, 180, 80, 180))
+        nvgStrokeWidth(vg, 1)
+        nvgStroke(vg)
+        nvgFontSize(vg, 10)
+        nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_MIDDLE)
+        nvgFillColor(vg, nvgRGBA(255, 220, 150, 255))
+        nvgText(vg, backBtnX + backBtnW * 0.5, backBtnY + backBtnH * 0.5, backBtnLabel)
+
+        -- 世界试玩模式文件名
+        if S.editorMode == C.MODE_WORLDPLAY and S.worldPlayCurrentFile then
+            nvgFontSize(vg, 9)
+            nvgTextAlign(vg, NVG_ALIGN_CENTER + NVG_ALIGN_TOP)
+            nvgFillColor(vg, nvgRGBA(180, 220, 255, 200))
+            nvgText(vg, barW * 0.5, 3, S.worldPlayCurrentFile)
         end
     end
 

@@ -12,21 +12,39 @@ function Lifecycle.Attach(M)
     local CrossLevel = require("editor.CrossLevel")
 
     function M.StartPlayMode()
-        -- 进入试玩前保存编辑器当前光源快照（深拷贝）
-        M._savedEditorLightSources = M._DeepCopyLightSources(M._fogOfWar.GetLightSources())
+        -- 仅从编辑模式首次进入时保存快照；R键重启时复用已有快照
+        if S.editorMode ~= C.MODE_PLAY and S.editorMode ~= C.MODE_WORLDPLAY then
+            M._savedEditorLightSources = M._DeepCopyLightSources(M._fogOfWar.GetLightSources())
+            M._savedSpawnCol = S.spawnCol
+            M._savedSpawnRow = S.spawnRow
+        end
         S.editorMode = C.MODE_PLAY
         M._ResetPlayState()
         S.SetMessage("试玩中! ESC返回编辑", 2.0)
     end
 
-    --- 退出试玩模式时恢复编辑器原始光源（所有退出路径必须调用）
+    --- 退出试玩模式时恢复编辑器原始状态（所有退出路径必须调用）
+    --- 试玩模式中对共享状态的修改（出生点、光源等）均为临时修改，退出时必须全部恢复。
     function M.ExitPlayMode()
         M._CleanupCheckpointLight()
         PipeSystem.StopSound()
+        -- 恢复光源
         if M._savedEditorLightSources then
-            M._fogOfWar.SetLightSources(M._DeepCopyLightSources(M._savedEditorLightSources))
+            local restored = M._DeepCopyLightSources(M._savedEditorLightSources)
+            -- 防御性清理：确保恢复到编辑器的灯光没有试玩模式的 zone 残留标记
+            for _, light in ipairs(restored) do
+                light._originalDiameter = nil
+            end
+            M._fogOfWar.SetLightSources(restored)
             S.lightSources = M._fogOfWar.GetLightSources()
             M._savedEditorLightSources = nil
+        end
+        -- 恢复出生点（试玩模式中世界关卡加载/篝火存档会修改 spawnCol/spawnRow）
+        if M._savedSpawnCol then
+            S.spawnCol = M._savedSpawnCol
+            S.spawnRow = M._savedSpawnRow
+            M._savedSpawnCol = nil
+            M._savedSpawnRow = nil
         end
         M._fogOfWar.ResetZoneState()
     end
@@ -64,7 +82,7 @@ function Lifecycle.Attach(M)
                     callback(nil)
                 end
             end,
-            err = function()
+            error = function()
                 callback(nil)
             end
         })
@@ -82,8 +100,16 @@ function Lifecycle.Attach(M)
             return
         end
 
+        -- 保存编辑器原始出生点（在异步回调加载关卡前），退出时恢复
+        M._savedSpawnCol = S.spawnCol
+        M._savedSpawnRow = S.spawnRow
+
+        -- 获取配置的初始关卡（H键设置），若有则忽略存档直接从此关卡开始
+        local configuredStart = M._worldMapEditor.GetStartFile()
+
         M.LoadPlayerProgress(function(progress)
-            if progress and progress.checkpointFile then
+            -- 仅在未配置初始关卡时，才尝试从篝火存档恢复
+            if not configuredStart and progress and progress.checkpointFile then
                 if M._cloudStorage.Exists(progress.checkpointFile) and M.WorldPlayLoadLevel(progress.checkpointFile, nil) then
                     S.worldPlayCurrentFile = progress.checkpointFile
                     S.worldPlayCooldown = 0
@@ -108,11 +134,13 @@ function Lifecycle.Attach(M)
                     return
                 end
             end
-            if not M.WorldPlayLoadLevel(firstNode.file, nil) then
-                S.SetMessage("加载关卡失败: " .. firstNode.file, 3.0)
+            -- 使用配置的初始关卡，若未配置则使用第一个节点
+            local startFile = configuredStart or firstNode.file
+            if not M.WorldPlayLoadLevel(startFile, nil) then
+                S.SetMessage("加载关卡失败: " .. startFile, 3.0)
                 return
             end
-            S.worldPlayCurrentFile = firstNode.file
+            S.worldPlayCurrentFile = startFile
             S.worldPlayCooldown = 0
             S.editorMode = C.MODE_WORLDPLAY
             M._savedEditorLightSources = M._DeepCopyLightSources(M._fogOfWar.GetLightSources())

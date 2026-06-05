@@ -18,6 +18,7 @@ local CurtainRenderer = require("rendering.CurtainRenderer")
 local FlameDashChain = require("gameplay.FlameDashChain")
 local Fireball = require("gameplay.Fireball")
 local FogOfWar = require("rendering.FogOfWar")
+local BonfireRefresh = require("gameplay.BonfireRefresh")
 
 -- ====================================================================
 -- 注入依赖
@@ -37,6 +38,25 @@ LevelManager.Inject({
 })
 LevelManager.TILE = LevelGenerator.TILE
 
+BonfireRefresh.Inject({
+    LevelManager = LevelManager,
+    Physics = Physics,
+})
+
+-- 注册可复位机关到篝火刷新系统（篝火点燃/玩家重生时统一复位）
+BonfireRefresh.Register({
+    name = "FUEL",
+    refresh = function() BonfireRefresh.RefreshFuel() end,
+})
+BonfireRefresh.Register({
+    name = "Lights",
+    refresh = function() BonfireRefresh.RefreshLights() end,
+})
+BonfireRefresh.Register({
+    name = "Switches",
+    refresh = function() BonfireRefresh.RefreshSwitches() end,
+})
+
 PlayerController.Inject({
     Physics = Physics,
     PixelSystem = PixelSystem,
@@ -45,6 +65,7 @@ PlayerController.Inject({
     Renderer = Renderer,
     CurtainRenderer = CurtainRenderer,
     Fireball = Fireball,
+    BonfireRefresh = BonfireRefresh,
 })
 
 Animation.Inject({
@@ -140,9 +161,12 @@ local function RecalcLayout()
     designOffsetY = (screenDesignH - effectiveH) / 2
 end
 
--- 注册 RecalcLayout 回调
+-- 注册 RecalcLayout 回调 + 关卡加载完成回调（篝火刷新系统扫描）
 LevelManager.SetCallbacks({
     recalcLayout = RecalcLayout,
+    onLevelLoaded = function()
+        BonfireRefresh.ScanFuelPositions()
+    end,
 })
 
 -- ====================================================================
@@ -156,6 +180,26 @@ local function EnterGameOver()
     FlameDashChain.Reset()
 end
 
+--- 重置运行时子系统（关卡加载/重生共用）
+local function ResetRuntimeSystems(player)
+    PixelSystem.Init()
+    CurtainRenderer.ClearSway()
+    FlameDashChain.Reset()
+    Fireball.Reset()
+    FogOfWar.ResetZoneState()
+    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
+end
+
+--- 预加载当前及相邻关卡的背景图
+local function PreloadBackgrounds()
+    if vg then
+        Renderer.PreloadBackgroundImage(vg, Config.backgroundImage)
+        if LevelManager.worldMapData and LevelManager.currentLevelFile then
+            Renderer.PreloadConnectedBackgrounds(vg, LevelManager.worldMapData, LevelManager.currentLevelFile)
+        end
+    end
+end
+
 --- 重置游戏（从篝火存档点复活，或重新开始）
 local function ResetGame()
     local player = PlayerController.player
@@ -166,10 +210,6 @@ local function ResetGame()
     LevelManager.gameTime = 0
 
     Animation.Reset()
-    CurtainRenderer.ClearSway()
-    FlameDashChain.Reset()
-    Fireball.Reset()
-    FogOfWar.ResetZoneState()
 
     -- 如果有篝火存档点，从存档点复活
     if LevelManager.checkpointCol and LevelManager.checkpointRow and LevelManager.checkpointFile then
@@ -208,10 +248,11 @@ local function ResetGame()
         end
     end
 
-    PixelSystem.Init()
+    ResetRuntimeSystems(player)
+    PreloadBackgrounds()
 
-    -- 初始化光源区域可见性
-    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
+    -- 复位所有机关到关卡默认状态（灯光、开关、燃料等）
+    BonfireRefresh.OnRespawn()
 end
 
 
@@ -247,11 +288,7 @@ local function M_LoadAndInitLevel(filename, player)
     end
 
     -- 初始化运行时系统
-    PixelSystem.Init()
-    FogOfWar.InitZoneVisibility(player.gridX + 1, player.gridY + 1)
-    CurtainRenderer.ClearSway()
-    FlameDashChain.Reset()
-    Fireball.Reset()
+    ResetRuntimeSystems(player)
     player.fallTickCurrent = Config.PLAYER_CONFIG.fallTickBase
 
     -- 恢复永久能力到玩家状态
@@ -264,6 +301,8 @@ local function M_LoadAndInitLevel(filename, player)
     gameState = Config.STATE_PLAYING
     gameTime = 0
     LevelManager.gameTime = 0
+
+    PreloadBackgrounds()
 
     -- 标记关卡就绪，允许渲染和游戏逻辑
     levelReady = true
@@ -324,30 +363,11 @@ function Start()
     Physics.SetHiddenWallRevealed(LevelManager.hiddenWallRevealed)
     PixelSystem.Init()
 
-    -- 优先从本地 Git 打包的 data/world_map.json 读取世界地图
-    local worldMapJson = nil
-    if fileSystem:FileExists("data/world_map.json") then
-        local wmFile = File("data/world_map.json", FILE_READ)
-        if wmFile and wmFile:IsOpen() then
-            worldMapJson = wmFile:ReadString()
-            wmFile:Close()
-        end
-    end
-    if worldMapJson and worldMapJson ~= "" then
-        local wmOk, wmData = pcall(cjson.decode, worldMapJson)
-        if wmOk and wmData then
-            LevelManager.worldMapData = wmData
-        end
-    end
-    -- fallback: 从 CloudStorage 缓存读取
-    if not LevelManager.worldMapData then
-        LevelManager.worldMapData = CloudStorage.LoadWorldMap()
-    end
-    if not LevelManager.worldMapData or not LevelManager.worldMapData.nodes or #LevelManager.worldMapData.nodes == 0 then
-        print("[Gameplay] No world map nodes found (local + cloud both empty)")
+    -- 加载世界地图（本地优先，fallback CloudStorage）
+    if not LevelManager.LoadWorldMap() then
+        print("[Gameplay] No world map nodes found, cannot start game")
         return
     end
-    LevelManager.worldMapLoaded = true
 
     ---@diagnostic disable-next-line: undefined-global
     local mode = _GAMEPLAY_MODE or "new"
@@ -391,7 +411,7 @@ function Start()
                 -- 加载关卡
                 M_LoadAndInitLevel(targetFile, player)
             end,
-            err = function()
+            error = function()
                 -- 读取失败，回退到第一个节点
                 print("[Gameplay] Failed to read progress, starting from first node")
                 local targetFile = LevelManager.worldMapData.nodes[1].file
@@ -409,7 +429,7 @@ function Start()
         -- 清空云端进度（异步，不阻塞加载）
         clientCloud:Set("player_progress", {}, {
             ok = function() print("[Gameplay] Progress cleared for new game") end,
-            err = function() print("[Gameplay] Failed to clear progress") end
+            error = function() print("[Gameplay] Failed to clear progress") end
         })
         M_LoadAndInitLevel(firstFile, player)
     end
@@ -521,9 +541,18 @@ function HandleUpdate(eventType, eventData)
     end
 
     -- 过渡动画更新
+    local prevPhase = LevelManager.transition.phase
     local cameraState = { x = cameraX }
     LevelManager.UpdateTransition(dt, PlayerController.player, cameraState)
     cameraX = cameraState.x
+    -- 关卡切换完成（fadeOut→hold），在全黑屏阶段预加载新背景图片
+    if prevPhase == "fadeOut" and LevelManager.transition.phase == "hold" then
+        Renderer.PreloadBackgroundImage(vg, Config.backgroundImage)
+        -- 预加载新关卡的所有相邻背景图
+        if LevelManager.worldMapData and LevelManager.currentLevelFile then
+            Renderer.PreloadConnectedBackgrounds(vg, LevelManager.worldMapData, LevelManager.currentLevelFile)
+        end
+    end
     if LevelManager.transition.active then return end
 
     -- 灯火跃迁更新
@@ -621,6 +650,15 @@ function HandleUpdate(eventType, eventData)
 
     prevLeft = curLeft
     prevRight = curRight
+
+    -- 梯子攀爬输入（在跳跃之前处理，攀爬中禁止跳跃）
+    local joyUp, joyDown = false, false
+    if vc_joystick then
+        local _, jy = vc_joystick:getInput()
+        if jy < -0.3 then joyUp = true end
+        if jy > 0.3 then joyDown = true end
+    end
+    PlayerController.HandleClimbInput(dt, joyUp, joyDown)
 
     -- 跳跃
     if inputState.jumpPressed then

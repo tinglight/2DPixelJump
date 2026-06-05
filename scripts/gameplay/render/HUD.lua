@@ -31,7 +31,7 @@ function HUD.Attach(M)
         local levelLabel = LevelManager.currentTemplateName or LevelManager.currentLevelFile or ""
         nvgText(vg, 6, 11, levelLabel)
 
-        local flamePercent = math.floor(PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels) * 100)
+        local flamePercent = PlayerController.GetFlamePercent()
         local flameR = 255
         local flameG = math.floor(200 * (flamePercent / 100))
         nvgFillColor(vg, nvgRGBA(flameR, flameG, 30, 255))

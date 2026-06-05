@@ -217,6 +217,58 @@ function M.UpdateFallParticles(dt, gameTime)
     end
 end
 
+--- 火焰剥离时直接调用：强制生成掉落粒子（不依赖 isOnGround/isJumping 条件）
+function M.SpawnFallParticlesForced()
+    local player = PlayerController.player
+    local N = Config.PLAYER_CONFIG.pixelGridSize
+    local ps = Config.PLAYER_CONFIG.pixelSize
+
+    local consumeRatio = 1.0 - PixelSystem.alivePixels / math.max(1, PixelSystem.totalPixels)
+    local baseRatio = math.max(0.15, consumeRatio)
+    local maxParticles = math.floor(4 + baseRatio * 14)
+    local spawnChance = math.max(0.85, 0.40 + baseRatio * 0.50)
+    local spawnAttempts = math.max(3, 1 + math.floor(baseRatio * 2))
+
+    local playerS = Physics.PlayerGridSize()
+    local feetGridY = player.gridY + playerS
+    local groundGridY = feetGridY
+    for searchY = feetGridY, Config.MAP_ROWS do
+        if Physics.IsSolid(player.gridX, searchY) or Physics.IsPlatform(player.gridX, searchY) then
+            groundGridY = searchY
+            break
+        end
+        if searchY == Config.MAP_ROWS then
+            groundGridY = Config.MAP_ROWS + 1
+        end
+    end
+    local groundY = (groundGridY - 1) * Config.GRID
+
+    local totalSize = N * ps
+    for _ = 1, spawnAttempts do
+        if math.random() < spawnChance and #M.fallParticles < maxParticles then
+            local worldX = (player.gridX - 1) * Config.GRID
+            local baseY = (player.gridY - 1) * Config.GRID
+            local side = math.random() > 0.5 and 1 or -1
+            local emitX = worldX + totalSize * 0.5 + side * (totalSize * 0.3 + math.random() * totalSize * 0.2)
+            local emitY = baseY + totalSize * (0.3 + math.random() * 0.5)
+            local speedMul = 0.7 + consumeRatio * 0.6
+            local life = 1.2 + consumeRatio * 0.6 + math.random() * 0.3
+            table.insert(M.fallParticles, {
+                x = emitX, y = emitY,
+                vx = side * (30 + math.random() * 40) * speedMul,
+                vy = -(20 + math.random() * 30) * speedMul,
+                life = life, maxLife = life,
+                size = ps,
+                gravity = 120 + math.random() * 40,
+                colorRow = math.random(5, 10),
+                groundY = groundY,
+                bounces = 0,
+                maxBounces = 1 + math.floor(math.random() * 2),
+            })
+        end
+    end
+end
+
 -- ====================================================================
 -- 起跳像素压缩
 -- ====================================================================

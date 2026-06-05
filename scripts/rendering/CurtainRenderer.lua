@@ -16,20 +16,24 @@ local CurtainRenderer = {}
 -- ====================================================================
 -- 配置
 -- ====================================================================
-local PIXEL_CELLS = 8       -- 每格细分 8x8（每像素 2px，更细腻的柳条表现）
-local STRAND_COUNT = 5      -- 每格5根柳条（间距约 1.6 像素格）
+local PIXEL_CELLS = 12      -- 每格细分 12x12（更大更密的柳条像素）
+local STRAND_COUNT = 8      -- 每格8根柳条（更密集，遮挡感更强）
 
--- 柳条基础颜色（暖棕绿色调，接近枯叶/藤条）
+-- 柳条基础颜色（暖棕绿色调，接近枯叶/藤条，8色循环）
 local STRAND_COLORS = {
     { 88, 105, 65 },   -- 暗绿棕
     { 95, 112, 70 },   -- 稍亮
     { 82, 98, 60 },    -- 深色
     { 100, 115, 72 },  -- 亮绿棕
     { 78, 92, 55 },    -- 最暗
+    { 92, 108, 68 },   -- 中绿棕
+    { 86, 100, 58 },   -- 偏暗
+    { 98, 118, 75 },   -- 最亮
 }
 
 -- 光照遮挡衰减系数（0~1，1=完全遮挡，0=完全透过）
-CurtainRenderer.LIGHT_ATTENUATION = 0.3
+-- 提高到 0.5：门帘阻挡更多光线（单层只透过50%光线）
+CurtainRenderer.LIGHT_ATTENUATION = 0.5
 
 -- ====================================================================
 -- 晃动状态管理
@@ -41,25 +45,38 @@ local swayState = {}
 ---@param col number
 ---@param row number
 ---@param strength number 初始强度（0~1）
-function CurtainRenderer.TriggerSway(col, row, strength)
+---@param dirX number|nil 玩家行进方向X（正=向右推，负=向左推，nil=无方向）
+function CurtainRenderer.TriggerSway(col, row, strength, dirX)
     local key = row .. "_" .. col
     local existing = swayState[key]
+    -- 方向因子：玩家朝哪边走，门帘就朝哪边被推开
+    ---@type number
+    local dirSign = 0.0
+    if dirX and dirX ~= 0 then
+        dirSign = dirX > 0 and 1.0 or -1.0
+    end
+
     -- 如果已在晃动且振幅还较大，不重复触发（防止每帧叠加导致颤抖）
     if existing then
         if existing.amplitude > 0.15 then
-            -- 正在大幅晃动中，跳过（自然衰减后才能再触发）
+            -- 正在大幅晃动中，但可以叠加方向推力（使门帘持续跟随玩家方向）
+            if dirSign ~= 0 then
+                existing.dirBias = existing.dirBias * 0.7 + dirSign * 0.3
+            end
             return
         end
         -- 振幅已衰减较小，可以重新激发
         existing.amplitude = math.min(1.0, strength * 0.8)
-        existing.velocity = strength * 8.0
+        existing.velocity = strength * 8.0 * (dirSign ~= 0 and dirSign or 1.0)
+        existing.dirBias = dirSign
     else
         swayState[key] = {
             amplitude = strength,
             phase = 0,
-            velocity = strength * 10.0,   -- 初始角速度
-            damping = 3.5,                 -- 阻尼系数
-            frequency = 6.0 + math.random() * 2.0,  -- 振荡频率
+            velocity = strength * 10.0 * (dirSign ~= 0 and dirSign or 1.0),   -- 初始角速度（带方向）
+            damping = 3.0,                 -- 阻尼系数（稍降低，晃动时间更长）
+            frequency = 5.0 + math.random() * 2.0,  -- 振荡频率
+            dirBias = dirSign,             -- 方向偏置（正=右推，负=左推）
         }
     end
 end
@@ -71,7 +88,8 @@ end
 ---@param levelData table 关卡数据
 ---@param TILE table TILE枚举
 ---@param getTileType function GetTileType函数
-local function PropagateSwayToNeighbors(col, row, strength, levelData, TILE, getTileType)
+---@param dirX number|nil 玩家行进方向X
+local function PropagateSwayToNeighbors(col, row, strength, levelData, TILE, getTileType, dirX)
     local propagated = strength * 0.4
     if propagated < 0.05 then return end
     local MAP_ROWS = #levelData
@@ -86,7 +104,7 @@ local function PropagateSwayToNeighbors(col, row, strength, levelData, TILE, get
                 if base == TILE.CURTAIN then
                     local nkey = nr .. "_" .. nc
                     if not swayState[nkey] or swayState[nkey].amplitude < propagated then
-                        CurtainRenderer.TriggerSway(nc, nr, propagated)
+                        CurtainRenderer.TriggerSway(nc, nr, propagated, dirX)
                     end
                 end
             end
@@ -104,6 +122,14 @@ function CurtainRenderer.UpdateSway(dt)
         state.phase = state.phase + state.velocity * dt
         state.velocity = state.velocity - state.velocity * state.damping * dt
         state.amplitude = state.amplitude * (1.0 - state.damping * 0.5 * dt)
+
+        -- 方向偏置衰减（门帘慢慢回正）
+        if state.dirBias and state.dirBias ~= 0 then
+            state.dirBias = state.dirBias * (1.0 - 2.5 * dt)
+            if math.abs(state.dirBias) < 0.02 then
+                state.dirBias = 0
+            end
+        end
 
         -- 振幅太小就移除
         if math.abs(state.amplitude) < 0.01 and math.abs(state.velocity) < 0.1 then
@@ -216,17 +242,17 @@ end
 function CurtainRenderer.DrawCurtain(vg, px, py, gridSize, lighting, lightDirX, lightDirY, col, row, gameTime, hasAbove, hasBelow)
     local cellSize = gridSize / PIXEL_CELLS  -- 每像素格 2px
 
-    -- 超级 LOD: gridSize 极小时画简化柳条（几条竖线代替 8×8 像素细节）
-    if gridSize < 10 then
+    -- 超级 LOD: gridSize 极小时画简化柳条（竖线代替 12×12 像素细节）
+    if gridSize < 12 then
         local lit = lighting * 0.7 + 0.1
         local gr = math.floor(math.max(0, math.min(255, 50 * lit)))
         local gg = math.floor(math.max(0, math.min(255, 90 * lit)))
         local gb = math.floor(math.max(0, math.min(255, 35 * lit)))
-        -- 画 3 条简化竖线代表柳条
-        local sw = math.max(1, gridSize / 6)
+        -- 画 5 条简化竖线代表更密的柳条
+        local sw = math.max(1, gridSize / 8)
         nvgBeginPath(vg)
-        for i = 1, 3 do
-            local lx = px + gridSize * i / 4 - sw * 0.5
+        for i = 1, 5 do
+            local lx = px + gridSize * i / 6 - sw * 0.5
             nvgRect(vg, lx, py, sw, gridSize)
         end
         nvgFillColor(vg, nvgRGBA(gr, gg, gb, 255))
@@ -242,11 +268,14 @@ function CurtainRenderer.DrawCurtain(vg, px, py, gridSize, lighting, lightDirX, 
     local sway = swayState[key]
     local swayOffset = 0
     if sway then
-        swayOffset = math.sin(sway.phase) * sway.amplitude * 2.0
+        -- 振荡运动 + 方向偏置：门帘朝玩家行进方向偏移
+        local oscillation = math.sin(sway.phase) * sway.amplitude * 4.0
+        local dirPush = (sway.dirBias or 0) * sway.amplitude * 6.0  -- 方向推力（大幅偏移）
+        swayOffset = oscillation + dirPush
     end
 
     -- 自然微风（始终存在的轻微摆动）
-    local windSway = math.sin(gameTime * 1.5 + col * 0.7 + row * 0.3) * 0.3
+    local windSway = math.sin(gameTime * 1.5 + col * 0.7 + row * 0.3) * 0.4
     local totalSway = swayOffset + windSway
 
     -- 绘制每根柳条的像素
@@ -278,11 +307,13 @@ function CurtainRenderer.DrawCurtain(vg, px, py, gridSize, lighting, lightDirX, 
                 local localYRatio = cy / PIXEL_CELLS  -- 格内位置
                 local pixSwayX = totalSway * (0.3 + localYRatio * 0.7) + strandSwayOff * localYRatio
 
-                -- 像素对齐
+                -- 像素对齐（允许超出格子边界，使晃动可见）
                 local swayPixels = math.floor(pixSwayX + 0.5)
                 local drawX = strandX + swayPixels
-                if drawX < 0 then drawX = 0 end
-                if drawX >= PIXEL_CELLS then drawX = PIXEL_CELLS - 1 end
+                -- 只跳过完全超出可见范围的像素（允许偏移到相邻格）
+                if drawX < -2 or drawX >= PIXEL_CELLS + 2 then
+                    goto continuePixel
+                end
 
                 -- 计算法线光照
                 local nx, ny = CalcStrandNormal(drawX, cy, strandPositions)
@@ -331,6 +362,7 @@ function CurtainRenderer.DrawCurtain(vg, px, py, gridSize, lighting, lightDirX, 
                     nvgFill(vg)
                 end
             end
+            ::continuePixel::
         end
     end
 

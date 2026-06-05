@@ -368,6 +368,39 @@ function Map.Attach(M)
                     CurtainRenderer.DrawCurtain(vg, px, py, GRID, totalLit, totalLdx, totalLdy,
                         col, row, M.gameTime, hasAbove, hasBelow)
 
+                elseif base == TILE.WATER then
+                    M.DrawWaterTile(vg, px, py, row, col, TILE.WATER)
+
+                elseif base == TILE.POISON_WATER then
+                    M.DrawWaterTile(vg, px, py, row, col, TILE.POISON_WATER)
+
+                elseif base == TILE.BLACK_WATER then
+                    M.DrawWaterTile(vg, px, py, row, col, TILE.BLACK_WATER)
+
+                elseif base == TILE.LADDER then
+                    M.DrawLadderTile(vg, px, py, row, col)
+
+                elseif base == TILE.PIPE then
+                    -- 管道：简单灰色方块
+                    nvgBeginPath(vg)
+                    nvgRect(vg, px + 1, py + 1, GRID - 2, GRID - 2)
+                    nvgFillColor(vg, nvgRGBA(80, 90, 80, 200))
+                    nvgFill(vg)
+
+                elseif base == TILE.FRAGILE then
+                    -- 脆弱方块：带裂缝的方块
+                    nvgBeginPath(vg)
+                    nvgRect(vg, px, py, GRID, GRID)
+                    nvgFillColor(vg, nvgRGBA(120, 100, 70, 200))
+                    nvgFill(vg)
+                    nvgBeginPath(vg)
+                    nvgMoveTo(vg, px + 3, py + GRID * 0.3)
+                    nvgLineTo(vg, px + GRID * 0.5, py + GRID * 0.5)
+                    nvgLineTo(vg, px + GRID - 4, py + GRID * 0.7)
+                    nvgStrokeColor(vg, nvgRGBA(60, 50, 30, 180))
+                    nvgStrokeWidth(vg, 1)
+                    nvgStroke(vg)
+
                 elseif base == TILE.ABILITY_POINT then
                     local key = row .. "_" .. col
                     if not LevelManager.collectedItems[key] then
@@ -378,6 +411,185 @@ function Map.Attach(M)
                 ::continueTile::
             end
         end
+    end
+    -- ================================================================
+    -- 水体绘制（WATER / POISON_WATER / BLACK_WATER）
+    -- ================================================================
+    function M.DrawWaterTile(vg, px, py, row, col, waterType)
+        local GRID = Config.GRID
+        local LevelManager = M._LevelManager
+        local Physics = M._Physics
+        local TILE = LevelManager.TILE
+        local t = M.gameTime
+        local worldX = (col - 1) * GRID
+
+        -- 检测上方是否同类水体（决定是否画水面波浪）
+        local hasWaterAbove = false
+        if row > 1 and LevelManager.levelData[row - 1] then
+            local aboveVal = LevelManager.levelData[row - 1][col]
+            if aboveVal then
+                local aboveBase = Physics.GetTileType(aboveVal)
+                if aboveBase == waterType then hasWaterAbove = true end
+            end
+        end
+
+        -- 根据水体类型选颜色
+        local baseR, baseG, baseB, deepR, deepG, deepB, sparkR, sparkG, sparkB
+        if waterType == TILE.POISON_WATER then
+            baseR, baseG, baseB = 20, 140, 40
+            deepR, deepG, deepB = 10, 100, 25
+            sparkR, sparkG, sparkB = 120, 255, 130
+        elseif waterType == TILE.BLACK_WATER then
+            baseR, baseG, baseB = 40, 40, 50
+            deepR, deepG, deepB = 30, 30, 38
+            sparkR, sparkG, sparkB = 140, 140, 160
+        else -- WATER
+            baseR, baseG, baseB = 40, 100, 240
+            deepR, deepG, deepB = 20, 60, 160
+            sparkR, sparkG, sparkB = 150, 220, 255
+        end
+
+        if not hasWaterAbove then
+            -- 水面：波浪动画
+            local freq = waterType == TILE.BLACK_WATER and 0.28 or (waterType == TILE.POISON_WATER and 0.4 or 0.35)
+            local layers = waterType == TILE.BLACK_WATER and 2 or 3
+            for layer = 1, layers do
+                local speed = 2.5 + layer * 0.8
+                if waterType == TILE.BLACK_WATER then speed = 1.2 + layer * 0.4 end
+                local amp = 1.5 - layer * 0.3
+                local yBase = py + 2 + layer * 3.5
+                if waterType == TILE.BLACK_WATER then yBase = py + 3 + layer * 4.5 end
+                local phase = t * speed + layer * 2.1
+                nvgBeginPath(vg)
+                nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+                for sx = 1, 4 do
+                    local localX = sx * (GRID / 4)
+                    nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+                end
+                nvgLineTo(vg, px + GRID, py + GRID)
+                nvgLineTo(vg, px, py + GRID)
+                nvgClosePath(vg)
+                local a = math.floor(40 + layer * 15)
+                nvgFillColor(vg, nvgRGBA(baseR + layer * 20, baseG + layer * 25, baseB, a))
+                nvgFill(vg)
+            end
+        else
+            -- 深层水体：实心背景 + 微弱波纹
+            nvgBeginPath(vg)
+            nvgRect(vg, px, py, GRID, GRID)
+            nvgFillColor(vg, nvgRGBA(deepR, deepG, deepB, waterType == TILE.BLACK_WATER and 220 or 180))
+            nvgFill(vg)
+            local freq = 0.25
+            for layer = 1, 2 do
+                local speed = 1.0 + layer * 0.3
+                local amp = 0.8
+                local yBase = py + GRID * (0.3 + layer * 0.25)
+                local phase = t * speed + row * 1.7 + layer * 3.0
+                nvgBeginPath(vg)
+                nvgMoveTo(vg, px, yBase + math.sin(phase + worldX * freq) * amp)
+                for sx = 1, 4 do
+                    local localX = sx * (GRID / 4)
+                    nvgLineTo(vg, px + localX, yBase + math.sin(phase + (worldX + localX) * freq) * amp)
+                end
+                nvgLineTo(vg, px + GRID, yBase + math.sin(phase + (worldX + GRID) * freq) * amp - 1)
+                nvgLineTo(vg, px + GRID, yBase + 2)
+                nvgLineTo(vg, px, yBase + 2)
+                nvgClosePath(vg)
+                nvgFillColor(vg, nvgRGBA(deepR + layer * 15, deepG + layer * 20, deepB + 20, 30 + layer * 12))
+                nvgFill(vg)
+            end
+        end
+
+        -- 水面闪烁
+        local sparkTopY = hasWaterAbove and 2 or math.floor(GRID * 0.55)
+        local sparkRangeH = GRID - sparkTopY - 2
+        local seed = col * 7 + row * 13
+        for i = 1, 3 do
+            local phase_i = t * (3.0 + i * 0.7) + seed + i * 5.3
+            local sparkAlpha = math.sin(phase_i) * 0.5 + 0.5
+            if sparkAlpha > 0.3 then
+                local sx = px + 2 + math.fmod(seed * i * 3.7, GRID - 4)
+                local sy = py + sparkTopY + math.fmod(seed * i * 2.3, math.max(1, sparkRangeH))
+                nvgBeginPath(vg)
+                nvgRect(vg, sx, sy, 1, 1)
+                nvgFillColor(vg, nvgRGBA(sparkR, sparkG, sparkB, math.floor(200 * sparkAlpha)))
+                nvgFill(vg)
+            end
+        end
+    end
+
+    -- ================================================================
+    -- 梯子绘制（2 格宽像素风格，左格绘制，右格跳过）
+    -- ================================================================
+    function M.DrawLadderTile(vg, px, py, row, col)
+        local LevelManager = M._LevelManager
+        local Physics = M._Physics
+        local TILE = LevelManager.TILE
+        local GRID = Config.GRID
+
+        -- 如果左邻是 LADDER，当前是右半部分，跳过绘制
+        if col > 1 then
+            local leftVal = LevelManager.levelData[row][col - 1]
+            if leftVal then
+                local leftBase = Physics.GetTileType(leftVal)
+                if leftBase == TILE.LADDER then return end
+            end
+        end
+
+        local P = 2  -- 像素块大小
+        local lx = px
+        local ly = py
+
+        local darkWood   = nvgRGBA(58, 40, 22, 255)
+        local midWood    = nvgRGBA(82, 55, 30, 255)
+        local hiWood     = nvgRGBA(105, 72, 38, 255)
+        local rungMain   = nvgRGBA(95, 65, 35, 255)
+        local rungHi     = nvgRGBA(120, 85, 48, 255)
+        local shadowWood = nvgRGBA(35, 24, 12, 255)
+        local moss1      = nvgRGBA(40, 85, 30, 255)
+        local moss2      = nvgRGBA(58, 110, 42, 220)
+        local vine       = nvgRGBA(32, 70, 28, 240)
+        local decay      = nvgRGBA(50, 45, 25, 200)
+
+        local function pix(cx, cy, color)
+            nvgBeginPath(vg)
+            nvgRect(vg, lx + cx * P, ly + cy * P, P, P)
+            nvgFillColor(vg, color)
+            nvgFill(vg)
+        end
+
+        -- 左侧柱子
+        for r = 0, 7 do
+            pix(1, r, midWood)
+            pix(2, r, darkWood)
+        end
+        pix(1, 0, hiWood) pix(1, 2, hiWood) pix(1, 5, hiWood)
+        pix(2, 3, shadowWood) pix(1, 6, shadowWood)
+
+        -- 右侧柱子
+        for r = 0, 7 do
+            pix(13, r, darkWood)
+            pix(14, r, midWood)
+        end
+        pix(14, 1, hiWood) pix(14, 4, hiWood) pix(14, 6, hiWood)
+        pix(13, 2, shadowWood) pix(14, 5, shadowWood)
+
+        -- 上横档
+        for c = 3, 12 do pix(c, 2, rungMain) end
+        pix(4, 2, rungHi) pix(6, 2, rungHi) pix(9, 2, rungHi) pix(11, 2, rungHi)
+        for c = 3, 12 do pix(c, 3, shadowWood) end
+
+        -- 下横档
+        for c = 3, 12 do pix(c, 5, rungMain) end
+        pix(3, 5, rungHi) pix(5, 5, rungHi) pix(8, 5, rungHi) pix(10, 5, rungHi)
+        for c = 3, 12 do pix(c, 6, shadowWood) end
+
+        -- 苔藓/藤蔓/腐朽点缀
+        pix(0, 0, moss1) pix(1, 0, moss2) pix(0, 1, moss2)
+        pix(15, 6, vine) pix(15, 7, vine) pix(14, 7, moss2)
+        pix(5, 2, moss1) pix(7, 5, moss1)
+        pix(9, 5, decay) pix(2, 4, decay) pix(13, 6, decay)
+        pix(0, 4, vine) pix(0, 5, moss2)
     end
 end
 

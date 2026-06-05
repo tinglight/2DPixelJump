@@ -223,7 +223,7 @@ function M.OpenBackgroundDialog()
     S.renameBlink = 0
 end
 
-function M.OpenDecorationDialog()
+function M.OpenDecoPropertyDialog()
     S.dialogMode = "decoProperty"
     S.decoDialogBrightnessInput = tostring(S.decoDialogBrightness)
     S.decoDialogScaleInput = tostring(S.decoDialogScale)
@@ -342,8 +342,7 @@ function M.ConfirmDialog()
                 transformTarget = transformTarget,
             })
         end
-        Undo.dirty = true
-        Undo.saveTimer = Undo.saveDelay
+        Undo.MarkDirty()
         S.SetMessage("装饰已放置", 1.5)
     end
     S.dialogMode = nil
@@ -465,8 +464,10 @@ local function DrawCursorCentered(vg, x, y, w, h, fullText, cursorPos, cr, cg, c
     nvgTextAlign(vg, NVG_ALIGN_LEFT + NVG_ALIGN_MIDDLE)
     local tbc = string.sub(fullText, 1, cursorPos)
     local bounds = {}
+    ---@diagnostic disable-next-line: param-type-mismatch, missing-parameter
     local tw = nvgTextBounds(vg, 0, 0, tbc, bounds)
     local fullBounds = {}
+    ---@diagnostic disable-next-line: param-type-mismatch, missing-parameter
     local fullW = nvgTextBounds(vg, 0, 0, fullText, fullBounds)
     local textStartX = x + (w - fullW) * 0.5
     nvgBeginPath(vg)
@@ -1497,23 +1498,7 @@ function M.HandleMouseDown(mx, my)
             end
         end
 
-        -- 点击明暗度输入框（复用上方已声明的 fieldY1/fieldY2/inputW/inputH/inputX）
-        if mx >= inputX and mx < inputX + inputW and my >= fieldY1 and my < fieldY1 + inputH then
-            S.decoDialogFocusField = 1
-            S.decoDialogBrightnessInput = ""  -- 清空以便重新输入
-            S.decoDialogCursor = 0
-            S.renameBlink = 0
-            return true
-        end
-
-        -- 点击缩放输入框
-        if mx >= inputX and mx < inputX + inputW and my >= fieldY2 and my < fieldY2 + inputH then
-            S.decoDialogFocusField = 2
-            S.decoDialogScaleInput = ""  -- 清空以便重新输入
-            S.decoDialogCursor = 0
-            S.renameBlink = 0
-            return true
-        end
+        -- (已移除重复的输入框命中检测 — 与上方第一组坐标相同，永远不可达)
 
         -- 触碰变换勾选框点击
         local checkY = fieldY2 + gap + 4

@@ -73,15 +73,53 @@ M.transition = {
     speed = 5.0,
     pendingFile = nil,
     pendingDir = nil,
+    holdTimer = 0,       -- fadeOut 完成后的等待计时（让背景图上传 GPU）
+    holdDuration = 0.15, -- 等待时长（秒）
 }
 
 -- 对玩家状态的回调引用（由 init 注入）
 local playerResetCallback = nil
 local recalcLayoutCallback = nil
+local onLevelLoadedCallback = nil
 
 function M.SetCallbacks(callbacks)
     playerResetCallback = callbacks.playerReset
     recalcLayoutCallback = callbacks.recalcLayout
+    onLevelLoadedCallback = callbacks.onLevelLoaded
+end
+
+-- ====================================================================
+-- 世界地图加载
+-- ====================================================================
+
+--- 从本地 data/world_map.json 或 CloudStorage 加载世界地图数据
+---@return boolean success
+function M.LoadWorldMap()
+    -- 优先从本地 Git 打包读取
+    local worldMapJson = nil
+    if fileSystem:FileExists("data/world_map.json") then
+        local wmFile = File("data/world_map.json", FILE_READ)
+        if wmFile and wmFile:IsOpen() then
+            worldMapJson = wmFile:ReadString()
+            wmFile:Close()
+        end
+    end
+    if worldMapJson and worldMapJson ~= "" then
+        local ok, wmData = pcall(cjson.decode, worldMapJson)
+        if ok and wmData then
+            M.worldMapData = wmData
+        end
+    end
+    -- fallback: CloudStorage 缓存
+    if not M.worldMapData then
+        M.worldMapData = CloudStorage.LoadWorldMap()
+    end
+    if not M.worldMapData or not M.worldMapData.nodes or #M.worldMapData.nodes == 0 then
+        print("[LevelManager] No world map nodes found (local + cloud both empty)")
+        return false
+    end
+    M.worldMapLoaded = true
+    return true
 end
 
 -- ====================================================================
@@ -213,6 +251,7 @@ function M.LoadLevelFromFile(filename, player)
     local bgImg = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
     Config.backgroundImage = bgImg
     Config.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
+    Config.bgStretchToCanvas = (data.bgStretchToCanvas == true)
 
     -- 重置开关/门状态
     M.switchState = {}
@@ -267,6 +306,9 @@ function M.LoadLevelFromFile(filename, player)
     Physics.SetLevelData(M.levelData)
     Physics.SetSwitchState(M.switchState)
     Physics.SetHiddenWallRevealed(M.hiddenWallRevealed)
+
+    -- 通知外部关卡数据已加载完毕（篝火刷新系统需要重新扫描）
+    if onLevelLoadedCallback then onLevelLoadedCallback() end
 
     print("[WorldMap] Loaded level: " .. filename)
     return true
@@ -380,9 +422,17 @@ function M.UpdateTransition(dt, player, cameraState)
             if t.pendingFile then
                 M.TransitionToLevel(t.pendingFile, t.pendingDir, player, cameraState)
             end
-            t.phase = "fadeIn"
             t.pendingFile = nil
             t.pendingDir = nil
+            -- 进入 hold 阶段：全黑屏等待背景图上传 GPU
+            t.phase = "hold"
+            t.holdTimer = 0
+        end
+    elseif t.phase == "hold" then
+        -- 全黑屏等待，确保背景图片加载到 GPU 完成
+        t.holdTimer = t.holdTimer + dt
+        if t.holdTimer >= t.holdDuration then
+            t.phase = "fadeIn"
         end
     elseif t.phase == "fadeIn" then
         t.alpha = t.alpha - t.speed * dt

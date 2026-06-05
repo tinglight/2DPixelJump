@@ -13,6 +13,7 @@
 require "LuaScripts/Utilities/Sample"
 local MainMenu = require "ui.MainMenu"
 local PauseMenu = require "ui.PauseMenu"
+local LoadingScreen = require "ui.LoadingScreen"
 
 -- ====================================================================
 -- 前向声明
@@ -20,27 +21,32 @@ local PauseMenu = require "ui.PauseMenu"
 local LaunchGame, LaunchEditor
 
 -- ====================================================================
--- 进入游戏（正式 gameplay，不走编辑器 PlayMode）
+-- 进入游戏（复用编辑器的世界试玩模式 MODE_WORLDPLAY）
 -- ====================================================================
 
 ---@param mode "new"|"continue"
 local function LaunchGameWithMode(mode)
     MainMenu.Cleanup()
-    _GAMEPLAY_DIRECT = true
-    _GAMEPLAY_MODE = mode
-    require "gameplay.init"
+
+    -- 显示 Loading 界面（在编辑器初始化前激活，遮盖闪烁）
+    LoadingScreen.Show()
+
+    -- 加载编辑器模块，设置 fromMainMenu 标志
+    require "editor"
+    local S = require "editor.State"
+    S.fromMainMenu = true
+    S.editorActive = true
     ---@diagnostic disable-next-line: redundant-parameter
     Start()
 
-    -- 初始化暂停菜单（gameplay 启动后）
+    -- 初始化暂停菜单（编辑器世界试玩模式下 ESC 弹出暂停菜单）
     PauseMenu.Init({
         onResume = nil,
         onBackToMenu = function()
             PauseMenu.Cleanup()
-            -- gameplay 的 Stop() 会清理 NanoVG
+            S.editorActive = false
+            S.fromMainMenu = false
             if Stop then Stop() end
-            _GAMEPLAY_DIRECT = nil
-            _GAMEPLAY_MODE = nil
             MainMenu.Init({
                 onStartGame = LaunchGame,
                 onContinue = function() LaunchGameWithMode("continue") end,

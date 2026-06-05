@@ -41,11 +41,10 @@ function Movement.Attach(M)
                 local downY = gy + 1
                 if not M.CollidesIgnoreSlopes(S.play.gridX, downY) then
                     S.play.gridY = downY
-                    -- 斜坡下降时减小火焰（与普通下落一致：下滑一格降低一格）
-                    local stripCount = math.max(1, math.floor(S.playTotalPixels / 10 + 0.5))
-                    M.StripPixels(stripCount)
-                    S.play.fallGridCount = S.play.fallGridCount + 1
-                    if S.play.fallGridCount >= S.playerParams.maxFallGrids then
+                    -- 斜坡下降时减小火焰：精确降低一个档位（10%）
+                    M.StripOneFlameLevel()
+                    M.SyncFallGridCount()
+                    if S.playAlivePixels <= 0 then
                         S.play.alive = false
                         S.play.deathTimer = 0
                         return
@@ -311,6 +310,12 @@ function Movement.Attach(M)
         else
             M.ProcessFallTick(dt)
         end
+        -- 维护 groundedFrames（篝火碰撞判定用）
+        if S.play.isOnGround then
+            S.play.groundedFrames = (S.play.groundedFrames or 0) + 1
+        else
+            S.play.groundedFrames = 0
+        end
     end
 
     function M.ProcessJumpTick(dt)
@@ -408,14 +413,14 @@ function Movement.Attach(M)
                 return
             end
             S.play.fallTickCurrent = math.max(C.PLAY_FALL_MIN, S.play.fallTickCurrent - C.PLAY_FALL_ACCEL)
-            S.play.fallGridCount = S.play.fallGridCount + 1
-            if S.play.fallGridCount >= S.playerParams.maxFallGrids then
+            -- 每下落1格扣除精确一个档位（10%）
+            M.StripOneFlameLevel()
+            M.SyncFallGridCount()
+            if S.playAlivePixels <= 0 then
                 S.play.alive = false
                 S.play.deathTimer = 0
                 return
             end
-            local stripCount = math.max(1, math.floor(S.playTotalPixels / 10 + 0.5))
-            M.StripPixels(stripCount)
         else
             S.play.isOnGround = true
             S.play.fallTickCurrent = C.PLAY_FALL_BASE

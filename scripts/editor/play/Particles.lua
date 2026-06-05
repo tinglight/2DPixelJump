@@ -103,12 +103,17 @@ function Particles.Attach(M)
         M.AgeFallParticles(dt)
     end
 
-    function M.SpawnFallParticles()
+    function M.SpawnFallParticles(forced)
         local consumeRatio = 1.0 - S.playAlivePixels / math.max(1, S.playTotalPixels)
         local baseRatio = math.max(0.15, consumeRatio)
         local maxP = math.floor(4 + baseRatio * 14)
         local spawnChance = 0.40 + baseRatio * 0.50
         local attempts = 1 + math.floor(baseRatio * 2)
+        -- forced 模式（从 StripOneFlameLevel 直接调用）：保证至少生成 2-3 个粒子
+        if forced then
+            attempts = math.max(3, attempts)
+            spawnChance = math.max(0.85, spawnChance)
+        end
         local groundY = M.FindGroundY()
         local pPS = C.FLAME_CFG.pixelSize
         local totalSize = C.FLAME_CFG.pixelGridSize * pPS

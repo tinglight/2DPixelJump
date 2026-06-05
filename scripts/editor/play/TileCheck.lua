@@ -69,8 +69,8 @@ function TileCheck.Attach(M)
             S.SetMessage("获得火球能力!", 1.5)
         elseif base == C.TILE.HIDDEN_WALL and not S.play.hiddenWallRevealed[group] then
             S.play.hiddenWallRevealed[group] = S.play.gameTime
-        elseif base == C.TILE.CHECKPOINT then
-            -- FogOfWar is accessed via the upvalue injected in PlayMode's M.Inject
+        elseif base == C.TILE.CHECKPOINT and S.play.isOnGround and (S.play.groundedFrames or 0) >= 2 then
+            -- 篝火碰撞盒缩小为1格：仅玩家稳定站立(非刚落地)时才触发
             local isNewBonfire = not S.checkpointActivated[key]
             local isHealthNotFull = S.playAlivePixels < S.playTotalPixels
 
@@ -108,6 +108,13 @@ function TileCheck.Attach(M)
                 end
             end
         end
+    end
+
+    function M.StripOneFlameLevel()
+        local pixelsPerGrid = math.max(1, math.floor(S.playTotalPixels / 10 + 0.5))
+        M.StripPixels(pixelsPerGrid)
+        -- 剥离后立即强制生成掉落粒子（不依赖 UpdateFallParticles 的条件判断）
+        M.SpawnFallParticles(true)
     end
 
     function M.SyncFallGridCount()
@@ -193,6 +200,12 @@ function TileCheck.Attach(M)
                 ::continueDeco::
             end
         end
+    end
+
+    function M.GetFlamePercent()
+        local total = math.max(1, S.playTotalPixels)
+        local ratio = S.playAlivePixels / total
+        return math.max(0, math.min(100, math.floor(ratio * 10 + 0.5) * 10))
     end
 
     function M.CalcJump()

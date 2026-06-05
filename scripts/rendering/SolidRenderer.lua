@@ -13,6 +13,10 @@
 
 local SolidRenderer = {}
 
+local RU = require("rendering.RenderUtils")
+local clamp255 = RU.clamp255
+local fillRect = RU.fillRect
+
 -- ====================================================================
 -- 动画时间（由外部每帧调用 SetTime 传入）
 -- ====================================================================
@@ -276,14 +280,11 @@ local function DrawPixelBlock(vg, x, y, size, r, g, b, normalIntensity, lighting
     local normalMod = (normalIntensity - 0.5) * 2.0
     local brightBoost = normalMod * HIGHLIGHT_BOOST * lighting
 
-    local fr = math.floor(math.max(0, math.min(255, r * lit + brightBoost)))
-    local fg = math.floor(math.max(0, math.min(255, g * lit + brightBoost)))
-    local fb = math.floor(math.max(0, math.min(255, b * lit + brightBoost)))
+    local fr = clamp255(r * lit + brightBoost)
+    local fg = clamp255(g * lit + brightBoost)
+    local fb = clamp255(b * lit + brightBoost)
 
-    nvgBeginPath(vg)
-    nvgRect(vg, x, y, size, size)
-    nvgFillColor(vg, nvgRGBA(fr, fg, fb, 255))
-    nvgFill(vg)
+        fillRect(vg, x, y, size, size, fr, fg, fb, 255)
 
     -- LOD: 像素块太小时跳过高光和阴影细节（节省 2/3 draw call）
     if size < 4 then return end
@@ -292,10 +293,7 @@ local function DrawPixelBlock(vg, x, y, size, r, g, b, normalIntensity, lighting
     if lighting > 0.3 and normalIntensity > 0.55 then
         local hlA = math.floor(30 * lighting * (normalIntensity - 0.5) * 2)
         if hlA > 0 then
-            nvgBeginPath(vg)
-            nvgRect(vg, x, y, math.max(1, size * 0.25), math.max(1, size * 0.25))
-            nvgFillColor(vg, nvgRGBA(255, 255, 255, hlA))
-            nvgFill(vg)
+                        fillRect(vg, x, y, math.max(1, size * 0.25), math.max(1, size * 0.25), 255, 255, 255, hlA)
         end
     end
 
@@ -303,14 +301,8 @@ local function DrawPixelBlock(vg, x, y, size, r, g, b, normalIntensity, lighting
     local shadowSize = math.max(1, math.floor(size * 0.2))
     local shadowA = math.floor((SHADOW_DARKEN + 10) * (1.0 - normalIntensity * 0.5))
     if shadowA > 2 then
-        nvgBeginPath(vg)
-        nvgRect(vg, x + size - shadowSize, y, shadowSize, size)
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, shadowA))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgRect(vg, x, y + size - shadowSize, size - shadowSize, shadowSize)
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, shadowA))
-        nvgFill(vg)
+                fillRect(vg, x + size - shadowSize, y, shadowSize, size, 0, 0, 0, shadowA)
+                fillRect(vg, x, y + size - shadowSize, size - shadowSize, shadowSize, 0, 0, 0, shadowA)
     end
 end
 
@@ -382,9 +374,9 @@ local function DrawMossEdge(vg, px, py, gridSize, edge, col, row, lighting, ligh
             local litMul = lighting * 0.55 + 0.45
             local normalBoost = (mossLitIntensity - 0.5) * 2.0 * HIGHLIGHT_BOOST * lighting
 
-            local mr = math.floor(math.max(0, math.min(255, mossColor[1] * litMul + normalBoost)))
-            local mg = math.floor(math.max(0, math.min(255, mossColor[2] * litMul + normalBoost * 1.5)))
-            local mb = math.floor(math.max(0, math.min(255, mossColor[3] * litMul + normalBoost * 0.5)))
+            local mr = clamp255(mossColor[1] * litMul + normalBoost)
+            local mg = clamp255(mossColor[2] * litMul + normalBoost * 1.5)
+            local mb = clamp255(mossColor[3] * litMul + normalBoost * 0.5)
 
             -- 绘制苔藓像素块
             for d = 1, depth do
@@ -413,10 +405,7 @@ local function DrawMossEdge(vg, px, py, gridSize, edge, col, row, lighting, ligh
 
                 -- 深度越深透明度越低
                 local depthAlpha = math.floor(220 - (d - 1) * 80)
-                nvgBeginPath(vg)
-                nvgRect(vg, mx, my, mw, mh)
-                nvgFillColor(vg, nvgRGBA(mr, mg, mb, depthAlpha))
-                nvgFill(vg)
+                                fillRect(vg, mx, my, mw, mh, mr, mg, mb, depthAlpha)
             end
 
             -- 高光反射点（模拟苔藓表面凸起的光泽）
@@ -437,10 +426,7 @@ local function DrawMossEdge(vg, px, py, gridSize, edge, col, row, lighting, ligh
                     sy = py + (i - 1) * cellSize + cellSize * 0.3
                 end
                 if specA > 5 then
-                    nvgBeginPath(vg)
-                    nvgRect(vg, sx, sy, math.max(1, cellSize * 0.4), math.max(1, cellSize * 0.4))
-                    nvgFillColor(vg, nvgRGBA(180, 255, 180, specA))
-                    nvgFill(vg)
+                                        fillRect(vg, sx, sy, math.max(1, cellSize * 0.4), math.max(1, cellSize * 0.4), 180, 255, 180, specA)
                 end
             end
         end
@@ -474,26 +460,20 @@ function SolidRenderer.DrawBrick(vg, px, py, gridSize, lighting, lightDirX, ligh
     -- 超级 LOD: gridSize 极小时直接画一个均色矩形，跳过整个 4×4 像素循环
     if gridSize < 8 then
         local lit = lighting * 0.8 + 0.1
-        local br = math.floor(math.max(0, math.min(255, (140 + colorShift) * lit)))
-        local bg = math.floor(math.max(0, math.min(255, (90 + colorShift) * lit)))
-        local bb = math.floor(math.max(0, math.min(255, (60 + colorShift) * lit)))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, gridSize, gridSize)
-        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
-        nvgFill(vg)
+        local br = clamp255((140 + colorShift) * lit)
+        local bg = clamp255((90 + colorShift) * lit)
+        local bb = clamp255((60 + colorShift) * lit)
+                fillRect(vg, px, py, gridSize, gridSize, br, bg, bb, 255)
         return
     end
 
     -- 低光照 LOD: 光照很弱时用单色矩形+简单渐变代替 4×4 像素循环（1 draw call vs 16-48）
     if lighting < 0.15 then
         local lit = lighting * 0.55 + 0.45
-        local br = math.floor(math.max(0, math.min(255, (85 + colorShift) * lit)))
-        local bg = math.floor(math.max(0, math.min(255, (63 + colorShift) * lit)))
-        local bb = math.floor(math.max(0, math.min(255, (50 + colorShift) * lit)))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, gridSize, gridSize)
-        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
-        nvgFill(vg)
+        local br = clamp255((85 + colorShift) * lit)
+        local bg = clamp255((63 + colorShift) * lit)
+        local bb = clamp255((50 + colorShift) * lit)
+                fillRect(vg, px, py, gridSize, gridSize, br, bg, bb, 255)
         return
     end
 
@@ -566,10 +546,7 @@ local function DrawPillarRoundedCorner(vg, px, py, cellSize, corner, lighting)
     end
     if cx and cy then
         local a = math.floor(180 * (1.0 - lighting * 0.3))
-        nvgBeginPath(vg)
-        nvgRect(vg, cx, cy, cellSize, cellSize)
-        nvgFillColor(vg, nvgRGBA(10, 8, 6, a))
-        nvgFill(vg)
+                fillRect(vg, cx, cy, cellSize, cellSize, 10, 8, 6, a)
     end
 end
 
@@ -587,9 +564,9 @@ local function DrawPillarCapOverhang(vg, px, py, gridSize, cellSize, lighting, l
     capB = capB + colorShift
 
     local lit = lighting * 0.7 + 0.3
-    local fr = math.floor(math.max(0, math.min(255, capR * lit)))
-    local fg = math.floor(math.max(0, math.min(255, capG * lit)))
-    local fb = math.floor(math.max(0, math.min(255, capB * lit)))
+    local fr = clamp255(capR * lit)
+    local fg = clamp255(capG * lit)
+    local fb = clamp255(capB * lit)
 
     -- 左侧悬挑（只在柱体左边缘暴露时绘制）
     local drawLeft = false
@@ -609,32 +586,20 @@ local function DrawPillarCapOverhang(vg, px, py, gridSize, cellSize, lighting, l
         -- 左侧悬挑块（2行高，1格宽）
         for dr = 0, 1 do
             local alpha = 255 - dr * 40
-            nvgBeginPath(vg)
-            nvgRect(vg, px - overhangSize, overhangY + dr * cellSize, overhangSize, cellSize)
-            nvgFillColor(vg, nvgRGBA(fr, fg, fb, alpha))
-            nvgFill(vg)
+                        fillRect(vg, px - overhangSize, overhangY + dr * cellSize, overhangSize, cellSize, fr, fg, fb, alpha)
         end
         -- 悬挑底部阴影
-        nvgBeginPath(vg)
-        nvgRect(vg, px - overhangSize, overhangY + 2 * cellSize, overhangSize, math.max(1, cellSize * 0.4))
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, math.floor(60 * lighting)))
-        nvgFill(vg)
+                fillRect(vg, px - overhangSize, overhangY + 2 * cellSize, overhangSize, math.max(1, cellSize * 0.4), 0, 0, 0, math.floor(60 * lighting))
     end
 
     if drawRight then
         -- 右侧悬挑块（2行高，1格宽）
         for dr = 0, 1 do
             local alpha = 255 - dr * 40
-            nvgBeginPath(vg)
-            nvgRect(vg, px + gridSize, overhangY + dr * cellSize, overhangSize, cellSize)
-            nvgFillColor(vg, nvgRGBA(fr, fg, fb, alpha))
-            nvgFill(vg)
+                        fillRect(vg, px + gridSize, overhangY + dr * cellSize, overhangSize, cellSize, fr, fg, fb, alpha)
         end
         -- 悬挑底部阴影
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize, overhangY + 2 * cellSize, overhangSize, math.max(1, cellSize * 0.4))
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, math.floor(60 * lighting)))
-        nvgFill(vg)
+                fillRect(vg, px + gridSize, overhangY + 2 * cellSize, overhangSize, math.max(1, cellSize * 0.4), 0, 0, 0, math.floor(60 * lighting))
     end
 end
 
@@ -655,13 +620,10 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
     if lighting < 0.15 then
         local lit = lighting * 0.55 + 0.45
         local colorShift = (HashPos(col, row, 42) % 10) - 5
-        local pr = math.floor(math.max(0, math.min(255, (70 + colorShift) * lit)))
-        local pg = math.floor(math.max(0, math.min(255, (60 + colorShift) * lit)))
-        local pb = math.floor(math.max(0, math.min(255, (55 + colorShift) * lit)))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, gridSize, gridSize)
-        nvgFillColor(vg, nvgRGBA(pr, pg, pb, 255))
-        nvgFill(vg)
+        local pr = clamp255((70 + colorShift) * lit)
+        local pg = clamp255((60 + colorShift) * lit)
+        local pb = clamp255((55 + colorShift) * lit)
+                fillRect(vg, px, py, gridSize, gridSize, pr, pg, pb, 255)
         return
     end
 
@@ -728,13 +690,10 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
     -- 超级 LOD: gridSize 极小时直接画一个均色矩形
     if gridSize < 8 then
         local lit = lighting * 0.8 + 0.1
-        local br = math.floor(math.max(0, math.min(255, (160 + colorShift) * lit)))
-        local bg = math.floor(math.max(0, math.min(255, (140 + colorShift) * lit)))
-        local bb = math.floor(math.max(0, math.min(255, (110 + colorShift) * lit)))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, gridSize, gridSize)
-        nvgFillColor(vg, nvgRGBA(br, bg, bb, 255))
-        nvgFill(vg)
+        local br = clamp255((160 + colorShift) * lit)
+        local bg = clamp255((140 + colorShift) * lit)
+        local bb = clamp255((110 + colorShift) * lit)
+                fillRect(vg, px, py, gridSize, gridSize, br, bg, bb, 255)
         return
     end
 
@@ -764,16 +723,10 @@ function SolidRenderer.DrawPillar(vg, px, py, gridSize, lighting, lightDirX, lig
     if isWide then
         if wideSide == "left" then
             -- 右边缘画淡色接缝线
-            nvgBeginPath(vg)
-            nvgRect(vg, px + gridSize - math.max(1, cellSize * 0.2), py, math.max(1, cellSize * 0.2), gridSize)
-            nvgFillColor(vg, nvgRGBA(90, 75, 60, math.floor(40 * lighting)))
-            nvgFill(vg)
+                        fillRect(vg, px + gridSize - math.max(1, cellSize * 0.2), py, math.max(1, cellSize * 0.2), gridSize, 90, 75, 60, math.floor(40 * lighting))
         elseif wideSide == "right" then
             -- 左边缘画淡色接缝线
-            nvgBeginPath(vg)
-            nvgRect(vg, px, py, math.max(1, cellSize * 0.2), gridSize)
-            nvgFillColor(vg, nvgRGBA(90, 75, 60, math.floor(40 * lighting)))
-            nvgFill(vg)
+                        fillRect(vg, px, py, math.max(1, cellSize * 0.2), gridSize, 90, 75, 60, math.floor(40 * lighting))
         end
     end
 
@@ -1004,13 +957,10 @@ local function DrawSewerBase(vg, px, py, gridSize, colorMap, normalMap, lighting
 
     -- 优化：先画一个平均色底色大矩形，减少后续开销
     local avgColor = colorMap[2][2]
-    local avgR = math.floor(math.max(0, math.min(255, (avgColor[1] + colorShift) * lit)))
-    local avgG = math.floor(math.max(0, math.min(255, (avgColor[2] + colorShift) * lit)))
-    local avgB = math.floor(math.max(0, math.min(255, (avgColor[3] + colorShift) * lit)))
-    nvgBeginPath(vg)
-    nvgRect(vg, px, py, gridSize, gridSize)
-    nvgFillColor(vg, nvgRGBA(avgR, avgG, avgB, 255))
-    nvgFill(vg)
+    local avgR = clamp255((avgColor[1] + colorShift) * lit)
+    local avgG = clamp255((avgColor[2] + colorShift) * lit)
+    local avgB = clamp255((avgColor[3] + colorShift) * lit)
+        fillRect(vg, px, py, gridSize, gridSize, avgR, avgG, avgB, 255)
 
     -- 只对颜色/法线有显著差异的像素做覆盖绘制
     for r = 1, PIXEL_CELLS do
@@ -1030,18 +980,15 @@ local function DrawSewerBase(vg, px, py, gridSize, colorMap, normalMap, lighting
             local normalMod = (normalIntensity - 0.5) * 2.0
             local brightBoost = normalMod * HIGHLIGHT_BOOST * lighting
 
-            local fr = math.floor(math.max(0, math.min(255, br * lit + brightBoost)))
-            local fg = math.floor(math.max(0, math.min(255, bg * lit + brightBoost)))
-            local fb = math.floor(math.max(0, math.min(255, bb * lit + brightBoost)))
+            local fr = clamp255(br * lit + brightBoost)
+            local fg = clamp255(bg * lit + brightBoost)
+            local fb = clamp255(bb * lit + brightBoost)
 
             -- 跳过与底色差异小于 8 的像素（视觉不可辨）
             if math.abs(fr - avgR) > 8 or math.abs(fg - avgG) > 8 or math.abs(fb - avgB) > 8 then
                 local cx = px + (c - 1) * cellSize
                 local cy = py + (r - 1) * cellSize
-                nvgBeginPath(vg)
-                nvgRect(vg, cx, cy, cellSize, cellSize)
-                nvgFillColor(vg, nvgRGBA(fr, fg, fb, 255))
-                nvgFill(vg)
+                                fillRect(vg, cx, cy, cellSize, cellSize, fr, fg, fb, 255)
             end
         end
     end
@@ -1051,15 +998,9 @@ local function DrawSewerBase(vg, px, py, gridSize, colorMap, normalMap, lighting
     local shadowA = math.floor(SHADOW_DARKEN * 0.7)
     if shadowA > 3 then
         -- 右边缘
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize - shadowSize, py, shadowSize, gridSize)
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px + gridSize - shadowSize, py, shadowSize, gridSize, 0, 0, 0, shadowA)
         -- 下边缘
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + gridSize - shadowSize, gridSize - shadowSize, shadowSize)
-        nvgFillColor(vg, nvgRGBA(0, 0, 0, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px, py + gridSize - shadowSize, gridSize - shadowSize, shadowSize, 0, 0, 0, shadowA)
     end
 end
 
@@ -1074,11 +1015,8 @@ local function DrawSewerMortar(vg, px, py, gridSize, col, row, lighting, vertica
     local hLine = HashFloat(col, row, 301)
     if hLine < 0.7 then
         local yOff = (HashPos(col, row, 302) % 2 == 0) and 2 or 1
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + yOff * cellSize - math.max(1, cellSize * 0.15),
-                gridSize, math.max(1, cellSize * 0.3))
-        nvgFillColor(vg, nvgRGBA(18, 20, 24, mortarA))
-        nvgFill(vg)
+        fillRect(vg, px, py + yOff * cellSize - math.max(1, cellSize * 0.15),
+                gridSize, math.max(1, cellSize * 0.3), 18, 20, 24, mortarA)
     end
 
     -- 垂直灰浆线（交错砌法）
@@ -1087,12 +1025,9 @@ local function DrawSewerMortar(vg, px, py, gridSize, col, row, lighting, vertica
         if vLine < 0.6 then
             local xOff = (HashPos(col, row, 304) % 2 == 0) and 1 or 3
             local yStart = (HashPos(col, row, 305) % 2 == 0) and 0 or 2
-            nvgBeginPath(vg)
-            nvgRect(vg, px + xOff * cellSize - math.max(1, cellSize * 0.15),
+            fillRect(vg, px + xOff * cellSize - math.max(1, cellSize * 0.15),
                     py + yStart * cellSize,
-                    math.max(1, cellSize * 0.3), 2 * cellSize)
-            nvgFillColor(vg, nvgRGBA(18, 20, 24, mortarA))
-            nvgFill(vg)
+                    math.max(1, cellSize * 0.3), 2 * cellSize, 18, 20, 24, mortarA)
         end
     end
 end
@@ -1159,9 +1094,9 @@ local function DrawSewerMoss(vg, px, py, gridSize, edge, col, row, lighting, lig
                 mossLit = CalcNormalLighting(lightDirX, lightDirY, nx, ny)
             end
             local normalBoost = (mossLit - 0.5) * 2.0 * HIGHLIGHT_BOOST * lighting * 0.7
-            local mr = math.floor(math.max(0, math.min(255, mossColor[1] * litMul + normalBoost * 0.5)))
-            local mg = math.floor(math.max(0, math.min(255, mossColor[2] * litMul + normalBoost)))
-            local mb = math.floor(math.max(0, math.min(255, mossColor[3] * litMul + normalBoost * 0.3)))
+            local mr = clamp255(mossColor[1] * litMul + normalBoost * 0.5)
+            local mg = clamp255(mossColor[2] * litMul + normalBoost)
+            local mb = clamp255(mossColor[3] * litMul + normalBoost * 0.3)
 
             -- 优化：将多层深度合并为一个矩形（用最外层alpha）
             -- 视觉上逐层渐淡差异不大，改为单个矩形 + 深度决定覆盖面积
@@ -1191,10 +1126,7 @@ local function DrawSewerMoss(vg, px, py, gridSize, edge, col, row, lighting, lig
 
             -- 整体渐变用中间alpha值模拟
             local avgAlpha = math.floor(220 - (depth - 1) * 27)
-            nvgBeginPath(vg)
-            nvgRect(vg, mx, my, w, hh)
-            nvgFillColor(vg, nvgRGBA(mr, mg, mb, avgAlpha))
-            nvgFill(vg)
+                        fillRect(vg, mx, my, w, hh, mr, mg, mb, avgAlpha)
         end
     end
 end
@@ -1215,9 +1147,9 @@ local function DrawSewerWaterStain(vg, px, py, gridSize, edge, col, row, lightin
             local colorIdx = (HashPos(col, row, i + 30) % 4) + 1
             local stainColor = SEWER_WATER_STAIN_COLORS[colorIdx]
 
-            local sr = math.floor(math.max(0, math.min(255, stainColor[1] * litMul)))
-            local sg = math.floor(math.max(0, math.min(255, stainColor[2] * litMul)))
-            local sb = math.floor(math.max(0, math.min(255, stainColor[3] * litMul)))
+            local sr = clamp255(stainColor[1] * litMul)
+            local sg = clamp255(stainColor[2] * litMul)
+            local sb = clamp255(stainColor[3] * litMul)
 
             -- 优化：合并深度层为单个矩形
             local totalDepth = depth * cellSize
@@ -1237,10 +1169,7 @@ local function DrawSewerWaterStain(vg, px, py, gridSize, edge, col, row, lightin
             end
 
             local avgAlpha = math.floor(160 - (depth - 1) * 22)
-            nvgBeginPath(vg)
-            nvgRect(vg, mx, my, w, hh)
-            nvgFillColor(vg, nvgRGBA(sr, sg, sb, avgAlpha))
-            nvgFill(vg)
+                        fillRect(vg, mx, my, w, hh, sr, sg, sb, avgAlpha)
 
             -- 湿润反光（冷色高光）— 仅首层位置
             if specA > 3 then
@@ -1254,10 +1183,7 @@ local function DrawSewerWaterStain(vg, px, py, gridSize, edge, col, row, lightin
                 else
                     sx = px + gridSize - cellSize * 0.8; sy = my + cellSize * 0.2
                 end
-                nvgBeginPath(vg)
-                nvgRect(vg, sx, sy, math.max(1, cellSize * 0.4), math.max(1, cellSize * 0.4))
-                nvgFillColor(vg, nvgRGBA(SEWER_WET_HIGHLIGHT[1], SEWER_WET_HIGHLIGHT[2], SEWER_WET_HIGHLIGHT[3], specA))
-                nvgFill(vg)
+                                fillRect(vg, sx, sy, math.max(1, cellSize * 0.4), math.max(1, cellSize * 0.4), SEWER_WET_HIGHLIGHT[1], SEWER_WET_HIGHLIGHT[2], SEWER_WET_HIGHLIGHT[3], specA)
             end
         end
     end
@@ -1273,25 +1199,13 @@ local function DrawSewerEdgeShadow(vg, px, py, gridSize, edge, lighting)
 
     if edge == "top" then
         -- 上边缘向下投射阴影（从暴露面向内）
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, gridSize, shadowDepth)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px, py, gridSize, shadowDepth, 5, 8, 12, shadowA)
     elseif edge == "bottom" then
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + gridSize - shadowDepth, gridSize, shadowDepth)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px, py + gridSize - shadowDepth, gridSize, shadowDepth, 5, 8, 12, shadowA)
     elseif edge == "left" then
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, shadowDepth, gridSize)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px, py, shadowDepth, gridSize, 5, 8, 12, shadowA)
     elseif edge == "right" then
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize - shadowDepth, py, shadowDepth, gridSize)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px + gridSize - shadowDepth, py, shadowDepth, gridSize, 5, 8, 12, shadowA)
     end
 end
 
@@ -1307,10 +1221,7 @@ local function DrawSewerFracturedEdge(vg, px, py, gridSize, col, row, lighting)
             -- 缺失一个像素格（露出黑暗深渊）
             local bx = px + (i - 1) * cellSize
             local by = py  -- 顶部
-            nvgBeginPath(vg)
-            nvgRect(vg, bx, by, cellSize, cellSize)
-            nvgFillColor(vg, nvgRGBA(8, 8, 12, math.floor(200 * (lighting * 0.3 + 0.7))))
-            nvgFill(vg)
+                        fillRect(vg, bx, by, cellSize, cellSize, 8, 8, 12, math.floor(200 * (lighting * 0.3 + 0.7)))
         end
     end
     -- 底边断裂
@@ -1319,10 +1230,7 @@ local function DrawSewerFracturedEdge(vg, px, py, gridSize, col, row, lighting)
         if broken < 0.35 then
             local bx = px + (i - 1) * cellSize
             local by = py + gridSize - cellSize
-            nvgBeginPath(vg)
-            nvgRect(vg, bx, by, cellSize, cellSize)
-            nvgFillColor(vg, nvgRGBA(8, 8, 12, math.floor(180 * (lighting * 0.3 + 0.7))))
-            nvgFill(vg)
+                        fillRect(vg, bx, by, cellSize, cellSize, 8, 8, 12, math.floor(180 * (lighting * 0.3 + 0.7)))
         end
     end
 end
@@ -1336,44 +1244,20 @@ local function DrawSewerInnerCorner(vg, px, py, gridSize, col, row, lighting, ne
 
     -- 检查哪个对角缺失，在对应角落绘制L形阴影
     if neighbors.topLeft == false then
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, cellSize, cellSize * 2)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, cellSize * 2, cellSize)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px, py, cellSize, cellSize * 2, 5, 8, 12, shadowA)
+                fillRect(vg, px, py, cellSize * 2, cellSize, 5, 8, 12, shadowA)
     end
     if neighbors.topRight == false then
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize - cellSize, py, cellSize, cellSize * 2)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize - cellSize * 2, py, cellSize * 2, cellSize)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px + gridSize - cellSize, py, cellSize, cellSize * 2, 5, 8, 12, shadowA)
+                fillRect(vg, px + gridSize - cellSize * 2, py, cellSize * 2, cellSize, 5, 8, 12, shadowA)
     end
     if neighbors.bottomLeft == false then
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + gridSize - cellSize * 2, cellSize, cellSize * 2)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + gridSize - cellSize, cellSize * 2, cellSize)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px, py + gridSize - cellSize * 2, cellSize, cellSize * 2, 5, 8, 12, shadowA)
+                fillRect(vg, px, py + gridSize - cellSize, cellSize * 2, cellSize, 5, 8, 12, shadowA)
     end
     if neighbors.bottomRight == false then
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize - cellSize, py + gridSize - cellSize * 2, cellSize, cellSize * 2)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
-        nvgBeginPath(vg)
-        nvgRect(vg, px + gridSize - cellSize * 2, py + gridSize - cellSize, cellSize * 2, cellSize)
-        nvgFillColor(vg, nvgRGBA(5, 8, 12, shadowA))
-        nvgFill(vg)
+                fillRect(vg, px + gridSize - cellSize, py + gridSize - cellSize * 2, cellSize, cellSize * 2, 5, 8, 12, shadowA)
+                fillRect(vg, px + gridSize - cellSize * 2, py + gridSize - cellSize, cellSize * 2, cellSize, 5, 8, 12, shadowA)
     end
 end
 
@@ -1394,10 +1278,7 @@ local function DrawSewerWetSurface(vg, px, py, gridSize, col, row, lighting)
             if specA > 2 then
                 local wx = px + (HashPos(col, row, i * 100) % 3) * cellSize + cellSize * 0.3
                 local wy = py + (HashPos(col, row, i * 200) % 3) * cellSize + cellSize * 0.3
-                nvgBeginPath(vg)
-                nvgRect(vg, wx, wy, specSize, specSize)
-                nvgFillColor(vg, nvgRGBA(hr, hg, hb, specA))
-                nvgFill(vg)
+                                fillRect(vg, wx, wy, specSize, specSize, hr, hg, hb, specA)
             end
         end
     end
@@ -1492,13 +1373,10 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
     if lighting < 0.15 then
         local lit = lighting * 0.55 + 0.45
         local colorShift = (HashPos(col, row, 42) % 10) - 5
-        local sr = math.floor(math.max(0, math.min(255, (55 + colorShift) * lit)))
-        local sg = math.floor(math.max(0, math.min(255, (58 + colorShift) * lit)))
-        local sb = math.floor(math.max(0, math.min(255, (62 + colorShift) * lit)))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py, gridSize, gridSize)
-        nvgFillColor(vg, nvgRGBA(sr, sg, sb, 255))
-        nvgFill(vg)
+        local sr = clamp255((55 + colorShift) * lit)
+        local sg = clamp255((58 + colorShift) * lit)
+        local sb = clamp255((62 + colorShift) * lit)
+                fillRect(vg, px, py, gridSize, gridSize, sr, sg, sb, 255)
         return
     end
 
@@ -1629,21 +1507,15 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
         -- 衔接线（墙体到地面过渡）
         cellSize = gridSize / PIXEL_CELLS
         local lineA = math.floor(math.max(30, 65 * (lighting * 0.5 + 0.5)))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + gridSize - math.max(1, cellSize * 0.4),
-                gridSize, math.max(1, cellSize * 0.4))
-        nvgFillColor(vg, nvgRGBA(12, 14, 18, lineA))
-        nvgFill(vg)
+        fillRect(vg, px, py + gridSize - math.max(1, cellSize * 0.4),
+                gridSize, math.max(1, cellSize * 0.4), 12, 14, 18, lineA)
 
     elseif tileClass == SEWER_TYPE_WATER_EDGE then
         -- 水边衔接：仅底部薄阴影过渡，不覆盖水方块表现
         cellSize = gridSize / PIXEL_CELLS
         local edgeA = math.floor(50 * (lighting * 0.3 + 0.7))
-        nvgBeginPath(vg)
-        nvgRect(vg, px, py + gridSize - math.max(1, cellSize * 0.3),
-                gridSize, math.max(1, cellSize * 0.3))
-        nvgFillColor(vg, nvgRGBA(10, 14, 18, edgeA))
-        nvgFill(vg)
+        fillRect(vg, px, py + gridSize - math.max(1, cellSize * 0.3),
+                gridSize, math.max(1, cellSize * 0.3), 10, 14, 18, edgeA)
     end
 
     -- 5. 绿色荧光苔藓点（像素块风格，少量随机亮起）
@@ -1665,10 +1537,7 @@ function SolidRenderer.DrawSewer(vg, px, py, gridSize, lighting, lightDirX, ligh
             local gy = py + cy * cellSize
             local alpha = math.floor(140 * brightness + 40)
 
-            nvgBeginPath(vg)
-            nvgRect(vg, gx, gy, cellSize, cellSize)
-            nvgFillColor(vg, nvgRGBA(60, 180, 80, alpha))
-            nvgFill(vg)
+                        fillRect(vg, gx, gy, cellSize, cellSize, 60, 180, 80, alpha)
         end
     end
 end
@@ -1708,9 +1577,9 @@ function SolidRenderer.DrawSlope(vg, slopeType, px, py, gridSize, lighting, ligh
     -- 低光照 LOD: 单色三角形代替复杂像素渲染
     if lighting < 0.15 then
         local lit = lighting * 0.55 + 0.45
-        local br = math.floor(math.max(0, math.min(255, (85 + colorShift) * lit)))
-        local bg = math.floor(math.max(0, math.min(255, (63 + colorShift) * lit)))
-        local bb = math.floor(math.max(0, math.min(255, (50 + colorShift) * lit)))
+        local br = clamp255((85 + colorShift) * lit)
+        local bg = clamp255((63 + colorShift) * lit)
+        local bb = clamp255((50 + colorShift) * lit)
         nvgBeginPath(vg)
         if slopeType == 19 then
             nvgMoveTo(vg, px, py + gridSize)
@@ -1738,9 +1607,9 @@ function SolidRenderer.DrawSlope(vg, slopeType, px, py, gridSize, lighting, ligh
     -- 超级 LOD: gridSize 极小时直接画一个三角形
     if gridSize < 8 then
         local lit = lighting * 0.8 + 0.1
-        local br = math.floor(math.max(0, math.min(255, (140 + colorShift) * lit)))
-        local bg = math.floor(math.max(0, math.min(255, (90 + colorShift) * lit)))
-        local bb = math.floor(math.max(0, math.min(255, (60 + colorShift) * lit)))
+        local br = clamp255((140 + colorShift) * lit)
+        local bg = clamp255((90 + colorShift) * lit)
+        local bb = clamp255((60 + colorShift) * lit)
         nvgBeginPath(vg)
         if slopeType == 19 then       -- TR: 左下-右下-右上
             nvgMoveTo(vg, px, py + gridSize)
@@ -1883,7 +1752,7 @@ end
 -- ====================================================================
 local solidCollisionChecker = nil
 local solidCurtainChecker = nil
-local CURTAIN_ATTENUATION = 0.3  -- 每层柳条衰减30%光照
+local CURTAIN_ATTENUATION = 0.5  -- 每层柳条衰减50%光照（门帘更密，遮光更强）
 
 --- 设置碰撞检测函数（用于光照阴影计算）
 --- 签名: function(col, row) -> boolean
@@ -2049,7 +1918,8 @@ function SolidRenderer.CalcPlayerLightDirection(col, row, playerCol, playerRow, 
 
     -- 柳条衰减：光线穿过柳条时强度降低
     if solidCurtainChecker and intensity > 0 then
-        local curtainCount = 0
+        -- 玩家自身所在格如果是门帘，也计入衰减（光源本身被门帘包裹）
+        local curtainCount = solidCurtainChecker(srcC, srcR) and 1 or 0
         local cdx = col - srcC
         local cdy = row - srcR
         local absCdx = (cdx >= 0) and cdx or -cdx

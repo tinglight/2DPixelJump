@@ -71,7 +71,69 @@ function WorldPlay.Attach(M)
         M.SnapCameraToPlayer()
         S.worldPlayCurrentFile = filename
         S.worldPlayCooldown = 0.5
+        -- 加载完当前关卡后，预加载所有相邻关卡的背景图
+        M.PreloadConnectedBackgrounds()
         return true
+    end
+
+    --- 预加载所有相邻关卡的背景图到缓存
+    --- 当前关卡加载完成后调用，利用游戏空闲时间完成 GPU 纹理上传
+    function M.PreloadConnectedBackgrounds()
+        if not S.worldPlayData or not S.worldPlayCurrentFile or not S.vg then return end
+        -- 找到当前节点 ID
+        local currentNodeId = nil
+        for _, node in ipairs(S.worldPlayData.nodes) do
+            if node.file == S.worldPlayCurrentFile then
+                currentNodeId = node.id
+                break
+            end
+        end
+        if not currentNodeId then return end
+
+        -- 收集所有相邻关卡的背景图路径
+        local neededPaths = {}
+        -- 保留当前关卡自身的路径
+        if S.backgroundImage and S.backgroundImage ~= "" then
+            neededPaths[S.backgroundImage] = true
+        end
+
+        for _, conn in ipairs(S.worldPlayData.connections) do
+            if conn.fromId == currentNodeId then
+                -- 找到目标关卡文件
+                local targetFile = nil
+                for _, node in ipairs(S.worldPlayData.nodes) do
+                    if node.id == conn.toId then
+                        targetFile = node.file
+                        break
+                    end
+                end
+                if targetFile then
+                    -- 读取目标关卡 JSON，提取背景图路径
+                    local json = M._cloudStorage.Load(targetFile)
+                    if json then
+                        local ok2, data = pcall(M._cjson.decode, json)
+                        if ok2 and data and data.backgroundImage and data.backgroundImage ~= "" then
+                            neededPaths[data.backgroundImage] = true
+                        end
+                    end
+                end
+            end
+        end
+
+        -- 释放缓存中不再需要的句柄（不在相邻列表中的）
+        for path, handle in pairs(S._bgCache) do
+            if not neededPaths[path] then
+                nvgDeleteImage(S.vg, handle)
+                S._bgCache[path] = nil
+            end
+        end
+
+        -- 预加载缺失的背景图
+        for path, _ in pairs(neededPaths) do
+            if not S._bgCache[path] then
+                S._bgCache[path] = nvgCreateImage(S.vg, path, 0)
+            end
+        end
     end
 
     function M.ApplyWorldLevelData(data)
@@ -127,10 +189,37 @@ function WorldPlay.Attach(M)
 
         -- 背景图和明暗度
         local bgImg = (data.backgroundImage and data.backgroundImage ~= "") and data.backgroundImage or ""
-        S.backgroundImage = bgImg
         S.bgImageAlpha = (data.bgImageAlpha and type(data.bgImageAlpha) == "number") and data.bgImageAlpha or 0.5
         S.bgStretchToCanvas = (data.bgStretchToCanvas == true)
-        S.bgImageHandle = nil
+        -- 背景图加载：优先从预加载缓存获取句柄（相邻关卡已提前加载）
+        if bgImg ~= S.backgroundImage or not S.bgImageHandle then
+            -- 旧句柄如果不在缓存中才释放（缓存中的由缓存管理生命周期）
+            if S.bgImageHandle and S.vg then
+                local inCache = false
+                for _, h in pairs(S._bgCache) do
+                    if h == S.bgImageHandle then inCache = true; break end
+                end
+                if not inCache then
+                    nvgDeleteImage(S.vg, S.bgImageHandle)
+                end
+                S.bgImageHandle = nil
+            end
+            S.backgroundImage = bgImg
+            if S.vg and bgImg ~= "" then
+                -- 优先从预加载缓存获取
+                if S._bgCache[bgImg] then
+                    S.bgImageHandle = S._bgCache[bgImg]
+                else
+                    -- 缓存中没有，立即创建并存入缓存
+                    S.bgImageHandle = nvgCreateImage(S.vg, bgImg, 0)
+                    S._bgCache[bgImg] = S.bgImageHandle
+                end
+            else
+                S.bgImageHandle = nil
+            end
+        else
+            S.backgroundImage = bgImg
+        end
 
         M._fogOfWar.Deserialize(data.lightSources)
         S.lightSources = M._fogOfWar.GetLightSources()
@@ -263,6 +352,7 @@ function WorldPlay.Attach(M)
             S.transition.pendingDir = fromDir
             S.transition.pendingGx = gx
             S.transition.pendingGy = gy
+            -- 背景图已通过 PreloadConnectedBackgrounds 提前缓存，无需在此预加载
         end
     end
 
@@ -299,11 +389,19 @@ function WorldPlay.Attach(M)
                         S.SetMessage("进入: " .. t.pendingFile, 1.5)
                     end
                 end
-                t.phase = "fadeIn"
+                -- 进入 hold 阶段：全黑屏等待背景图上传 GPU
+                t.phase = "hold"
+                t.holdTimer = 0
                 t.pendingFile = nil
                 t.pendingDir = nil
                 t.pendingGx = nil
                 t.pendingGy = nil
+            end
+        elseif t.phase == "hold" then
+            -- 全黑屏等待，确保背景图片加载到 GPU 完成
+            t.holdTimer = (t.holdTimer or 0) + dt
+            if t.holdTimer >= 0.15 then
+                t.phase = "fadeIn"
             end
         elseif t.phase == "fadeIn" then
             t.alpha = t.alpha - t.speed * dt

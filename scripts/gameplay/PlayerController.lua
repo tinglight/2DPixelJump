@@ -44,6 +44,7 @@ M.player = {
     -- 下落计数（基于底部位置的净下降）
     fallGridCount = 0,
     bottomHighestY = 0,  -- 底部到达过的最高位置（Y 值最小 = 位置最高）
+    groundedFrames = 0,  -- 连续站在地面的帧数（用于篝火碰撞判定）
 
     -- 跳跃容错追踪
     jumpOriginBottomY = 0,  -- 起跳时底部的 Y 位置
@@ -56,6 +57,10 @@ M.player = {
 
     -- 跨关卡保护：切换关卡后不因满血而重置跳跃能力
     transitionProtect = false,
+
+    -- 攀爬状态
+    isClimbing = false,
+    climbTimer = 0,
 
     -- 能力点状态
     hasFireball = false,      -- 是否已获得火球能力
@@ -75,6 +80,7 @@ function M.ResetPlayer()
     p.fallTickCurrent = Config.PLAYER_CONFIG.fallTickBase
     p.jumpTimer = 0
     p.fallGridCount = 0
+    p.groundedFrames = 0
     local s = Physics and Physics.PlayerGridSize() or 2
     p.bottomHighestY = p.gridY + s - 1
     p.jumpOriginBottomY = p.bottomHighestY
@@ -82,6 +88,8 @@ function M.ResetPlayer()
     p.isMoving = false
     p.moveAnimTime = 0
     p.fallAnimTime = 0
+    p.isClimbing = false
+    p.climbTimer = 0
     -- 能力从持久进度状态恢复（不再硬置 false）
     local LM = require("gameplay.LevelManager")
     p.hasFireball = LM.playerUnlocks.hasFireball
@@ -93,11 +101,119 @@ end
 -- ====================================================================
 
 --- 计算当前跳跃能力（纯净值，不含容错，用于 HUD 显示）
+function M.GetFlamePercent()
+    local total = math.max(1, PixelSystem.totalPixels)
+    local ratio = PixelSystem.alivePixels / total
+    return math.max(0, math.min(100, math.floor(ratio * 10 + 0.5) * 10))
+end
+
 function M.CalcJumpHeight()
     local p = M.player
     local baseJump = Config.levelPlayerParams.baseJumpGrids
     local bonus = p.fallGridCount * Config.levelPlayerParams.fallJumpMultiplier
     return math.min(math.floor(baseJump + bonus + 0.5), Config.levelPlayerParams.maxJumpGrids)
+end
+
+-- ====================================================================
+-- 梯子攀爬
+-- ====================================================================
+
+--- 处理梯子攀爬输入
+---@param dt number
+---@param joyUp boolean 上方向输入
+---@param joyDown boolean 下方向输入
+function M.HandleClimbInput(dt, joyUp, joyDown)
+    local p = M.player
+    local PC = Config.PLAYER_CONFIG
+    local s = Physics.PlayerGridSize()
+
+    local pressUp = joyUp or input:GetKeyDown(KEY_W) or input:GetKeyDown(KEY_UP)
+    local pressDown = joyDown or input:GetKeyDown(KEY_S) or input:GetKeyDown(KEY_DOWN)
+
+    local onLadder = Physics.IsOnLadder(p.gridX, p.gridY)
+    local onGround = Physics.PlayerOnGround(p.gridX, p.gridY)
+
+    if onLadder then
+        -- 在梯子上且脚踏地面：退出攀爬（除非按上键要往上爬）
+        if onGround and not pressUp then
+            if p.isClimbing then
+                p.isClimbing = false
+                p.climbTimer = 0
+            end
+            return
+        end
+
+        -- 在梯子上且不在地面（或按了上键）：只有按上/下才进入攀爬
+        if not p.isClimbing then
+            if pressUp or pressDown then
+                p.isClimbing = true
+                p.isJumping = false
+                p.jumpGridsRemain = 0
+                p.fallTickCurrent = PC.fallTickBase
+                -- 同步 fallGridCount
+                local currentBottomY = p.gridY + s - 1
+                if currentBottomY < p.bottomHighestY then
+                    p.bottomHighestY = currentBottomY
+                end
+                p.fallGridCount = math.max(0, currentBottomY - p.bottomHighestY)
+                p.climbTimer = 0
+            else
+                return
+            end
+        end
+
+        -- 只有按上/下才移动
+        if pressUp or pressDown then
+            p.climbTimer = p.climbTimer + dt
+            if p.climbTimer >= PC.climbTickRate then
+                p.climbTimer = p.climbTimer - PC.climbTickRate
+                local dir = pressUp and -1 or 1
+                local newY = p.gridY + dir
+                if not Physics.PlayerCollidesAt(p.gridX, newY) then
+                    p.gridY = newY
+                    -- 移动后超出梯子范围：检查是否有地面支撑
+                    if not Physics.IsOnLadder(p.gridX, newY) then
+                        if Physics.PlayerOnGround(p.gridX, newY) then
+                            p.isClimbing = false
+                            p.climbTimer = 0
+                            p.isOnGround = true
+                        end
+                    end
+                end
+            end
+        else
+            p.climbTimer = 0
+        end
+    else
+        -- 离开梯子区域
+        if p.isClimbing then
+            p.isClimbing = false
+            p.climbTimer = 0
+            -- 检查脚下是否有梯子顶部作为地面支撑
+            if Physics.IsLadderBelow(p.gridX, p.gridY) then
+                p.isOnGround = true
+            end
+        elseif pressDown and not p.isClimbing then
+            -- 站在梯子顶部上方按下键：向下移入梯子
+            if Physics.IsLadderBelow(p.gridX, p.gridY) then
+                local newY = p.gridY + 1
+                if not Physics.PlayerCollidesAt(p.gridX, newY) then
+                    p.gridY = newY
+                    p.isClimbing = true
+                    p.isJumping = false
+                    p.jumpGridsRemain = 0
+                    p.fallTickCurrent = PC.fallTickBase
+                    local currentBottomY = p.gridY + s - 1
+                    if currentBottomY < p.bottomHighestY then
+                        p.bottomHighestY = currentBottomY
+                    end
+                    p.fallGridCount = math.max(0, currentBottomY - p.bottomHighestY)
+                    p.climbTimer = 0
+                    p.isOnGround = false
+                end
+            end
+        end
+    end
 end
 
 -- ====================================================================
@@ -136,27 +252,9 @@ end
 -- 水平移动
 -- ====================================================================
 
---- 判断斜坡方向与移动方向是否构成"上坡"/"下坡"
---- @return boolean isUphill, boolean isDownhill
+-- SlopeMovementType 委托到 Physics 模块（共享实现）
 local function SlopeMovementType(slopeType, dir)
-    -- SLOPE_TR(19): 右上斜坡 → 向右走上坡，向左走下坡
-    -- SLOPE_TL(20): 左上斜坡 → 向左走上坡，向右走下坡
-    -- SLOPE_BR(21): 右下斜坡 → 向右走下坡，向左走上坡
-    -- SLOPE_BL(22): 左下斜坡 → 向左走下坡，向右走上坡
-    if slopeType == 19 then       -- SLOPE_TR
-        if dir == 1 then return true, false end
-        if dir == -1 then return false, true end
-    elseif slopeType == 20 then   -- SLOPE_TL
-        if dir == -1 then return true, false end
-        if dir == 1 then return false, true end
-    elseif slopeType == 21 then   -- SLOPE_BR
-        if dir == 1 then return false, true end
-        if dir == -1 then return true, false end
-    elseif slopeType == 22 then   -- SLOPE_BL
-        if dir == -1 then return false, true end
-        if dir == 1 then return true, false end
-    end
-    return false, false
+    return Physics.SlopeMovementType(slopeType, dir)
 end
 
 --- 检查玩家附近（目标区域+脚下）是否有指定方向的斜坡
@@ -235,6 +333,7 @@ function M.PlayerMoveOneGrid(dir)
                 end
                 local stripCount = math.max(1, math.floor(PixelSystem.totalPixels / 10 + 0.5))
                 PixelSystem.StripPixels(stripCount)
+                Animation.SpawnFallParticlesForced()
             end
         end
 
@@ -268,6 +367,9 @@ end
 function M.UpdateVertical(dt)
     local p = M.player
     local PC = Config.PLAYER_CONFIG
+
+    -- 攀爬中不受重力影响
+    if p.isClimbing then return nil end
 
     local s = Physics.PlayerGridSize()
 
@@ -323,6 +425,7 @@ function M.UpdateVertical(dt)
 
                     local stripCount = math.max(1, math.floor(PixelSystem.totalPixels / 10 + 0.5))
                     PixelSystem.StripPixels(stripCount)
+                    Animation.SpawnFallParticlesForced()
                     if p.fallGridCount >= Config.levelPlayerParams.maxFallGrids then
                         return "gameover"
                     end
@@ -360,6 +463,13 @@ function M.UpdateVertical(dt)
 
     if PixelSystem.alivePixels <= 0 then
         return "gameover"
+    end
+
+    -- 维护 groundedFrames（篝火碰撞判定用）
+    if p.isOnGround then
+        p.groundedFrames = (p.groundedFrames or 0) + 1
+    else
+        p.groundedFrames = 0
     end
 
     return nil
@@ -418,6 +528,8 @@ function M.CheckItemCollection()
                     LevelManager.switchState[group] = not LevelManager.switchState[group]
 
                 elseif base == TILE.CHECKPOINT then
+                    -- 篝火碰撞盒缩小为1格：仅玩家稳定站立(非刚落地)时才触发
+                    if p.isOnGround and (p.groundedFrames or 0) >= 2 then
                     local isNewBonfire = not LevelManager.checkpointActivated[key]
                     local isHealthNotFull = PixelSystem.alivePixels < PixelSystem.totalPixels
 
@@ -439,6 +551,7 @@ function M.CheckItemCollection()
                             Renderer.ShowBonfireMessage()
                             Renderer.TriggerCampfireIgnite(key)
                         end
+                    end
                     end
 
                 elseif base == TILE.ABILITY_POINT and not LevelManager.collectedItems[key] then

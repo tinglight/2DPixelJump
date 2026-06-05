@@ -17,6 +17,9 @@
 
 local FogOfWar = {}
 
+local RU = require("rendering.RenderUtils")
+local fillRect = RU.fillRect
+
 -- ====================================================================
 -- 光源数据
 -- ====================================================================
@@ -59,7 +62,7 @@ local collisionChecker = nil
 -- 签名: function(col, row) -> boolean
 -- 返回 true 表示该格子是柳条（衰减光线但不完全阻挡）
 local curtainChecker = nil
-local CURTAIN_ATTENUATION = 0.3  -- 每层柳条衰减30%光照
+local CURTAIN_ATTENUATION = 0.5  -- 每层柳条衰减50%光照（门帘更密，遮光更强）
 local THIN_WALL_ATTENUATION = 0.6  -- 每层薄墙衰减60%光照（比柳条更强）
 
 --- 设置碰撞检测函数（用于阴影计算）
@@ -682,10 +685,7 @@ function FogOfWar.Draw(vg, params)
                 if runAlpha > 0 then
                     local px = mapX + (runStart - 1) * zGrid - offsetX
                     local w = (col - runStart) * zGrid + 0.5
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px, py, w, zGrid + 0.5)
-                    nvgFillColor(vg, nvgRGBA(0, 0, 0, runAlpha))
-                    nvgFill(vg)
+                                        fillRect(vg, px, py, w, zGrid + 0.5, 0, 0, 0, runAlpha)
                 end
                 runStart = col
                 runAlpha = alpha
@@ -941,10 +941,7 @@ function FogOfWar.DrawLightMarkers(vg, params)
                     end
                     local px = lx + (col - 1) * lanternPixel
                     local py = ly + (row - 1) * lanternPixel
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5)
-                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
-                    nvgFill(vg)
+                                        fillRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5, r, g, b, a)
                 end
             end
         end
@@ -1026,10 +1023,7 @@ function FogOfWar.DrawLanterns(vg, params)
                     local r, g, b, a = GetLanternColor(pType, flickerT + i * 0.5)
                     local px = lx + (col - 1) * lanternPixel
                     local py = ly + (row - 1) * lanternPixel
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5)
-                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
-                    nvgFill(vg)
+                                        fillRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5, r, g, b, a)
                 end
             end
         end
@@ -1074,10 +1068,7 @@ function FogOfWar.DrawUnlitLanterns(vg, params)
                     local r, g, b, a = GetUnlitLanternColor(pType)
                     local px = lx + (col - 1) * lanternPixel
                     local py = ly + (row - 1) * lanternPixel
-                    nvgBeginPath(vg)
-                    nvgRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5)
-                    nvgFillColor(vg, nvgRGBA(r, g, b, a))
-                    nvgFill(vg)
+                                        fillRect(vg, px, py, lanternPixel + 0.5, lanternPixel + 0.5, r, g, b, a)
                 end
             end
         end
@@ -1158,6 +1149,32 @@ function FogOfWar.HasUnlitLight(col, row)
         end
     end
     return false
+end
+
+--- 将所有已被点亮（原本 extinguished）的灯光恢复为熄灭状态
+--- 用于篝火刷新/玩家重生时复位灯光机关
+---@return number count 被熄灭的灯光数量
+function FogOfWar.ResetIgnitedLights()
+    local count = 0
+    -- 移除与这些灯相关的 tween 动画
+    for i = #activeTweens, 1, -1 do
+        local tw = activeTweens[i]
+        if tw.light and tw.light.targetDiameter then
+            table.remove(activeTweens, i)
+        end
+    end
+    for _, light in ipairs(lightSources) do
+        -- 有 targetDiameter 字段说明这是一个"可被点亮的灯"（原始设计为 extinguished）
+        if light.targetDiameter and not light.extinguished then
+            light.extinguished = true
+            light.diameter = 0
+            count = count + 1
+        end
+    end
+    if count > 0 then
+        FogOfWar.InvalidateCache()
+    end
+    return count
 end
 
 --- 带渐入动画的光源添加（diameter 从 0 渐变到目标值，0.4 秒）
@@ -1459,6 +1476,8 @@ function FogOfWar.ResetZoneState()
     zoneState.transitionElapsed = 0
     zoneState.fadeOutDiameters = {}
     zoneState.fadeInDiameters = {}
+    -- 清除残留的灯光动画 tween，防止引用旧灯光对象
+    activeTweens = {}
 end
 
 --- 判断一个光源属于哪个区域（由空间位置决定）
@@ -1748,10 +1767,7 @@ function FogOfWar.DrawLightZones(vg, opts)
 
         -- 填充半透明
         local alpha = (i == selectedIdx) and 50 or 25
-        nvgBeginPath(vg)
-        nvgRect(vg, x, y, w, h)
-        nvgFillColor(vg, nvgRGBA(gc[1], gc[2], gc[3], alpha))
-        nvgFill(vg)
+                fillRect(vg, x, y, w, h, gc[1], gc[2], gc[3], alpha)
 
         -- 边框
         local strokeAlpha = (i == selectedIdx) and 220 or 140
